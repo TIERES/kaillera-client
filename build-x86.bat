@@ -1,6 +1,6 @@
 @echo off
 REM Build script for n02 Kaillera DLL
-REM This builds the 64-bit Release version
+REM This builds the 32-bit Release version
 
 set PROJECT="%~dp0n02p.vcxproj"
 
@@ -80,15 +80,15 @@ exit /b 1
 echo Found MSBuild: %MSBUILD%
 echo Using PlatformToolset: %TOOLSET%
 echo.
-echo Building n02 (64-bit Release)...
-%MSBUILD% %PROJECT% /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0 /p:PlatformToolset=%TOOLSET%
+echo Building n02 (32-bit Release)...
+%MSBUILD% %PROJECT% /p:Configuration=Release /p:Platform=Win32 /p:WindowsTargetPlatformVersion=10.0 /p:PlatformToolset=%TOOLSET%
 
 if %ERRORLEVEL% EQU 0 (
     echo.
     echo Build successful!
-    echo Output: %~dp0x64\Release\n02p.dll
+    echo Output: %~dp0Release\n02p.dll
     echo.
-    echo To use with RMG, copy n02p.dll to your RMG Bin\Release folder as kailleraclient.dll
+    echo To use with a 32-bit emulator, copy n02p.dll to its folder as kailleraclient.dll
 ) else (
     echo.
     echo Build failed with error code %ERRORLEVEL%

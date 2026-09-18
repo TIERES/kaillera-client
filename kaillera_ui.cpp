@@ -10,6 +10,7 @@
 #include "common/k_socket.h"
 #include "common/nThread.h"
 #include "common/nSettings.h"
+#include "common/n02_stream.h"
 
 static bool IsNonGameLobbyName(const char* name);
 
@@ -678,6 +679,17 @@ static void FlashKailleraDialogIfNotFocused(){
 bool kaillera_RecordingEnabled(){
 	return SendMessage(GetDlgItem(kaillera_sdlg, CHK_REC), BM_GETCHECK, 0, 0)==BST_CHECKED;
 }
+bool kaillera_IsHost(){
+	return kaillera_is_host();
+}
+bool kaillera_StreamingEnabled(){
+	return SendMessage(GetDlgItem(kaillera_sdlg, CHK_STREAM), BM_GETCHECK, 0, 0)==BST_CHECKED;
+}
+void kaillera_ConfigureStream(){
+	char endpoint[256];
+	GetDlgItemText(kaillera_sdlg, IDC_STREAM_ENDPOINT, endpoint, sizeof(endpoint));
+	n02_stream_configure_from_text(endpoint, N02_STREAM_DEFAULT_HOST, N02_STREAM_DEFAULT_PORT, N02_STREAM_DEFAULT_PATH, N02_STREAM_DEFAULT_API_KEY);
+}
 int kaillera_sdlg_MODE;
 void kaillera_sdlgGameMode(bool toggle = false){
 	kaillera_sdlg_MODE = 0;
@@ -688,6 +700,10 @@ void kaillera_sdlgGameMode(bool toggle = false){
 		kaillera_sdlg_toggle = false;
 	}
 	ShowWindow(kaillera_sdlg_CHK_REC,SW_SHOW);
+	ShowWindow(GetDlgItem(kaillera_sdlg, CHK_STREAM), hosting ? SW_SHOW : SW_HIDE);
+	ShowWindow(GetDlgItem(kaillera_sdlg, IDC_STREAM_ENDPOINT), hosting ? SW_SHOW : SW_HIDE);
+	if (!hosting)
+		SendMessage(GetDlgItem(kaillera_sdlg, CHK_STREAM), BM_SETCHECK, BST_UNCHECKED, 0);
 	ShowWindow(kaillera_sdlg_RE_GCHAT,SW_SHOW);
 	ShowWindow(kaillera_sdlg_TXT_GINP,SW_SHOW);
 	ShowWindow(kaillera_sdlg_LV_GULIST.handle,SW_SHOW);
@@ -716,6 +732,8 @@ void kaillera_sdlgNormalMode(bool toggle = false){
 		kaillera_sdlg_toggle = true;
 	}
 	ShowWindow(kaillera_sdlg_CHK_REC,SW_HIDE);
+	ShowWindow(GetDlgItem(kaillera_sdlg, CHK_STREAM), SW_HIDE);
+	ShowWindow(GetDlgItem(kaillera_sdlg, IDC_STREAM_ENDPOINT), SW_HIDE);
 	ShowWindow(kaillera_sdlg_RE_GCHAT,SW_HIDE);
 	ShowWindow(kaillera_sdlg_TXT_GINP,SW_HIDE);
 	ShowWindow(kaillera_sdlg_LV_GULIST.handle,SW_HIDE);
@@ -1690,6 +1708,14 @@ LRESULT CALLBACK KailleraServerDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 			kaillera_sdlg_JOINMSG_LBL = GetDlgItem(hDlg, IDC_JOINMSG_LBL);
 			LoadJoinMessageSettingForContext(false);
 
+			{
+				int streamChecked = nSettings::get_int("KAILLERA_STREAM_LIVE", 0);
+				SendMessage(GetDlgItem(hDlg, CHK_STREAM), BM_SETCHECK, streamChecked ? BST_CHECKED : BST_UNCHECKED, 0);
+				char streamEp[256];
+				nSettings::get_str("KAILLERA_STREAM_ENDPOINT", streamEp, "");
+				SetDlgItemText(hDlg, IDC_STREAM_ENDPOINT, streamEp);
+			}
+
 			re_enable_hyperlinks(kaillera_sdlg_RE_GCHAT);
 
 
@@ -1978,6 +2004,19 @@ LRESULT CALLBACK KailleraServerDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 				case CHK_MINGUIUPD:
 					// Option removed from UI; always treat as unchecked.
 					MINGUIUPDATE = false;
+					break;
+				case CHK_STREAM:
+					{
+						bool checked = SendMessage(GetDlgItem(hDlg, CHK_STREAM), BM_GETCHECK, 0, 0)==BST_CHECKED;
+						nSettings::set_int("KAILLERA_STREAM_LIVE", checked ? 1 : 0);
+					}
+					break;
+				case IDC_STREAM_ENDPOINT:
+					if (HIWORD(wParam) == EN_CHANGE) {
+						char ep[256];
+						GetDlgItemText(hDlg, IDC_STREAM_ENDPOINT, ep, sizeof(ep));
+						nSettings::set_str("KAILLERA_STREAM_ENDPOINT", ep);
+					}
 					break;
 			};
 			break;

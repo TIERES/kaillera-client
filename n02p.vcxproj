@@ -47,6 +47,8 @@
     <IgnoreImportLibrary>true</IgnoreImportLibrary>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>.\x64\Release\</OutDir>
+    <IntDir>.\x64\Release\</IntDir>
     <TargetName>kailleraclient</TargetName>
     <LinkIncremental>false</LinkIncremental>
     <IgnoreImportLibrary>true</IgnoreImportLibrary>
@@ -102,16 +104,16 @@
       <SuppressStartupBanner>true</SuppressStartupBanner>
       <WarningLevel>Level3</WarningLevel>
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;N02P_EXPORTS;_CRT_SECURE_NO_WARNINGS;$(ExtraDefines);%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AssemblerListingLocation>.\Release\</AssemblerListingLocation>
-      <PrecompiledHeaderOutputFile>.\Release\n02p.pch</PrecompiledHeaderOutputFile>
-      <ObjectFileName>.\Release\</ObjectFileName>
-      <ProgramDataBaseFileName>.\Release\</ProgramDataBaseFileName>
+      <AssemblerListingLocation>.\x64\Release\</AssemblerListingLocation>
+      <PrecompiledHeaderOutputFile>.\x64\Release\n02p.pch</PrecompiledHeaderOutputFile>
+      <ObjectFileName>.\x64\Release\</ObjectFileName>
+      <ProgramDataBaseFileName>.\x64\Release\</ProgramDataBaseFileName>
       <CallingConvention>StdCall</CallingConvention>
     </ClCompile>
     <Midl>
       <SuppressStartupBanner>true</SuppressStartupBanner>
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;N02P_EXPORTS;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <TypeLibraryName>.\Release\n02p.tlb</TypeLibraryName>
+      <TypeLibraryName>.\x64\Release\n02p.tlb</TypeLibraryName>
       <MkTypLibCompatible>true</MkTypLibCompatible>
     </Midl>
     <ResourceCompile>
@@ -120,7 +122,7 @@
     </ResourceCompile>
     <Bscmake>
       <SuppressStartupBanner>false</SuppressStartupBanner>
-      <OutputFile>.\Release\n02p.bsc</OutputFile>
+      <OutputFile>.\x64\Release\n02p.bsc</OutputFile>
     </Bscmake>
     <Link>
       <SuppressStartupBanner>true</SuppressStartupBanner>
@@ -128,13 +130,14 @@
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <SubSystem>Console</SubSystem>
       <OutputFile>$(TargetDir)kailleraclient.dll</OutputFile>
-      <ImportLibrary>.\Release\kailleraclient.lib</ImportLibrary>
+      <ImportLibrary>.\x64\Release\kailleraclient.lib</ImportLibrary>
       <AdditionalDependencies>odbc32.lib;odbccp32.lib;ws2_32.lib;comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="common\k_framecache.cpp" />
     <ClCompile Include="common\k_socket.cpp" />
+    <ClCompile Include="common\n02_stream.cpp" />
     <ClCompile Include="common\nSettings.cpp" />
     <ClCompile Include="common\nThread.cpp" />
     <ClCompile Include="core\p2p_core.cpp" />
@@ -154,6 +157,7 @@
     <ClInclude Include="common\dlist.h" />
     <ClInclude Include="common\k_framecache.h" />
     <ClInclude Include="common\k_socket.h" />
+    <ClInclude Include="common\n02_stream.h" />
     <ClInclude Include="common\nSettings.h" />
     <ClInclude Include="common\nSTL.h" />
     <ClInclude Include="common\nThread.h" />

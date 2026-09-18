@@ -48,6 +48,9 @@
     <ClCompile Include="common\k_socket.cpp">
       <Filter>common</Filter>
     </ClCompile>
+    <ClCompile Include="common\n02_stream.cpp">
+      <Filter>common</Filter>
+    </ClCompile>
     <ClCompile Include="common\nSettings.cpp">
       <Filter>common</Filter>
     </ClCompile>
@@ -105,6 +108,9 @@
       <Filter>common</Filter>
     </ClInclude>
     <ClInclude Include="common\k_socket.h">
+      <Filter>common</Filter>
+    </ClInclude>
+    <ClInclude Include="common\n02_stream.h">
       <Filter>common</Filter>
     </ClInclude>
     <ClInclude Include="common\nSettings.h">

@@ -15,6 +15,7 @@
 #include "common/nThread.h"
 #include "common/k_socket.h"
 #include "common/nSettings.h"
+#include "common/n02_stream.h"
 
 #include "errr.h"
 #include <limits.h>
@@ -84,7 +85,14 @@ typedef struct {
 	void (*ChatSend)(char*);
 	void (*EndGame)();
 	bool (*RecordingEnabled)();
+	bool (*IsHost)();
+	bool (*StreamingEnabled)();
+	void (*ConfigureStream)();
 }n02_MODULE;
+
+static bool mod_never_host() { return false; }
+static bool mod_never_stream() { return false; }
+static void mod_no_stream_config() {}
 
 n02_MODULE active_mod;
 
@@ -149,11 +157,16 @@ static void close_recording() {
 		CloseHandle(out);
 		out = INVALID_HANDLE_VALUE;
 	}
+	n02_stream_end_session();
 }
 
 int WINAPI _gameCallback(char *game, int player, int numplayers){
 
 	close_recording();
+
+	char GameName[128];
+	strncpy(GameName, (game != NULL) ? game : "", sizeof(GameName) - 1);
+	GameName[sizeof(GameName) - 1] = 0;
 
 	if (active_mod.RecordingEnabled()) {
 		n02_TRACE();
@@ -184,10 +197,6 @@ int WINAPI _gameCallback(char *game, int player, int numplayers){
 		}
 
 		DWORD written;
-		char GameName[128];
-
-		strncpy(GameName, (game != NULL) ? game : "", sizeof(GameName) - 1);
-		GameName[sizeof(GameName) - 1] = 0;
 
 		WriteFile(out, "KRC1", 4, &written, NULL);
 		WriteFile(out, infos_copy.appName, 128, &written, NULL);
@@ -198,6 +207,11 @@ int WINAPI _gameCallback(char *game, int player, int numplayers){
 		WriteFile(out, (char*)&numplayers, 4, &written, NULL);
 		WriteFile(out, (char*)recording_player_names, 128, &written, NULL);
 		n02_TRACE();
+	}
+
+	if (active_mod.StreamingEnabled() && active_mod.IsHost()) {
+		active_mod.ConfigureStream();
+		n02_stream_start_session(infos_copy.appName, GameName, player, numplayers, recording_player_names);
 	}
 
 	if (infos_copy.gameCallback)
@@ -218,6 +232,7 @@ int WINAPI _gameCallback(char *game, int player, int numplayers){
 				RecordingBuffer.put_bytes(text, textLenI);
 			}
 		}
+		n02_stream_push_chat(nick, text);
 		if (infos_copy.chatReceivedCallback)
 			infos_copy.chatReceivedCallback(nick, text);
 	}
@@ -231,6 +246,7 @@ int WINAPI _gameCallback(char *game, int player, int numplayers){
 			}
 			RecordingBuffer.put_bytes((char*)&playernb, 4);
 		}
+		n02_stream_push_drop(nick, playernb);
 		if (infos_copy.clientDroppedCallback)
 			infos_copy.clientDroppedCallback(nick, playernb);
 	}
@@ -373,6 +389,9 @@ extern "C" {
 		mod_playback.SSDSTEP = player_SSDSTEP;
 		mod_playback.ChatSend = player_ChatSend;
 		mod_playback.RecordingEnabled = player_RecordingEnabled;
+		mod_playback.IsHost = mod_never_host;
+		mod_playback.StreamingEnabled = mod_never_stream;
+		mod_playback.ConfigureStream = mod_no_stream_config;
 
 		mod_kaillera.GUI = kaillera_GUI;
 		mod_kaillera.SSDSTEP = kaillera_SelectServerDlgStep;
@@ -380,6 +399,9 @@ extern "C" {
 		mod_kaillera.ChatSend = kaillera_game_chat_send;
 		mod_kaillera.EndGame = kaillera_end_game;
 		mod_kaillera.RecordingEnabled = kaillera_RecordingEnabled;
+		mod_kaillera.IsHost = kaillera_IsHost;
+		mod_kaillera.StreamingEnabled = kaillera_StreamingEnabled;
+		mod_kaillera.ConfigureStream = kaillera_ConfigureStream;
 
 		mod_p2p.GUI = p2p_GUI;
 		mod_p2p.SSDSTEP = p2p_SelectServerDlgStep;
@@ -387,6 +409,9 @@ extern "C" {
 		mod_p2p.ChatSend = p2p_send_chat;
 		mod_p2p.EndGame = p2p_EndGame;
 		mod_p2p.RecordingEnabled = p2p_RecordingEnabled;
+		mod_p2p.IsHost = p2p_IsHost;
+		mod_p2p.StreamingEnabled = p2p_StreamingEnabled;
+		mod_p2p.ConfigureStream = p2p_ConfigureStream;
 
 		activate_mode(active_mod_index);
 
@@ -439,6 +464,7 @@ extern "C" {
 #ifdef KAILLERA
 #ifdef RECORDER
 		close_recording();
+		n02_stream_shutdown();
 #endif
 #endif
 	}
@@ -553,6 +579,7 @@ extern "C" {
 				RecordingBuffer.put_bytes((char*)values, siz);
 				RecordingBuffer.write();
 			}
+			n02_stream_push_frame(values, siz);
 			return siz;
 
 #else

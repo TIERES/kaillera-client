@@ -1,0 +1,22 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build (x64 Release)",
+            "type": "shell",
+            "command": "${workspaceFolder}\\build.bat",
+            "group": "build",
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "Build (x86 Release)",
+            "type": "shell",
+            "command": "${workspaceFolder}\\build-x86.bat",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": "$msCompile"
+        }
+    ]
+}

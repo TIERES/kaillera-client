@@ -78,6 +78,9 @@ int p2p_GetTime();
 bool kaillera_is_connected(){
 	return KAILLERAC.USERSTAT > 0;
 }
+bool kaillera_is_host(){
+	return KAILLERAC.owner;
+}
 int kaillera_get_frames_count(){
 	return KAILLERAC.frameno;
 }

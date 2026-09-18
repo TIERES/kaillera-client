@@ -8,5 +8,8 @@ void kaillera_GUI();
 void kaillera_ui_chat_send(char * xxx);
 
 bool kaillera_RecordingEnabled();
+bool kaillera_IsHost();
+bool kaillera_StreamingEnabled();
+void kaillera_ConfigureStream();
 
 

@@ -1,6 +1,7 @@
 #include "kailleraclient.h"
 
 #include "common/nSettings.h"
+#include "common/n02_stream.h"
 #include "p2p_ui.h"
 #include "p2p_appcode.h"
 #include <windows.h>
@@ -810,6 +811,17 @@ bool p2p_SelectServerDlgStep(){
 bool p2p_RecordingEnabled(){
 	return SendMessage(GetDlgItem(p2p_ui_connection_dlg, CHK_REC), BM_GETCHECK, 0, 0)==BST_CHECKED;
 }
+bool p2p_IsHost(){
+	return HOST;
+}
+bool p2p_StreamingEnabled(){
+	return SendMessage(GetDlgItem(p2p_ui_connection_dlg, CHK_STREAM), BM_GETCHECK, 0, 0)==BST_CHECKED;
+}
+void p2p_ConfigureStream(){
+	char endpoint[256];
+	GetDlgItemText(p2p_ui_connection_dlg, IDC_STREAM_ENDPOINT, endpoint, sizeof(endpoint));
+	n02_stream_configure_from_text(endpoint, N02_STREAM_DEFAULT_HOST, N02_STREAM_DEFAULT_PORT, N02_STREAM_DEFAULT_PATH, N02_STREAM_DEFAULT_API_KEY);
+}
 
 void p2p_ssrv_send(char* cmd) {
 	char xxx[2048];
@@ -1123,6 +1135,11 @@ void IniaialzeConnectionDialog(HWND hDlg){
 			if (!showEnlistControls) {
 				SendMessage(GetDlgItem(hDlg, CHK_ENLIST), BM_SETCHECK, BST_UNCHECKED, 0);
 			}
+			ShowWindow(GetDlgItem(hDlg, CHK_STREAM), HOST ? SW_SHOW : SW_HIDE);
+			ShowWindow(GetDlgItem(hDlg, IDC_STREAM_ENDPOINT), HOST ? SW_SHOW : SW_HIDE);
+			if (!HOST) {
+				SendMessage(GetDlgItem(hDlg, CHK_STREAM), BM_SETCHECK, BST_UNCHECKED, 0);
+			}
 		ShowWindow(GetDlgItem(hDlg, IDC_HOSTT), HOST ? SW_SHOW : SW_HIDE);
 		ShowWindow(GetDlgItem(hDlg, IDC_P2P_FDLY_LBL), HOST ? SW_SHOW : SW_HIDE);
 		ShowWindow(GetDlgItem(hDlg, IDC_P2P_FDLY), HOST ? SW_SHOW : SW_HIDE);
@@ -1242,6 +1259,13 @@ LRESULT CALLBACK ConnectionDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARA
 							p2p_enlist_game();
 						}
 					}
+				}
+				{
+					int streamChecked = HOST ? nSettings::get_int("P2P_STREAM_LIVE", 0) : 0;
+					SendMessage(GetDlgItem(hDlg, CHK_STREAM), BM_SETCHECK, streamChecked ? BST_CHECKED : BST_UNCHECKED, 0);
+					char streamEp[256];
+					nSettings::get_str("P2P_STREAM_ENDPOINT", streamEp, "");
+					SetDlgItemText(hDlg, IDC_STREAM_ENDPOINT, streamEp);
 				}
 				g_p2p_advanced_visible = false;
 				p2p_set_advanced_ui(hDlg, g_p2p_advanced_visible);
@@ -1505,9 +1529,22 @@ LRESULT CALLBACK ConnectionDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARA
 					}
 				}
 			break;
+			case CHK_STREAM:
+				{
+					const bool checked = (SendMessage(GetDlgItem(hDlg,CHK_STREAM), BM_GETCHECK, 0, 0)==BST_CHECKED);
+					nSettings::set_int("P2P_STREAM_LIVE", checked ? 1 : 0);
+				}
+				break;
+			case IDC_STREAM_ENDPOINT:
+				if (HIWORD(wParam) == EN_CHANGE) {
+					char ep[256];
+					GetDlgItemText(hDlg, IDC_STREAM_ENDPOINT, ep, sizeof(ep));
+					nSettings::set_str("P2P_STREAM_ENDPOINT", ep);
+				}
+				break;
 		};
 		break;
-	};	
+	};
 	return 0;
 }
 ///////////////////////////////////////////////////

@@ -356,7 +356,7 @@ void RecordsList_Populate_fn(char * fn, int i) {
 	n02_TRACE();
 }
 
-static int fn_compare_desc(const void *a, const void *b) {
+static int __cdecl fn_compare_desc(const void *a, const void *b) {
 	// Reverse strcmp so newest (highest timestamp) comes first
 	return strcmp((const char*)b, (const char*)a);
 }
