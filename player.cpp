@@ -322,11 +322,13 @@ void RecordsList_Populate_fn(char * fn, int i) {
 	bool isKRC1 = (strcmp(VER, "KRC1") == 0);
 	if (strcmp(VER, "KRC0") != 0 && !isKRC1) {
 		free(filebuf);
+		PlayBackBuffer.buffer = PlayBackBuffer.ptr = PlayBackBuffer.end = NULL;
 		return;
 	}
 	DWORD headerSize = isKRC1 ? 400 : 272;
 	if (len < headerSize) {
 		free(filebuf);
+		PlayBackBuffer.buffer = PlayBackBuffer.ptr = PlayBackBuffer.end = NULL;
 		return;
 	}
 	PlayBackBuffer.ptr = PlayBackBuffer.buffer + 4;
@@ -478,6 +480,14 @@ void RecordsList_Populate_fn(char * fn, int i) {
 	// Col 5: Filename
 	RecordsListDlg_list.FillRow(fn, 5, i);
 	free(filebuf);
+	// RecordsList_Populate() runs this per file purely to fill in the list's
+	// columns, reusing the shared PlayBackBuffer as scratch space via
+	// load_str()/load_int() above. Leaving PlayBackBuffer.buffer pointing at
+	// this now-freed block made player_watch_begin()'s "free the previous
+	// buffer" check (it runs right after RecordsList_Populate() in
+	// RecordsListDlgProc's WM_INITDIALOG) double-free it - crashing as soon
+	// as "Acompanhar ao vivo!" was used with any local .krec already listed.
+	PlayBackBuffer.buffer = PlayBackBuffer.ptr = PlayBackBuffer.end = NULL;
 	n02_TRACE();
 }
 

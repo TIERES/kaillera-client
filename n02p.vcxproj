@@ -160,6 +160,7 @@
     <ClInclude Include="common\k_framecache.h" />
     <ClInclude Include="common\k_socket.h" />
     <ClInclude Include="common\n02_stream.h" />
+    <ClInclude Include="common\n02_version.h" />
     <ClInclude Include="common\n02_watch.h" />
     <ClInclude Include="common\n02_replays.h" />
     <ClInclude Include="common\nSettings.h" />

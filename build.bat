@@ -98,8 +98,16 @@ exit /b 1
 echo Found MSBuild: %MSBUILD%
 echo Using PlatformToolset: %TOOLSET%
 echo.
+
+REM Embed the same version string CI would (see .github/workflows/build.yml);
+REM falls back to n02_version.h's own "dev" default if git isn't available.
+set GIT_REVISION=
+for /f "usebackq tokens=*" %%g in (`git describe --tags --always 2^>nul`) do set GIT_REVISION=%%g
+set EXTRADEFINES=
+if defined GIT_REVISION set EXTRADEFINES=/p:ExtraDefines="GIT_REVISION=%GIT_REVISION%"
+
 echo Building n02 (64-bit Release)...
-%MSBUILD% %PROJECT% /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0 /p:PlatformToolset=%TOOLSET%
+%MSBUILD% %PROJECT% /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0 /p:PlatformToolset=%TOOLSET% %EXTRADEFINES%
 
 if %ERRORLEVEL% EQU 0 (
     echo.

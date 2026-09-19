@@ -717,7 +717,22 @@ void p2p_ping_callback(int PING){
 
 
 
+// Mirrors kaillera_ui.cpp's stream-toggle broadcast: P2P has no room-status
+// field either, so the host announces "Stream ao vivo!" toggles over the
+// regular chat channel with this exact prefix, which p2p_chat_callback
+// recognizes on both ends to sync the peer's (disabled, for non-hosts)
+// checkbox instead of showing the line as a normal chat message.
+#define N02_STREAM_LIVE_CHAT_PREFIX "[Stream ao vivo]"
 void p2p_chat_callback(char * nick, char * msg){
+	if (msg != NULL && strncmp(msg, N02_STREAM_LIVE_CHAT_PREFIX, strlen(N02_STREAM_LIVE_CHAT_PREFIX)) == 0) {
+		// "desativado" contains "ativado" as a substring, so it must be
+		// checked first, or the "off" message would also match as "on".
+		bool live = strstr(msg, "desativado") == NULL;
+		if (!HOST)
+			SendMessage(GetDlgItem(p2p_ui_connection_dlg, CHK_STREAM), BM_SETCHECK, live ? BST_CHECKED : BST_UNCHECKED, 0);
+		outpf("* %s %s o Stream ao vivo!", nick, live ? "ativou" : "desativou");
+		return;
+	}
 	outpf("<%s> %s",nick, msg);
 	if (KSSDFA.state==2 && infos.chatReceivedCallback) {
 		infos.chatReceivedCallback(nick, msg);
@@ -818,9 +833,11 @@ bool p2p_StreamingEnabled(){
 	return SendMessage(GetDlgItem(p2p_ui_connection_dlg, CHK_STREAM), BM_GETCHECK, 0, 0)==BST_CHECKED;
 }
 void p2p_ConfigureStream(){
-	char endpoint[256];
-	GetDlgItemText(p2p_ui_connection_dlg, IDC_STREAM_ENDPOINT, endpoint, sizeof(endpoint));
-	n02_stream_configure_from_text(endpoint, N02_STREAM_DEFAULT_HOST, N02_STREAM_DEFAULT_PORT, N02_STREAM_DEFAULT_PATH, N02_STREAM_DEFAULT_API_KEY);
+	n02_stream_configure(N02_STREAM_DEFAULT_HOST, N02_STREAM_DEFAULT_PORT, N02_STREAM_DEFAULT_PATH, N02_STREAM_DEFAULT_API_KEY);
+}
+
+static void p2p_BroadcastStreamState(bool live){
+	p2p_send_chat(live ? (char*)N02_STREAM_LIVE_CHAT_PREFIX " ativado!" : (char*)N02_STREAM_LIVE_CHAT_PREFIX " desativado.");
 }
 void p2p_GetOwnerName(char* out, int cap){
 	if (cap <= 0) return;
@@ -1073,6 +1090,21 @@ void p2p_enlist_game() {
 	}
 }
 
+// Shared by the CHK_ENLIST handler and by turning on "Stream ao vivo!"
+// (which forces the room onto the public list too, since otherwise nobody
+// would know a live stream exists to watch).
+static void p2p_SetEnlisted(HWND hDlg, bool enlisted) {
+	SendMessage(GetDlgItem(hDlg, CHK_ENLIST), BM_SETCHECK, enlisted ? BST_CHECKED : BST_UNCHECKED, 0);
+	nSettings::set_int("P2P_ENLIST", enlisted ? 1 : 0);
+	if (enlisted) {
+		if (!HOST || !g_p2p_trav_host_enabled || g_p2p_trav_code[0] != 0) {
+			p2p_enlist_game();
+		}
+	} else {
+		p2p_ssrv_unenlistgame();
+	}
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
@@ -1099,6 +1131,12 @@ void p2p_peer_joined_callback(){
 	}
 	if (HOST && SendMessage(GetDlgItem(p2p_ui_connection_dlg,CHK_ENLIST), BM_GETCHECK, 0, 0)==BST_CHECKED)
 		p2p_ssrv_unenlistgame();
+	if (HOST && p2p_StreamingEnabled()) {
+		// Let a peer who joined after streaming was already turned on learn
+		// about it too - p2p_chat_callback picks this back up on both ends
+		// to sync the checkbox and print the notice.
+		p2p_BroadcastStreamState(true);
+	}
 	p2p_cdlg_peer_joined = 1;
 }
 
@@ -1140,8 +1178,8 @@ void IniaialzeConnectionDialog(HWND hDlg){
 			if (!showEnlistControls) {
 				SendMessage(GetDlgItem(hDlg, CHK_ENLIST), BM_SETCHECK, BST_UNCHECKED, 0);
 			}
-			ShowWindow(GetDlgItem(hDlg, CHK_STREAM), HOST ? SW_SHOW : SW_HIDE);
-			ShowWindow(GetDlgItem(hDlg, IDC_STREAM_ENDPOINT), HOST ? SW_SHOW : SW_HIDE);
+			ShowWindow(GetDlgItem(hDlg, CHK_STREAM), SW_SHOW);
+			EnableWindow(GetDlgItem(hDlg, CHK_STREAM), HOST);
 			if (!HOST) {
 				SendMessage(GetDlgItem(hDlg, CHK_STREAM), BM_SETCHECK, BST_UNCHECKED, 0);
 			}
@@ -1157,6 +1195,10 @@ void IniaialzeConnectionDialog(HWND hDlg){
 				g_p2p_trav_next_reg_ms = GetTickCount() + 2000;
 			} else {
 				outpf("WARNING: Hosting requires hosting ports to be forwarded and enabled in firewalls.");
+				g_p2p_trav_host_fallback_active = true;
+				g_p2p_trav_host_ip_pending = true;
+				p2p_update_host_code_ui(hDlg);
+				p2p_ssrv_whatismyip();
 			}
 			SetDlgItemText(hDlg, IDC_GAME, GAME);
 		} else {
@@ -1268,9 +1310,6 @@ LRESULT CALLBACK ConnectionDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARA
 				{
 					int streamChecked = HOST ? nSettings::get_int("P2P_STREAM_LIVE", 0) : 0;
 					SendMessage(GetDlgItem(hDlg, CHK_STREAM), BM_SETCHECK, streamChecked ? BST_CHECKED : BST_UNCHECKED, 0);
-					char streamEp[256];
-					nSettings::get_str("P2P_STREAM_ENDPOINT", streamEp, "");
-					SetDlgItemText(hDlg, IDC_STREAM_ENDPOINT, streamEp);
 				}
 				g_p2p_advanced_visible = false;
 				p2p_set_advanced_ui(hDlg, g_p2p_advanced_visible);
@@ -1524,27 +1563,28 @@ LRESULT CALLBACK ConnectionDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARA
 				case CHK_ENLIST:
 					{
 						const bool checked = (SendMessage(GetDlgItem(hDlg,CHK_ENLIST), BM_GETCHECK, 0, 0)==BST_CHECKED);
-						nSettings::set_int("P2P_ENLIST", checked ? 1 : 0);
-						if (checked) {
-							if (!HOST || !g_p2p_trav_host_enabled || g_p2p_trav_code[0] != 0) {
-								p2p_enlist_game();
-							}
-						} else {
-						p2p_ssrv_unenlistgame();
+						p2p_SetEnlisted(hDlg, checked);
 					}
-				}
-			break;
+				break;
 			case CHK_STREAM:
+				// BS_AUTOCHECKBOX sends WM_COMMAND for more than just clicks
+				// (e.g. BN_SETFOCUS/BN_KILLFOCUS as focus passes through it,
+				// since it is a WS_TABSTOP control) - only react to an actual
+				// toggle.
+				if (HIWORD(wParam) == BN_CLICKED)
 				{
 					const bool checked = (SendMessage(GetDlgItem(hDlg,CHK_STREAM), BM_GETCHECK, 0, 0)==BST_CHECKED);
 					nSettings::set_int("P2P_STREAM_LIVE", checked ? 1 : 0);
-				}
-				break;
-			case IDC_STREAM_ENDPOINT:
-				if (HIWORD(wParam) == EN_CHANGE) {
-					char ep[256];
-					GetDlgItemText(hDlg, IDC_STREAM_ENDPOINT, ep, sizeof(ep));
-					nSettings::set_str("P2P_STREAM_ENDPOINT", ep);
+					if (HOST) {
+						p2p_BroadcastStreamState(checked);
+						// A live stream is useless if nobody can find the room,
+						// so turning it on also puts the room on the public
+						// list. Turning it back off leaves the list checkbox
+						// alone - the user may still want the room listed.
+						if (checked && SendMessage(GetDlgItem(hDlg, CHK_ENLIST), BM_GETCHECK, 0, 0) != BST_CHECKED) {
+							p2p_SetEnlisted(hDlg, true);
+						}
+					}
 				}
 				break;
 		};
@@ -1900,7 +1940,9 @@ LRESULT CALLBACK P2PSelectionDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPA
 				p2p_try_apply_clipboard_connect(hDlg);
 				break;
 			case IDC_HOST:
-				InitializeP2PSubsystem(hDlg, true, true);
+				// Host directly by IP - no NAT traversal/"connect code"
+				// registration attempt against the traversal server.
+				InitializeP2PSubsystem(hDlg, true, false);
 				break;
 		case IDC_ADD:
 			P2PStoredUsersListAdd();

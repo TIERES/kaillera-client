@@ -118,14 +118,15 @@ BEGIN
     EDITTEXT        IDC_CHATI,7,204,307,12,ES_AUTOHSCROLL | NOT WS_BORDER
     DEFPUSHBUTTON   "&Chat",IDC_CHAT,315,204,42,12,BS_FLAT
     CONTROL         "Ready",IDC_READY,"Button",BS_AUTOCHECKBOX | BS_PUSHLIKE | WS_TABSTOP,7,218,40,18
-    CONTROL         "&Record game",CHK_REC,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,152,218,67,10
+    CONTROL         "Stream ao vivo!",CHK_STREAM,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,152,218,75,10
+    CONTROL         "&Record game",CHK_REC,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,152,231,67,10
     PUSHBUTTON      "Advanced",IDC_P2P_ADVANCED,7,265,54,11
     PUSHBUTTON      "Copy IP",IDC_P2P_ADV_COPYIP,63,265,45,11
     PUSHBUTTON      "re&tr",IDC_RETR,110,265,25,11
     PUSHBUTTON      "ping",IDC_PING,137,265,25,11
     PUSHBUTTON      "&Drop Game",IDC_DROPGAME,50,218,60,18
     CONTROL         "",IDC_RICHEDIT2,"RICHEDIT",TCS_HOTTRACK | TCS_RAGGEDRIGHT | TCS_MULTISELECT | WS_VSCROLL,7,17,350,186
-    LTEXT           "--------------------------",SA_PST,152,230,68,16
+    LTEXT           "--------------------------",SA_PST,152,283,68,16
     PUSHBUTTON      "Copy IP",IDC_SSERV_WHATSMYIP,228,248,45,13
     CONTROL         "Show on public game list",CHK_ENLIST,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,7,252,140,10
     GROUPBOX        "Host:",IDC_HOSTT,222,218,135,58
@@ -138,9 +139,6 @@ BEGIN
     PUSHBUTTON      "Eject peer",IDC_EJECT,228,262,45,11,NOT WS_VISIBLE
     PUSHBUTTON      "Dont allow list",IDC_DONTALLOW,279,262,50,11,NOT WS_VISIBLE
     PUSHBUTTON      "stats",IDC_STATS,164,265,26,11
-    CONTROL         "Stream live",CHK_STREAM,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,7,283,60,10
-    LTEXT           "Endpoint:",IDC_STATIC,70,285,35,8
-    EDITTEXT        IDC_STREAM_ENDPOINT,107,283,251,12,ES_AUTOHSCROLL
 END
 
 P2P_ITEM_EDIT DIALOG 0, 0, 191, 47
@@ -162,7 +160,7 @@ CAPTION "About"
 FONT 8, "MS Sans Serif", 0, 0, 0x0
 BEGIN
     LTEXT           "Kaillera protocol and API:\n(c) 2001-2002 Christophe Thibault\n------------------------------------------------------",IDC_STATIC,7,7,153,24
-    LTEXT           "n02 (c) Open Kaillera\nn02.p2p (c) Open Kaillera\n------------------------------------------------------\nStream ao vivo! V.0.1",IDC_STATIC,7,33,150,32
+    LTEXT           "n02 (c) Open Kaillera\nn02.p2p (c) Open Kaillera\n------------------------------------------------------\nStream ao vivo!",IDC_ABOUT_VERSION,7,33,150,32
     LTEXT           "https://github.com/TIERES/kaillera-client",IDC_ABOUT_GITHUB,7,65,170,10,SS_NOTIFY
     PUSHBUTTON      "License",BTN_LICENSE,7,81,38,10
     PUSHBUTTON      "Useage Policy",BTN_USEAGE,45,81,54,10

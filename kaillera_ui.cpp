@@ -2583,6 +2583,10 @@ void KLSListSave(){
 
 LRESULT CALLBACK AboutDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 	switch (uMsg) {
+	case WM_INITDIALOG:
+		SetDlgItemText(hDlg, IDC_ABOUT_VERSION,
+			"n02 (c) Open Kaillera\nn02.p2p (c) Open Kaillera\n------------------------------------------------------\nStream ao vivo! " N02_VERSION);
+		break;
 	case WM_CLOSE:
 		EndDialog(hDlg, 0);
 		break;

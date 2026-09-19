@@ -119,6 +119,9 @@
     <ClInclude Include="common\n02_stream.h">
       <Filter>common</Filter>
     </ClInclude>
+    <ClInclude Include="common\n02_version.h">
+      <Filter>common</Filter>
+    </ClInclude>
     <ClInclude Include="common\n02_watch.h">
       <Filter>common</Filter>
     </ClInclude>
