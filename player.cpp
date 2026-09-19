@@ -6,6 +6,7 @@
 #include <shellapi.h>
 #include "errr.h"
 #include "common/nSettings.h"
+#include "common/n02_watch.h"
 
 static void UpdateModeRadioButtons(HWND hDlg){
 	int mode = get_active_mode_index();
@@ -16,6 +17,9 @@ static void UpdateModeRadioButtons(HWND hDlg){
 
 bool player_playing = false;
 static bool player_was_dropped[16] = {};
+static bool player_watch_mode = false;
+static char g_pending_watch_session[64] = { 0 };
+static char g_pending_watch_room[128] = { 0 };
 
 class PlayBackBufferC {
 public:
@@ -56,6 +60,105 @@ public:
 
 //==============================================
 
+extern HWND RecordsListDlg; // defined below; used by player_watch_begin()'s error MessageBox
+
+// Appends freshly-pulled bytes onto PlayBackBuffer's allocation, preserving
+// its ptr/end pointers across the realloc (which may move the block) - this
+// is how watch mode keeps the same load_bytes()/load_short()/load_str()
+// parsing player_MPV() already uses for static .krec playback working
+// unchanged against a buffer that keeps growing during a live game.
+static void PlayBackBuffer_Append(const char* data, int len) {
+	if (len <= 0) return;
+	int usedOffset = (int)(PlayBackBuffer.ptr - PlayBackBuffer.buffer);
+	int oldLen = (int)(PlayBackBuffer.end - PlayBackBuffer.buffer);
+	char* nb = (char*)realloc(PlayBackBuffer.buffer, oldLen + len);
+	if (nb == NULL) return; // OOM: chunk dropped, next refill attempt tries again
+	memcpy(nb + oldLen, data, len);
+	PlayBackBuffer.buffer = nb;
+	PlayBackBuffer.ptr = nb + usedOffset;
+	PlayBackBuffer.end = nb + oldLen + len;
+}
+
+// Called from player_MPV() when watch mode's buffer has run dry. Blocks (in
+// short sleeps, via n02_watch_pull's blockIfLive) as long as the session is
+// still live and nothing new has arrived - a spectator caught up to the
+// live edge stalls here instead of player_MPV ending playback, same as
+// kaillera_modify_play_values() stalls waiting for the next network frame.
+static void PlayBackBuffer_WatchRefill() {
+	char chunk[64 * 1024];
+	int n = n02_watch_pull(chunk, sizeof(chunk), true);
+	if (n > 0)
+		PlayBackBuffer_Append(chunk, n);
+}
+
+void player_request_watch(const char* sessionId, const char* roomName) {
+	strncpy(g_pending_watch_session, (sessionId != NULL) ? sessionId : "", sizeof(g_pending_watch_session) - 1);
+	g_pending_watch_session[sizeof(g_pending_watch_session) - 1] = 0;
+	strncpy(g_pending_watch_room, (roomName != NULL) ? roomName : "", sizeof(g_pending_watch_room) - 1);
+	g_pending_watch_room[sizeof(g_pending_watch_room) - 1] = 0;
+}
+
+// Starts spectating: fetches session `sessionId`'s stream, waits for its
+// 400-byte KRC1 header (always the first bytes of any session - see
+// n02_stream.h), then starts the same KSSDFA_START_GAME sequence player_play()
+// uses for a static .krec file. Unlike player_play(), there's no local file
+// and no "emulator mismatch" prompt - the spectator isn't required to run
+// the same emulator build as the host.
+static void player_watch_begin(const char* sessionId, const char* roomName) {
+	n02_TRACE();
+	if (player_playing) player_EndGame();
+
+	if (PlayBackBuffer.buffer != NULL) {
+		free(PlayBackBuffer.buffer);
+		PlayBackBuffer.buffer = NULL;
+	}
+
+	n02_watch_start(sessionId);
+
+	char header[400];
+	int have = 0;
+	DWORD startTick = GetTickCount();
+	while (have < 400 && GetTickCount() - startTick < 5000) {
+		int n = n02_watch_pull(header + have, 400 - have, false);
+		if (n > 0)
+			have += n;
+		else
+			Sleep(20);
+	}
+	if (have < 400) {
+		n02_watch_stop();
+		char msg[256];
+		wsprintf(msg, "Timed out waiting for the \"%s\" stream to start.", roomName);
+		MessageBox(RecordsListDlg, msg, "Error", MB_OK | MB_ICONSTOP);
+		return;
+	}
+
+	PlayBackBuffer.buffer = (char*)malloc(400);
+	memcpy(PlayBackBuffer.buffer, header, 400);
+	PlayBackBuffer.end = PlayBackBuffer.buffer + 400;
+
+	PlayBackBuffer.ptr = PlayBackBuffer.buffer + 132;
+	PlayBackBuffer.load_str(GAME, 128);
+
+	PlayBackBuffer.ptr = PlayBackBuffer.buffer + 264;
+	PlayBackBuffer.load_int(); // host's own playerno - not meaningful to a spectator
+	numplayers = PlayBackBuffer.load_int();
+	// playerno=0 isn't a valid Kaillera player slot (the base protocol has no
+	// "spectator" concept), and passing it to gameCallback() made at least
+	// one emulator frontend silently refuse to start - use 1 instead, and
+	// player_MPV()'s drop handling below skips the "self dropped" check in
+	// watch mode so a real player 1 dropping doesn't end the spectator's feed.
+	playerno = 1;
+
+	PlayBackBuffer.ptr = PlayBackBuffer.buffer + 400;
+
+	player_watch_mode = true;
+	player_playing = true;
+	memset(player_was_dropped, 0, sizeof(player_was_dropped));
+
+	KSSDFA.input = KSSDFA_START_GAME;
+	n02_TRACE();
+}
 
 //..............................................
 
@@ -528,6 +631,15 @@ LRESULT CALLBACK RecordsListDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
 
 			UpdateModeRadioButtons(hDlg);
 
+			if (g_pending_watch_session[0] != 0) {
+				char sessionId[64], room[128];
+				strncpy(sessionId, g_pending_watch_session, sizeof(sessionId) - 1); sessionId[sizeof(sessionId) - 1] = 0;
+				strncpy(room, g_pending_watch_room, sizeof(room) - 1); room[sizeof(room) - 1] = 0;
+				g_pending_watch_session[0] = 0;
+				g_pending_watch_room[0] = 0;
+				player_watch_begin(sessionId, room);
+			}
+
 		}
 		break;
 	case WM_SIZE:
@@ -603,7 +715,6 @@ LRESULT CALLBACK RecordsListDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
 }
 
 void player_GUI(){
-	
 	INITCOMMONCONTROLSEX icx;
 	icx.dwSize = sizeof(icx);
 	icx.dwICC = ICC_LISTVIEW_CLASSES | ICC_TAB_CLASSES;
@@ -619,6 +730,8 @@ void player_GUI(){
 int player_MPV(void*values,int size){
 	n02_TRACE();
 	if (player_playing){
+		if (player_watch_mode && PlayBackBuffer.ptr + 10 >= PlayBackBuffer.end)
+			PlayBackBuffer_WatchRefill();
 		if (PlayBackBuffer.ptr + 10 < PlayBackBuffer.end) {
 			char b = PlayBackBuffer.load_char();
 			if (b==0x12) {
@@ -637,7 +750,7 @@ int player_MPV(void*values,int size){
 				int pn = PlayBackBuffer.load_int();
 				if (pn >= 1 && pn <= 16)
 					player_was_dropped[pn - 1] = true;
-				if (pn == playerno) {
+				if (pn == playerno && !player_watch_mode) {
 					// Recording player dropped - end playback
 					player_EndGame();
 					return -1;
@@ -660,6 +773,10 @@ int player_MPV(void*values,int size){
 void player_EndGame(){
 	n02_TRACE();
 	player_playing = false;
+	if (player_watch_mode) {
+		n02_watch_stop();
+		player_watch_mode = false;
+	}
 	// Notify emulator of any players not already dropped by the recording
 	for (int i = numplayers; i >= 1; i--) {
 		if (i <= 16 && player_was_dropped[i - 1])

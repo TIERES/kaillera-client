@@ -49,7 +49,11 @@ void n02_stream_configure_from_text(const char* rawEndpoint, const char* default
 
 // Starts a new streaming session and (lazily) the background sender thread.
 // playerNames must point to 4 buffers of 32 bytes each (may be NULL).
-void n02_stream_start_session(const char* appName, const char* gameName, int playerno, int numplayers, char playerNames[4][32]);
+// ownerName is the hosting user's own name (may be NULL/empty) - sent as the
+// X-Owner-Name header on every batch, so a spectator's /spectate/lookup can
+// disambiguate rooms that share the same name by also matching the host,
+// same as the room list already shows both a game name and an owner.
+void n02_stream_start_session(const char* appName, const char* gameName, int playerno, int numplayers, char playerNames[4][32], const char* ownerName);
 
 // Enqueues one record, mirroring exactly what's written to the local .krec
 // file for the same event. No-op if no session is active. Never blocks.

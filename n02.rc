@@ -156,17 +156,17 @@ BEGIN
     EDITTEXT        IDC_IP,34,24,98,12,ES_AUTOHSCROLL
 END
 
-KAILLERA_ABOUT DIALOGEX 0, 0, 186, 74
+KAILLERA_ABOUT DIALOGEX 0, 0, 186, 98
 STYLE DS_SETFONT | DS_MODALFRAME | DS_NOIDLEMSG | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "About"
 FONT 8, "MS Sans Serif", 0, 0, 0x0
 BEGIN
-    PUSHBUTTON      "Close",BTN_CLOSE,141,7,38,10
-    LTEXT           "Kaillera protocol and API:\n(c) 2001-2002 Christophe Thibault\n------------------------------------------------------",IDC_STATIC,7,7,113,24
-    PUSHBUTTON      "Open Kaillera Website",BTN_OKAI,100,57,79,10
-    LTEXT           "n02 (c) Open Kaillera\nn02.p2p (c) Open Kaillera",IDC_STATIC,7,33,117,16
-    PUSHBUTTON      "Useage Policy",BTN_USEAGE,45,57,54,10
-    PUSHBUTTON      "License",BTN_LICENSE,7,57,38,10
+    LTEXT           "Kaillera protocol and API:\n(c) 2001-2002 Christophe Thibault\n------------------------------------------------------",IDC_STATIC,7,7,153,24
+    LTEXT           "n02 (c) Open Kaillera\nn02.p2p (c) Open Kaillera\n------------------------------------------------------\nStream ao vivo! V.0.1",IDC_STATIC,7,33,150,32
+    LTEXT           "https://github.com/TIERES/kaillera-client",IDC_ABOUT_GITHUB,7,65,170,10,SS_NOTIFY
+    PUSHBUTTON      "License",BTN_LICENSE,7,81,38,10
+    PUSHBUTTON      "Useage Policy",BTN_USEAGE,45,81,54,10
+    PUSHBUTTON      "Open Kaillera Website",BTN_OKAI,100,81,79,10
 END
 
 KAILLERA_CUSTOMIP DIALOG 0, 0, 186, 28
@@ -205,23 +205,19 @@ BEGIN
     PUSHBUTTON      "Leave",BTN_LEAVE,464,224,34,14
     PUSHBUTTON      "&Kick",BTN_KICK,426,240,36,14
     PUSHBUTTON      "Lagstat",BTN_LAGSTAT,464,240,34,14
-    CONTROL         "&Record game",CHK_REC,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,429,267,67,8
+    CONTROL         "Stream ao vivo!",CHK_STREAM,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,429,262,75,10
+    CONTROL         "&Record game",CHK_REC,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,429,279,67,10
     CONTROL         "List1",LV_GULIST,"SysListView32",LVS_REPORT | LVS_NOSORTHEADER | WS_TABSTOP,220,209,205,107
     CONTROL         "List1",LV_ULIST,"SysListView32",LVS_REPORT | WS_TABSTOP,347,7,151,200
     CONTROL         "",RE_PART,"RICHEDIT",TCS_HOTTRACK | TCS_RAGGEDRIGHT | TCS_MULTISELECT | WS_VSCROLL,6,7,340,187
     CONTROL         "List2",LV_GLIST,"SysListView32",LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_TABSTOP,7,208,491,117
     CONTROL         "",RE_GCHAT,"RICHEDIT",TCS_HOTTRACK | TCS_RAGGEDRIGHT | TCS_MULTISELECT | WS_VSCROLL,6,208,213,108
     PUSHBUTTON      "Chat",BTN_GCHAT,194,317,25,12,BS_FLAT
-    LTEXT           "delay: 3 frames",ST_DELAY,431,287,66,8
-    LTEXT           "speed: 58fps",ST_SPEED,431,277,66,8
     PUSHBUTTON      "Create",IDC_CREATE,320,195,25,12,BS_FLAT
     EDITTEXT        TXT_MSG,252,317,171,12,ES_AUTOHSCROLL
     LTEXT           "Join msg:",IDC_JOINMSG_LBL,220,320,32,8
     PUSHBUTTON      "Options",BTN_OPTIONS,426,296,72,14
     PUSHBUTTON      "Advertise",BTN_ADVERTISE,426,312,72,14
-    CONTROL         "Stream live",CHK_STREAM,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,7,333,60,10
-    LTEXT           "Endpoint:",IDC_STATIC,70,335,35,8
-    EDITTEXT        IDC_STREAM_ENDPOINT,107,333,290,12,ES_AUTOHSCROLL
 END
 
 KAILLERA_OPTIONS DIALOGEX 0, 0, 160, 102

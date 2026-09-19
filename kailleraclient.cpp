@@ -88,11 +88,13 @@ typedef struct {
 	bool (*IsHost)();
 	bool (*StreamingEnabled)();
 	void (*ConfigureStream)();
+	void (*GetOwnerName)(char*, int);
 }n02_MODULE;
 
 static bool mod_never_host() { return false; }
 static bool mod_never_stream() { return false; }
 static void mod_no_stream_config() {}
+static void mod_no_owner_name(char* out, int cap) { if (cap > 0) out[0] = 0; }
 
 n02_MODULE active_mod;
 
@@ -211,7 +213,9 @@ int WINAPI _gameCallback(char *game, int player, int numplayers){
 
 	if (active_mod.StreamingEnabled() && active_mod.IsHost()) {
 		active_mod.ConfigureStream();
-		n02_stream_start_session(infos_copy.appName, GameName, player, numplayers, recording_player_names);
+		char ownerName[64];
+		active_mod.GetOwnerName(ownerName, sizeof(ownerName));
+		n02_stream_start_session(infos_copy.appName, GameName, player, numplayers, recording_player_names, ownerName);
 	}
 
 	if (infos_copy.gameCallback)
@@ -295,15 +299,10 @@ int get_active_mode_index(){
 }
 
 void loadSettings() {
-	nSettings::Initialize("okai");
-	active_mod_index = nSettings::get_int("AM", 1);
-	nSettings::Terminate();
-}
-
-void saveSettings() {
-	nSettings::Initialize("okai");
-	nSettings::set_int("AM", active_mod_index);
-	nSettings::Terminate();
+	// Always start in Server mode - don't remember whatever mode (e.g.
+	// Playback, entered via the lobby's "Watch" feature) was active when
+	// the client last shut down.
+	active_mod_index = 1;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -392,6 +391,7 @@ extern "C" {
 		mod_playback.IsHost = mod_never_host;
 		mod_playback.StreamingEnabled = mod_never_stream;
 		mod_playback.ConfigureStream = mod_no_stream_config;
+		mod_playback.GetOwnerName = mod_no_owner_name;
 
 		mod_kaillera.GUI = kaillera_GUI;
 		mod_kaillera.SSDSTEP = kaillera_SelectServerDlgStep;
@@ -402,6 +402,7 @@ extern "C" {
 		mod_kaillera.IsHost = kaillera_IsHost;
 		mod_kaillera.StreamingEnabled = kaillera_StreamingEnabled;
 		mod_kaillera.ConfigureStream = kaillera_ConfigureStream;
+		mod_kaillera.GetOwnerName = kaillera_GetOwnerName;
 
 		mod_p2p.GUI = p2p_GUI;
 		mod_p2p.SSDSTEP = p2p_SelectServerDlgStep;
@@ -412,6 +413,7 @@ extern "C" {
 		mod_p2p.IsHost = p2p_IsHost;
 		mod_p2p.StreamingEnabled = p2p_StreamingEnabled;
 		mod_p2p.ConfigureStream = p2p_ConfigureStream;
+		mod_p2p.GetOwnerName = p2p_GetOwnerName;
 
 		activate_mode(active_mod_index);
 
@@ -457,7 +459,6 @@ extern "C" {
 	}
 	void KAILLERA_DLLEXP kailleraShutdown(){
 		k_socket::Cleanup();
-		saveSettings();
 		if (gamelist != 0)
 			free(gamelist);
 		gamelist = 0;

@@ -1,4 +1,5 @@
 @echo off
+setlocal enabledelayedexpansion
 REM Build script for n02 Kaillera DLL
 REM This builds the 64-bit Release version
 
@@ -7,6 +8,23 @@ set PROJECT="%~dp0n02p.vcxproj"
 REM Try to find MSBuild in common locations
 set MSBUILD=
 set TOOLSET=
+
+REM Use vswhere to locate MSBuild regardless of install drive/edition
+set VSWHERE="C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+if exist %VSWHERE% (
+    for /f "usebackq tokens=*" %%i in (`%VSWHERE% -latest -prerelease -products * -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe`) do (
+        set MSBUILD="%%i"
+    )
+    for /f "usebackq tokens=1 delims=." %%v in (`%VSWHERE% -latest -prerelease -products * -requires Microsoft.Component.MSBuild -property installationVersion`) do (
+        set VSMAJOR=%%v
+    )
+    if defined MSBUILD (
+        if "!VSMAJOR!"=="18" set TOOLSET=v145
+        if "!VSMAJOR!"=="17" set TOOLSET=v143
+        if "!VSMAJOR!"=="16" set TOOLSET=v142
+        goto :found
+    )
+)
 
 REM VS2026 (v18) Community
 if exist "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" (

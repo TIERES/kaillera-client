@@ -28,6 +28,7 @@ int kaillera_get_delay();
 
 bool kaillera_is_connected();
 bool kaillera_is_host();
+void kaillera_get_username(char* out, int cap);
 bool kaillera_core_initialize(int port, char * appname, char * username, char connection_setting);
 void kaillera_set_spoof_ping(int spoof_ping_ms);  // Call before connect: 0=auto, >0=spoof ping in ms
 bool kaillera_core_connect(char * ip, int port = 27888);
@@ -69,6 +70,7 @@ void kaillera_player_joined_callback(char * username, int ping, unsigned short u
 void kaillera_player_left_callback(char * user, unsigned short id);
 void kaillera_user_kicked_callback();
 void kaillera_login_stat_callback(char*lsmsg);
+void kaillera_duplicate_username_callback(char* conflictingName);
 void kaillera_player_dropped_callback(char * user, int gdpl);
 void kaillera_game_callback(char * game, char player, char players);
 void kaillera_game_netsync_wait_callback(int tx);

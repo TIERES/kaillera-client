@@ -11,6 +11,8 @@
 #include "common/nThread.h"
 #include "common/nSettings.h"
 #include "common/n02_stream.h"
+#include "common/n02_watch.h"
+#include "player.h"
 
 static bool IsNonGameLobbyName(const char* name);
 
@@ -80,16 +82,11 @@ HWND kaillera_sdlg_BTN_KICK;
 HWND kaillera_sdlg_BTN_LAGSTAT;
 HWND kaillera_sdlg_BTN_OPTIONS;
 HWND kaillera_sdlg_BTN_ADVERTISE;
-HWND kaillera_sdlg_ST_SPEED;
-HWND kaillera_sdlg_ST_DELAY;
 HWND kaillera_sdlg_BTN_GCHAT;
 HWND kaillera_sdlg_MINGUIUPDATE;
 HWND kaillera_sdlg_TXT_MSG;
 HWND kaillera_sdlg_JOINMSG_LBL;
 UINT_PTR kaillera_sdlg_sipd_timer;
-int kaillera_sdlg_frameno = 0;
-int kaillera_sdlg_pps = 0;
-int kaillera_sdlg_delay = -1;
 int kaillera_spoof_ping = 0;  // 0 = auto (no spoofing), >0 = spoof ping in ms
 int kaillera_30fps_mode = 0;  // 0 = normal, 1 = halve delay for 30fps ROMs
 bool MINGUIUPDATE;
@@ -182,9 +179,8 @@ static KailleraResizeItem g_kaillera_resize_items[] = {
 	{ BTN_LEAVE, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_TOP, { 0, 0, 0, 0 } },
 	{ BTN_KICK, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_TOP, { 0, 0, 0, 0 } },
 	{ BTN_LAGSTAT, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_TOP, { 0, 0, 0, 0 } },
+	{ CHK_STREAM, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_BOTTOM, { 0, 0, 0, 0 } },
 	{ CHK_REC, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_BOTTOM, { 0, 0, 0, 0 } },
-	{ ST_SPEED, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_BOTTOM, { 0, 0, 0, 0 } },
-	{ ST_DELAY, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_BOTTOM, { 0, 0, 0, 0 } },
 	{ BTN_OPTIONS, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_BOTTOM, { 0, 0, 0, 0 } },
 	{ BTN_ADVERTISE, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_BOTTOM, { 0, 0, 0, 0 } },
 	{ IDC_JOINMSG_LBL, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_BOTTOM, { 0, 0, 0, 0 } },
@@ -686,9 +682,22 @@ bool kaillera_StreamingEnabled(){
 	return SendMessage(GetDlgItem(kaillera_sdlg, CHK_STREAM), BM_GETCHECK, 0, 0)==BST_CHECKED;
 }
 void kaillera_ConfigureStream(){
-	char endpoint[256];
-	GetDlgItemText(kaillera_sdlg, IDC_STREAM_ENDPOINT, endpoint, sizeof(endpoint));
-	n02_stream_configure_from_text(endpoint, N02_STREAM_DEFAULT_HOST, N02_STREAM_DEFAULT_PORT, N02_STREAM_DEFAULT_PATH, N02_STREAM_DEFAULT_API_KEY);
+	n02_stream_configure(N02_STREAM_DEFAULT_HOST, N02_STREAM_DEFAULT_PORT, N02_STREAM_DEFAULT_PATH, N02_STREAM_DEFAULT_API_KEY);
+}
+
+// Kaillera's protocol has no room-status field of its own for this, so the
+// host announces "Stream ao vivo!" toggles over the room's own game chat -
+// every n02 client in the room (see kaillera_game_chat_callback) recognizes
+// this exact prefix, updates its own (disabled, for non-hosts) checkbox to
+// match instead of displaying the line as a normal chat message, and shows
+// a "* someone ativou/desativou..." notice in its place. Non-n02 clients in
+// the room just see it as an ordinary chat line.
+#define N02_STREAM_LIVE_CHAT_PREFIX "[Stream ao vivo]"
+static void kaillera_BroadcastStreamState(bool live){
+	kaillera_game_chat_send(live ? (char*)N02_STREAM_LIVE_CHAT_PREFIX " ativado!" : (char*)N02_STREAM_LIVE_CHAT_PREFIX " desativado.");
+}
+void kaillera_GetOwnerName(char* out, int cap){
+	kaillera_get_username(out, cap);
 }
 int kaillera_sdlg_MODE;
 void kaillera_sdlgGameMode(bool toggle = false){
@@ -700,10 +709,13 @@ void kaillera_sdlgGameMode(bool toggle = false){
 		kaillera_sdlg_toggle = false;
 	}
 	ShowWindow(kaillera_sdlg_CHK_REC,SW_SHOW);
-	ShowWindow(GetDlgItem(kaillera_sdlg, CHK_STREAM), hosting ? SW_SHOW : SW_HIDE);
-	ShowWindow(GetDlgItem(kaillera_sdlg, IDC_STREAM_ENDPOINT), hosting ? SW_SHOW : SW_HIDE);
-	if (!hosting)
-		SendMessage(GetDlgItem(kaillera_sdlg, CHK_STREAM), BM_SETCHECK, BST_UNCHECKED, 0);
+	{
+		HWND chkStream = GetDlgItem(kaillera_sdlg, CHK_STREAM);
+		ShowWindow(chkStream, SW_SHOW);
+		EnableWindow(chkStream, hosting);
+		if (!hosting)
+			SendMessage(chkStream, BM_SETCHECK, BST_UNCHECKED, 0);
+	}
 	ShowWindow(kaillera_sdlg_RE_GCHAT,SW_SHOW);
 	ShowWindow(kaillera_sdlg_TXT_GINP,SW_SHOW);
 	ShowWindow(kaillera_sdlg_LV_GULIST.handle,SW_SHOW);
@@ -714,8 +726,6 @@ void kaillera_sdlgGameMode(bool toggle = false){
 	ShowWindow(kaillera_sdlg_BTN_LAGSTAT,SW_SHOW);
 	ShowWindow(kaillera_sdlg_BTN_OPTIONS,SW_SHOW);
 	ShowWindow(kaillera_sdlg_BTN_ADVERTISE,SW_SHOW);
-	ShowWindow(kaillera_sdlg_ST_SPEED,SW_SHOW);
-	ShowWindow(kaillera_sdlg_ST_DELAY,SW_SHOW);
 	ShowWindow(kaillera_sdlg_BTN_GCHAT,SW_SHOW);
 	ShowWindow(kaillera_sdlg_MINGUIUPDATE,SW_SHOW);
 	ShowWindow(kaillera_sdlg_TXT_MSG,SW_SHOW);
@@ -733,7 +743,6 @@ void kaillera_sdlgNormalMode(bool toggle = false){
 	}
 	ShowWindow(kaillera_sdlg_CHK_REC,SW_HIDE);
 	ShowWindow(GetDlgItem(kaillera_sdlg, CHK_STREAM), SW_HIDE);
-	ShowWindow(GetDlgItem(kaillera_sdlg, IDC_STREAM_ENDPOINT), SW_HIDE);
 	ShowWindow(kaillera_sdlg_RE_GCHAT,SW_HIDE);
 	ShowWindow(kaillera_sdlg_TXT_GINP,SW_HIDE);
 	ShowWindow(kaillera_sdlg_LV_GULIST.handle,SW_HIDE);
@@ -744,8 +753,6 @@ void kaillera_sdlgNormalMode(bool toggle = false){
 	ShowWindow(kaillera_sdlg_BTN_LAGSTAT,SW_HIDE);
 	ShowWindow(kaillera_sdlg_BTN_OPTIONS,SW_HIDE);
 	ShowWindow(kaillera_sdlg_BTN_ADVERTISE,SW_HIDE);
-	ShowWindow(kaillera_sdlg_ST_SPEED,SW_HIDE);
-	ShowWindow(kaillera_sdlg_ST_DELAY,SW_HIDE);
 	ShowWindow(kaillera_sdlg_BTN_GCHAT,SW_HIDE);
 	ShowWindow(kaillera_sdlg_MINGUIUPDATE,SW_HIDE);
 	ShowWindow(kaillera_sdlg_TXT_MSG,SW_HIDE);
@@ -1009,6 +1016,15 @@ void kaillera_chat_callback(char*name, char * msg){
 	kaillera_outpf("<%s> %s", name, msg);
 }
 void kaillera_game_chat_callback(char*name, char * msg){
+	if (msg != NULL && strncmp(msg, N02_STREAM_LIVE_CHAT_PREFIX, strlen(N02_STREAM_LIVE_CHAT_PREFIX)) == 0) {
+		// "desativado" contains "ativado" as a substring, so it must be
+		// checked first, or the "off" message would also match as "on".
+		bool live = strstr(msg, "desativado") == NULL;
+		if (!hosting)
+			SendMessage(GetDlgItem(kaillera_sdlg, CHK_STREAM), BM_SETCHECK, live ? BST_CHECKED : BST_UNCHECKED, 0);
+		kaillera_gdebug("* %s %s o Stream ao vivo!", name, live ? "ativou" : "desativou");
+		return;
+	}
 	if (name != NULL && _stricmp(name, "server") == 0) {
 		kaillera_gdebug_color(KAILLERA_COLOR_GREEN, "<%s> %s", name, msg);
 	} else {
@@ -1127,6 +1143,13 @@ void kaillera_player_joined_callback(char * username, int ping, unsigned short u
 		if (msg[0] != 0)
 			kaillera_game_chat_send(msg);
 	}
+	if (hosting && kaillera_StreamingEnabled()) {
+		// Let a player who joined after streaming was already turned on
+		// learn about it too - kaillera_game_chat_callback picks this back
+		// up on everyone's client (including this one) to sync the
+		// checkbox and print the notice.
+		kaillera_BroadcastStreamState(true);
+	}
 	if (g_beep_on_user_join)
 		MessageBeep(MB_OK);
 	FlashKailleraDialogIfNotFocused();
@@ -1148,6 +1171,15 @@ void kaillera_user_kicked_callback(){
 }
 void kaillera_login_stat_callback(char*lsmsg){
 	kaillera_core_debug("* %s", lsmsg);
+}
+void kaillera_duplicate_username_callback(char* conflictingName){
+	char msg[256];
+	wsprintf(msg, "A user named \"%s\" is already connected to this server.\nPlease choose a different nickname and reconnect.", conflictingName);
+	MessageBox(kaillera_sdlg, msg, "Nickname already in use", MB_OK | MB_ICONWARNING);
+	// Disconnects and returns to the server-select dialog, same as closing
+	// this dialog any other way - see ConnectToServer()'s post-DialogBox
+	// cleanup (kaillera_disconnect/kaillera_core_cleanup).
+	SendMessage(kaillera_sdlg, WM_CLOSE, 0, 0);
 }
 void kaillera_player_dropped_callback(char * user, int gdpl){
 	kaillera_gdebug("* Dropped: %s (Player %i)", user, gdpl);
@@ -1186,13 +1218,6 @@ void kaillera_game_callback(char * game, char player, char players){
 	KSSDFA.input = KSSDFA_START_GAME;
 }
 void kaillera_game_netsync_wait_callback(int tx){
-	SetWindowText(kaillera_sdlg_ST_SPEED, "waiting for others");
-	int secs = tx / 1000;
-	int ssecs = (tx % 1000) / 100;
-	char xxx[32];
-	wsprintf(xxx,"%03i.%is", secs, ssecs);
-	SetWindowText(kaillera_sdlg_ST_DELAY, xxx);
-	kaillera_sdlg_delay = -1;
 }
 void kaillera_end_game_callback(){
 	KSSDFA.input = KSSDFA_END_GAME;
@@ -1208,6 +1233,7 @@ void kaillera_end_game_callback(){
 #define MENU_ID_UNIGNORE 5
 #define MENU_ID_CREATE_AWAY 6
 #define MENU_ID_CREATE_CHAT 7
+#define MENU_ID_WATCH 8
 #define MENU_ID_CREATE_BASE 1000
 
 static const char* kNonGameLobbyAway = "*Away (leave messages)";
@@ -1310,10 +1336,45 @@ void kailelra_sdlg_join_selected_game(){
 	}
 }
 
+// "Watch" on a lobby room: looks up (blocking, brief) whether that room is
+// currently streaming to the community spectate server (see n02_stream.h /
+// n02_watch.h), and if so switches into the playback module to replay it
+// live - same mode switch RB_MODE_PLAYBACK does, just with a session queued
+// up via player_request_watch() instead of opening the recordings browser.
+void kaillera_sdlg_watch_selected_game(HWND handle){
+	int sel = kaillera_sdlg_gameslv.SelectedRow();
+	if (sel < 0 || sel >= kaillera_sdlg_gameslv.RowsCount() || inGame)
+		return;
+
+	char room[128];
+	kaillera_sdlg_gameslv.CheckRow(room, 128, 0, sel);  // Game column (== room name)
+	char owner[128];
+	kaillera_sdlg_gameslv.CheckRow(owner, 128, 3, sel);  // Owner column - disambiguates same-named rooms
+
+	char sessionId[64];
+	if (!n02_watch_lookup_session(room, owner, sessionId, sizeof(sessionId))) {
+		kaillera_error_callback("No live stream found for room '%s'.\nThe host may not have \"Stream ao vivo!\" enabled, or it hasn't started sending data yet - try again in a moment.", room);
+		return;
+	}
+
+	player_request_watch(sessionId, room);
+	bool switched = activate_mode(2);
+	if (switched) {
+		// `handle` (kaillera_sdlg) is a nested DialogBox opened by
+		// ConnectToServer() from inside the outer server-select dialog
+		// (kaillera_ssdlg). Closing it here just unwinds back into
+		// ConnectToServer()'s own disconnect/cleanup code, which checks
+		// get_active_mode_index() itself and closes kaillera_ssdlg too when
+		// it sees a mode switch is pending - see ConnectToServer().
+		SendMessage(handle, WM_CLOSE, 0, 0);
+	}
+}
+
 void kaillera_sdlg_show_games_list_menu(HWND handle, bool incjoin = false){
 	POINT pi;
 	GetCursorPos(&pi);
 	HMENU mmainmenuu = kaillera_sdlg_CreateGamesMenu;
+	bool rowIsPlaying = false;
 	if(incjoin){
 		mmainmenuu = CreatePopupMenu();
 		MENUITEMINFO mi;
@@ -1329,11 +1390,25 @@ void kaillera_sdlg_show_games_list_menu(HWND handle, bool incjoin = false){
 		mi.dwTypeData = "Join";
 		mi.wID = MENU_ID_JOIN;
 		InsertMenuItem(mmainmenuu, 1, TRUE, &mi);
+
+		int sel = kaillera_sdlg_gameslv.SelectedRow();
+		if (sel >= 0 && sel < kaillera_sdlg_gameslv.RowsCount()) {
+			char status[128];
+			kaillera_sdlg_gameslv.CheckRow(status, 128, 4, sel);  // Status column
+			rowIsPlaying = strcmp(status, "Playing") == 0;
+		}
+		if (rowIsPlaying) {
+			mi.dwTypeData = "Acompanhar ao vivo!";
+			mi.wID = MENU_ID_WATCH;
+			InsertMenuItem(mmainmenuu, 2, TRUE, &mi);
+		}
 	}
 	int result = TrackPopupMenu(mmainmenuu, TPM_RETURNCMD, pi.x, pi.y, 0, handle, NULL);
 	if(result != 0){
 		if(result == MENU_ID_JOIN){
 			kailelra_sdlg_join_selected_game();
+		} else if (result == MENU_ID_WATCH) {
+			kaillera_sdlg_watch_selected_game(handle);
 		} else if (result == MENU_ID_CREATE_AWAY || result == MENU_ID_CREATE_CHAT) {
 			if (!inGame) {
 				const char* lobby = (result == MENU_ID_CREATE_AWAY) ? kNonGameLobbyAway : kNonGameLobbyChat;
@@ -1700,9 +1775,7 @@ LRESULT CALLBACK KailleraServerDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 			kaillera_sdlg_BTN_LAGSTAT = GetDlgItem(hDlg, BTN_LAGSTAT);
 			kaillera_sdlg_BTN_OPTIONS = GetDlgItem(hDlg, BTN_OPTIONS);
 			kaillera_sdlg_BTN_ADVERTISE = GetDlgItem(hDlg, BTN_ADVERTISE);
-			kaillera_sdlg_ST_SPEED = GetDlgItem(hDlg, ST_SPEED);
 			kaillera_sdlg_BTN_GCHAT = GetDlgItem(hDlg, BTN_GCHAT);
-			kaillera_sdlg_ST_DELAY = GetDlgItem(hDlg, ST_DELAY);
 			kaillera_sdlg_MINGUIUPDATE = GetDlgItem(hDlg, CHK_MINGUIUPD);
 			kaillera_sdlg_TXT_MSG = GetDlgItem(hDlg, TXT_MSG);
 			kaillera_sdlg_JOINMSG_LBL = GetDlgItem(hDlg, IDC_JOINMSG_LBL);
@@ -1711,9 +1784,6 @@ LRESULT CALLBACK KailleraServerDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 			{
 				int streamChecked = nSettings::get_int("KAILLERA_STREAM_LIVE", 0);
 				SendMessage(GetDlgItem(hDlg, CHK_STREAM), BM_SETCHECK, streamChecked ? BST_CHECKED : BST_UNCHECKED, 0);
-				char streamEp[256];
-				nSettings::get_str("KAILLERA_STREAM_ENDPOINT", streamEp, "");
-				SetDlgItemText(hDlg, IDC_STREAM_ENDPOINT, streamEp);
 			}
 
 			re_enable_hyperlinks(kaillera_sdlg_RE_GCHAT);
@@ -1847,20 +1917,6 @@ LRESULT CALLBACK KailleraServerDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 				char xx[256];
 				wsprintf(xx, "Game %s", GAME);
 				SetWindowText(kaillera_sdlg, xx);
-
-				int jf;
-				if ((jf = kaillera_get_frames_count()) != kaillera_sdlg_frameno) {
-					char xxx[32];
-					wsprintf(xxx,"%i fps/%i pps", jf - kaillera_sdlg_frameno, SOCK_SEND_PACKETS - kaillera_sdlg_pps);
-					SetWindowText(kaillera_sdlg_ST_SPEED, xxx);
-					kaillera_sdlg_frameno = jf;
-					kaillera_sdlg_pps = SOCK_SEND_PACKETS;
-				}
-				if ((jf = kaillera_get_delay()) != kaillera_sdlg_delay) {
-					char xxx[32];
-					wsprintf(xxx,"%i frames", kaillera_sdlg_delay = jf);
-					SetWindowText(kaillera_sdlg_ST_DELAY, xxx);
-				}
 			}
 		}
 		break;
@@ -2006,16 +2062,17 @@ LRESULT CALLBACK KailleraServerDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 					MINGUIUPDATE = false;
 					break;
 				case CHK_STREAM:
+					// BS_AUTOCHECKBOX sends WM_COMMAND for more than just clicks
+					// (e.g. BN_SETFOCUS/BN_KILLFOCUS as focus passes through it,
+					// since it is a WS_TABSTOP control) - only react to an actual
+					// toggle, or a focus-change notification would re-broadcast
+					// the unchanged state to the room every time.
+					if (HIWORD(wParam) == BN_CLICKED)
 					{
 						bool checked = SendMessage(GetDlgItem(hDlg, CHK_STREAM), BM_GETCHECK, 0, 0)==BST_CHECKED;
 						nSettings::set_int("KAILLERA_STREAM_LIVE", checked ? 1 : 0);
-					}
-					break;
-				case IDC_STREAM_ENDPOINT:
-					if (HIWORD(wParam) == EN_CHANGE) {
-						char ep[256];
-						GetDlgItemText(hDlg, IDC_STREAM_ENDPOINT, ep, sizeof(ep));
-						nSettings::set_str("KAILLERA_STREAM_ENDPOINT", ep);
+						if (hosting)
+							kaillera_BroadcastStreamState(checked);
 					}
 					break;
 			};
@@ -2225,6 +2282,29 @@ void ConnectToServer(char * ip, int port, HWND pDlg,char * name) {
 		KSSDFA.state = 0;
 		KSSDFA.input = KSSDFA_END_GAME;
 		//core cleanup
+
+		if (get_active_mode_index() != 1) {
+			// A mode switch (e.g. the lobby's "Watch" menu, which calls
+			// activate_mode() before closing the connected dialog) was
+			// requested while we were connected. kaillera_ssdlg's own
+			// DialogBox() call is what GuiThread::run()'s mod_rerun loop is
+			// actually waiting on to reopen with the new mode - re-showing
+			// it here (the normal "back to server list" path) would never
+			// let that loop see the switch, since this dialog never closes
+			// on its own otherwise.
+			// PostMessage (not SendMessage) is required here: we're several
+			// stack frames below kaillera_ssdlg's own DialogProc
+			// (KLSListConnect() -> ConnectToServer(), itself already past a
+			// full nested DialogBox() for kaillera_sdlg), and a SendMessage
+			// reentering that DialogProc from this depth never came back -
+			// it deadlocked Windows' modal dialog dispatch instead of
+			// unwinding it. Posting queues the WM_CLOSE for kaillera_ssdlg's
+			// own DialogBox() loop to pick up and dispatch itself, once we
+			// return control to it normally, which processes it as a plain
+			// top-level message instead of a reentrant call.
+			PostMessage(kaillera_ssdlg, WM_CLOSE, 0, 0);
+			return;
+		}
 
 		// Show the server selection dialog again
 		ShowWindow(kaillera_ssdlg, SW_SHOW);
@@ -2506,11 +2586,15 @@ LRESULT CALLBACK AboutDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 	case WM_CLOSE:
 		EndDialog(hDlg, 0);
 		break;
+	case WM_SETCURSOR:
+		// Show a hand cursor over the GitHub link, like a browser hyperlink.
+		if ((HWND)wParam == GetDlgItem(hDlg, IDC_ABOUT_GITHUB)) {
+			SetCursor(LoadCursor(NULL, IDC_HAND));
+			return TRUE;
+		}
+		break;
 	case WM_COMMAND:
 		switch (LOWORD(wParam)) {
-		case BTN_CLOSE:
-			EndDialog(hDlg, 0);
-			break;
 		case BTN_LICENSE:
 			ShellExecute(NULL, NULL, "http://p2p.kaillera.ru/license.html", NULL, NULL, SW_SHOWNORMAL);
 			break;
@@ -2519,6 +2603,10 @@ LRESULT CALLBACK AboutDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 			break;
 		case BTN_USEAGE:
 			ShellExecute(NULL, NULL, "http://p2p.kaillera.ru/", NULL, NULL, SW_SHOWNORMAL);
+			break;
+		case IDC_ABOUT_GITHUB:
+			if (HIWORD(wParam) == STN_CLICKED)
+				ShellExecute(NULL, NULL, "https://github.com/TIERES/kaillera-client", NULL, NULL, SW_SHOWNORMAL);
 			break;
 		};
 		break;
@@ -2670,12 +2758,24 @@ LRESULT CALLBACK KailleraServerSelectDialogProc(HWND hDlg, UINT uMsg, WPARAM wPa
 			nSettings::set_str("USRN", tbuf);
 
 		}
-		
+
 		KLSListSave();
-		
-		EndDialog(hDlg, 0);
-		nSettings::Terminate();
-		
+
+		{
+			EndDialog(hDlg, 0);
+			nSettings::Terminate();
+			// EndDialog() only *marks* the dialog for termination - the
+			// modal DialogBox() loop is what actually calls DestroyWindow(),
+			// once it notices that mark on its next message-loop iteration
+			// (see MSDN: "EndDialog does not destroy the dialog box"). In
+			// this "Watch" mode-switch path that notice never arrives - the
+			// enclosing DialogBox(KAILLERA_SSDLG) call in kaillera_GUI()
+			// never returns even though this handler runs to completion -
+			// so force it here instead of relying on that loop to notice.
+			if (IsWindow(hDlg))
+				DestroyWindow(hDlg);
+		}
+
 		break;
 	case WM_COMMAND:
 		switch (LOWORD(wParam)) {

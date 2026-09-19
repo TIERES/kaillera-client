@@ -11,6 +11,7 @@ bool p2p_RecordingEnabled();
 bool p2p_IsHost();
 bool p2p_StreamingEnabled();
 void p2p_ConfigureStream();
+void p2p_GetOwnerName(char* out, int cap);
 void p2p_ShowWaitingGamesList();
 void InitializeP2PSubsystem(HWND hDlg, bool host);
 void InitializeP2PSubsystem(HWND hDlg, bool host, bool hostByCode);

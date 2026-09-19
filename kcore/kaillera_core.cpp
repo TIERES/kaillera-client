@@ -81,6 +81,11 @@ bool kaillera_is_connected(){
 bool kaillera_is_host(){
 	return KAILLERAC.owner;
 }
+void kaillera_get_username(char* out, int cap){
+	if (cap <= 0) return;
+	strncpy(out, KAILLERAC.USERNAME, cap - 1);
+	out[cap - 1] = 0;
+}
 int kaillera_get_frames_count(){
 	return KAILLERAC.frameno;
 }
@@ -470,6 +475,8 @@ void kaillera_ProcessGeneralInstruction(k_instruction * ki) {
 			userZ = ki->load_int();
 			gameZ = ki->load_int();
 			int x;
+			bool duplicateUsername = false;
+			char duplicateName[32] = { 0 };
 			//users
 			for(x=0;x<userZ; x++) {
 				char name[32];
@@ -478,7 +485,24 @@ void kaillera_ProcessGeneralInstruction(k_instruction * ki) {
 				int status = ki->load_char();
 				unsigned short id = ki->load_short();
 				int conn = ki->load_char();
+				// This roster lists everyone already on the server before we
+				// logged in (it never includes ourselves), so any name match
+				// here means a real, pre-existing connection with the same
+				// username - not us. Some Kaillera servers respond to that
+				// by kicking the *existing* connection when a duplicate
+				// login arrives, which can silently drop a user mid-game.
+				// We can't undo that server-side, but we can stop making it
+				// worse: refuse to proceed with a colliding name and send
+				// ourselves back to nickname entry instead.
+				if (!duplicateUsername && _stricmp(name, KAILLERAC.USERNAME) == 0) {
+					duplicateUsername = true;
+					strncpy(duplicateName, name, sizeof(duplicateName) - 1);
+				}
 				kaillera_user_add_callback(name, ping, status, id, conn);
+			}
+			if (duplicateUsername) {
+				kaillera_duplicate_username_callback(duplicateName);
+				break;
 			}
 			for(x=0;x<gameZ; x++) {
 				char gname[128];

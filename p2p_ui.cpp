@@ -822,6 +822,11 @@ void p2p_ConfigureStream(){
 	GetDlgItemText(p2p_ui_connection_dlg, IDC_STREAM_ENDPOINT, endpoint, sizeof(endpoint));
 	n02_stream_configure_from_text(endpoint, N02_STREAM_DEFAULT_HOST, N02_STREAM_DEFAULT_PORT, N02_STREAM_DEFAULT_PATH, N02_STREAM_DEFAULT_API_KEY);
 }
+void p2p_GetOwnerName(char* out, int cap){
+	if (cap <= 0) return;
+	strncpy(out, USERNAME, cap - 1);
+	out[cap - 1] = 0;
+}
 
 void p2p_ssrv_send(char* cmd) {
 	char xxx[2048];

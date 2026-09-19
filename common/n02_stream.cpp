@@ -160,6 +160,7 @@ static int CopyCStringBounded(char* dst, const char* src, int cap) {
 static bool g_session_active = false;   // a session has been started
 static bool g_session_ended = false;    // End() was called, final POST pending
 static char g_session_id[64] = { 0 };
+static char g_session_owner[64] = { 0 }; // hosting user's name - see X-Owner-Name below
 static unsigned int g_session_sequence = 0;
 static char g_session_header[400];      // KRC1-style header, sent with sequence 0
 
@@ -193,7 +194,7 @@ static void BuildSessionHeader(const char* appName, const char* gameName, int pl
 // DownloadListToBuffer() in kaillera_ui_mslist.cpp.
 ///////////////////////////////////////////////////////////////////////////////
 
-static bool HttpPostBytes(const char* host, int port, const char* path, const char* apiKey, const char* sessionId, unsigned int sequence, bool sessionEnd, const char* body, int bodyLen) {
+static bool HttpPostBytes(const char* host, int port, const char* path, const char* apiKey, const char* sessionId, const char* ownerName, unsigned int sequence, bool sessionEnd, const char* body, int bodyLen) {
 	if (host == NULL || host[0] == 0 || port <= 0)
 		return false;
 
@@ -231,6 +232,11 @@ static bool HttpPostBytes(const char* host, int port, const char* path, const ch
 	if (apiKey != NULL && apiKey[0] != 0)
 		_snprintf(apiKeyHeader, sizeof(apiKeyHeader), "X-Api-Key: %s\r\n", apiKey);
 
+	char ownerHeader[192];
+	ownerHeader[0] = 0;
+	if (ownerName != NULL && ownerName[0] != 0)
+		_snprintf(ownerHeader, sizeof(ownerHeader), "X-Owner-Name: %s\r\n", ownerName);
+
 	char header[1024];
 	int headerLen = _snprintf(header, sizeof(header),
 		"POST %s HTTP/1.1\r\n"
@@ -241,10 +247,12 @@ static bool HttpPostBytes(const char* host, int port, const char* path, const ch
 		"X-Sequence: %u\r\n"
 		"%s"
 		"%s"
+		"%s"
 		"Connection: close\r\n"
 		"\r\n",
 		path, host, bodyLen, sessionId, sequence,
 		sessionEnd ? "X-Session-End: true\r\n" : "",
+		ownerHeader,
 		apiKeyHeader);
 	if (headerLen < 0 || headerLen >= (int)sizeof(header)) {
 		closesocket(s);
@@ -311,7 +319,7 @@ public:
 			}
 
 			if (payloadLen > 0 || ended) {
-				if (!HttpPostBytes(g_stream_host, g_stream_port, g_stream_path, g_stream_api_key, g_session_id, g_session_sequence, ended, payload, payloadLen)) {
+				if (!HttpPostBytes(g_stream_host, g_stream_port, g_stream_path, g_stream_api_key, g_session_id, g_session_owner, g_session_sequence, ended, payload, payloadLen)) {
 					StatsAppendLine("stream: POST failed (seq %u, %d bytes)", g_session_sequence, payloadLen);
 				}
 				g_session_sequence++;
@@ -340,7 +348,7 @@ static void StreamThreadStop() {
 // Public API
 ///////////////////////////////////////////////////////////////////////////////
 
-void n02_stream_start_session(const char* appName, const char* gameName, int playerno, int numplayers, char playerNames[4][32]) {
+void n02_stream_start_session(const char* appName, const char* gameName, int playerno, int numplayers, char playerNames[4][32], const char* ownerName) {
 	if (g_stream_host[0] == 0) {
 		StatsAppendLine("stream: enabled but no endpoint host configured, not streaming");
 		return;
@@ -358,6 +366,8 @@ void n02_stream_start_session(const char* appName, const char* gameName, int pla
 
 	_snprintf(g_session_id, sizeof(g_session_id), "%lu-%lu", (unsigned long)GetCurrentProcessId(), (unsigned long)time(NULL));
 	g_session_id[sizeof(g_session_id) - 1] = 0;
+	strncpy(g_session_owner, (ownerName != NULL) ? ownerName : "", sizeof(g_session_owner) - 1);
+	g_session_owner[sizeof(g_session_owner) - 1] = 0;
 	g_session_sequence = 0;
 	g_session_ended = false;
 	BuildSessionHeader(appName, gameName, playerno, numplayers, playerNames);

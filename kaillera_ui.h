@@ -11,5 +11,6 @@ bool kaillera_RecordingEnabled();
 bool kaillera_IsHost();
 bool kaillera_StreamingEnabled();
 void kaillera_ConfigureStream();
+void kaillera_GetOwnerName(char* out, int cap);
 
 

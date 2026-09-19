@@ -9,6 +9,15 @@ on:
 jobs:
   build:
     runs-on: windows-2025
+    strategy:
+      matrix:
+        include:
+          - platform: x64
+            arch_name: x64
+            output_dir: x64/Release
+          - platform: Win32
+            arch_name: x86
+            output_dir: Release
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,14 +32,14 @@ jobs:
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v2
 
-      - name: Build x64 Release
-        run: msbuild n02p.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v142 /p:WindowsTargetPlatformVersion=10.0 /p:ExtraDefines="GIT_REVISION=${{ env.GIT_REVISION }}"
+      - name: Build ${{ matrix.arch_name }} Release
+        run: msbuild n02p.vcxproj /p:Configuration=Release /p:Platform=${{ matrix.platform }} /p:PlatformToolset=v142 /p:WindowsTargetPlatformVersion=10.0 /p:ExtraDefines="GIT_REVISION=${{ env.GIT_REVISION }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kailleraclient-x64-${{ env.GIT_REVISION }}
-          path: x64/Release/kailleraclient.dll
+          name: kailleraclient-${{ matrix.arch_name }}-${{ env.GIT_REVISION }}
+          path: ${{ matrix.output_dir }}/kailleraclient.dll
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -56,9 +65,13 @@ jobs:
         run: |
           mkdir -p release
 
-          # Zip the DLL
+          # Zip each platform's DLL
           cd artifacts/kailleraclient-x64-${{ env.VERSION }}
           zip "../../release/kailleraclient-x64-${{ env.VERSION }}.zip" kailleraclient.dll
+          cd ../..
+
+          cd artifacts/kailleraclient-x86-${{ env.VERSION }}
+          zip "../../release/kailleraclient-x86-${{ env.VERSION }}.zip" kailleraclient.dll
           cd ../..
 
           ls -la release/
