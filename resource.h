@@ -121,6 +121,7 @@
 #define CHK_STREAM                      1104
 #define IDC_STREAM_ENDPOINT             1105
 #define IDC_ABOUT_GITHUB                1106
+#define CHK_ONLINE                      1107
 
 // Next default values for new objects
 //
@@ -128,7 +129,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        115
 #define _APS_NEXT_COMMAND_VALUE         40001
-#define _APS_NEXT_CONTROL_VALUE         1107
+#define _APS_NEXT_CONTROL_VALUE         1108
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif

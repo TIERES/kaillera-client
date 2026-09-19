@@ -32,6 +32,10 @@ Clicking it looks up the room's live session and switches your client straight i
 
 If the host hasn't enabled streaming yet (or the stream hasn't started sending data), you'll get a short message explaining that instead of the match starting.
 
+### Replays Online
+
+On the Playback screen, check **"Replays Online"** to swap the local recordings list for the most recent matches recorded by any player with at least 5 minutes of play, straight from the community server. Playing one downloads its `.krec` into your `records\` folder and starts playback right away; the "Delete" button becomes "Download" in this mode, to save a replay without playing it. Unchecking the box switches back to the usual local list.
+
 ## Other modes
 
 - **P2P mode** connects two players directly over UDP — see `core/p2p_core.cpp`.

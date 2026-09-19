@@ -610,6 +610,18 @@ extern "C" {
 #endif
 
 	}
+
+	/* Custom extension, not part of the standard Kaillera client API - frontends
+	   should GetProcAddress() this optionally (a real/older kailleraclient.dll
+	   won't export it) and treat a missing symbol as "not in playback mode".
+	   Lets the frontend tell Playback mode (static .krec file, "Replays Online",
+	   or Watch Live) apart from P2P/Server: unlike those two, Playback has no
+	   live peer to stay in lockstep with, so it's safe to allow fast-forward/
+	   frame-advance hotkeys the frontend would otherwise disable while any
+	   Kaillera session is active. Returns 1 in Playback mode, 0 otherwise. */
+	int KAILLERA_DLLEXP kailleraIsPlaybackMode(){
+		return get_active_mode_index() == 2;
+	}
 };
 
 

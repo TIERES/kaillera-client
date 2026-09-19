@@ -54,6 +54,9 @@
     <ClCompile Include="common\n02_watch.cpp">
       <Filter>common</Filter>
     </ClCompile>
+    <ClCompile Include="common\n02_replays.cpp">
+      <Filter>common</Filter>
+    </ClCompile>
     <ClCompile Include="common\nSettings.cpp">
       <Filter>common</Filter>
     </ClCompile>
@@ -117,6 +120,9 @@
       <Filter>common</Filter>
     </ClInclude>
     <ClInclude Include="common\n02_watch.h">
+      <Filter>common</Filter>
+    </ClInclude>
+    <ClInclude Include="common\n02_replays.h">
       <Filter>common</Filter>
     </ClInclude>
     <ClInclude Include="common\nSettings.h">

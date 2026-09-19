@@ -32,6 +32,10 @@ Ao clicar, o client procura a sessão ao vivo daquela sala e troca automaticamen
 
 Se o host ainda não tiver ativado o streaming (ou a stream ainda não começou a enviar dados), você recebe uma mensagem curta avisando disso, em vez da partida começar.
 
+### Replays Online
+
+Na tela de Playback, marque a caixa **"Replays Online"** pra trocar a lista de gravações locais pelas últimas partidas gravadas por qualquer jogador com pelo menos 5 minutos de duração, direto do servidor comunitário. Dando play numa delas, o client baixa o `.krec` pra sua pasta `records\` e já inicia a reprodução; o botão "Delete" vira "Download" nesse modo, pra baixar sem reproduzir. Desmarcando a caixa, volta pra lista local de sempre.
+
 ## Outros modos
 
 - **Modo P2P** conecta dois jogadores diretamente via UDP — veja `core/p2p_core.cpp`.

@@ -7,6 +7,7 @@
 #include "errr.h"
 #include "common/nSettings.h"
 #include "common/n02_watch.h"
+#include "common/n02_replays.h"
 
 static void UpdateModeRadioButtons(HWND hDlg){
 	int mode = get_active_mode_index();
@@ -20,6 +21,14 @@ static bool player_was_dropped[16] = {};
 static bool player_watch_mode = false;
 static char g_pending_watch_session[64] = { 0 };
 static char g_pending_watch_room[128] = { 0 };
+
+// "Replays Online" checkbox state - when checked, the Records list shows
+// N02ReplayEntry entries fetched from the community server instead of local
+// files (see RecordsList_PopulateOnline()), and Play/Delete act on those
+// instead (download-then-play, download-only).
+static bool g_online_mode = false;
+static N02ReplayEntry g_online_entries[N02_REPLAYS_MAX_ENTRIES];
+static int g_online_count = 0;
 
 class PlayBackBufferC {
 public:
@@ -251,13 +260,26 @@ void RecordsList_PlaySelected(){
 	n02_TRACE();
 	if (player_playing) return;
 	int s = RecordsListDlg_list.SelectedRow();
-	if (s >= 0 && s < RecordsListDlg_list.RowsCount()){
-		int idx = (int)RecordsListDlg_list.RowNo(s);
-		if (idx >= 0 && idx < MAX_RECORDS){
-			char filename[2000];
-			wsprintf(filename, ".\\records\\%s", record_filenames[idx]);
-			player_play(filename);
+	if (s < 0 || s >= RecordsListDlg_list.RowsCount()) return;
+	int idx = (int)RecordsListDlg_list.RowNo(s);
+
+	if (g_online_mode) {
+		if (idx < 0 || idx >= g_online_count) return;
+		CreateDirectory(".\\records", 0);
+		char destPath[2000];
+		wsprintf(destPath, ".\\records\\%s", g_online_entries[idx].download_name);
+		if (!n02_replays_download(g_online_entries[idx].session_id, destPath)) {
+			MessageBox(RecordsListDlg, "Failed to download the replay from the server.", "Error", MB_OK | MB_ICONSTOP);
+			return;
 		}
+		player_play(destPath);
+		return;
+	}
+
+	if (idx >= 0 && idx < MAX_RECORDS){
+		char filename[2000];
+		wsprintf(filename, ".\\records\\%s", record_filenames[idx]);
+		player_play(filename);
 	}
 }
 
@@ -506,6 +528,72 @@ void RecordsList_DeleteSelected(){
 	}
 }
 
+// BTN_DELETE's online-mode counterpart: downloads the selected online replay
+// into .\records\ without starting playback (mirrors RecordsList_DeleteSelected()'s
+// selection handling, but downloads instead of deleting since there's nothing
+// local to remove).
+void RecordsList_DownloadSelected(){
+	int s = RecordsListDlg_list.SelectedRow();
+	if (s < 0 || s >= RecordsListDlg_list.RowsCount()) return;
+	int idx = (int)RecordsListDlg_list.RowNo(s);
+	if (idx < 0 || idx >= g_online_count) return;
+
+	CreateDirectory(".\\records", 0);
+	char destPath[2000];
+	wsprintf(destPath, ".\\records\\%s", g_online_entries[idx].download_name);
+	if (n02_replays_download(g_online_entries[idx].session_id, destPath)) {
+		MessageBox(RecordsListDlg, "Replay downloaded to the records folder.", "Download", MB_OK | MB_ICONINFORMATION);
+	} else {
+		MessageBox(RecordsListDlg, "Failed to download the replay from the server.", "Error", MB_OK | MB_ICONSTOP);
+	}
+}
+
+static void FormatReplayDuration(int totalSeconds, char* out) {
+	int mins = totalSeconds / 60;
+	int secs = totalSeconds % 60;
+	sprintf(out, "%d:%02d", mins, secs);
+}
+
+static void FormatReplaySize(int len, char* out) {
+	if (len <= 1024) {
+		wsprintf(out, "%i B", len);
+	} else {
+		len /= 1024;
+		if (len < 1000) {
+			sprintf(out, "%i kB", len);
+		} else {
+			int mb = len / 1000;
+			int frc = (len % 1000) / 100;
+			sprintf(out, "%i.%i MB", mb, frc);
+		}
+	}
+}
+
+// Fills the Records list from the community server's replay list instead of
+// the local .\records\ folder - see the CHK_ONLINE handler in
+// RecordsListDlgProc(). Uses the same 6 columns as the local list
+// (RecordsList_Populate_fn()) so no layout/column code needs to differ.
+void RecordsList_PopulateOnline(){
+	RecordsListDlg_list.DeleteAllRows();
+	g_online_count = n02_replays_fetch_list(g_online_entries, N02_REPLAYS_MAX_ENTRIES);
+	if (g_online_count == 0) {
+		MessageBox(RecordsListDlg, "Could not fetch the replay list from the server.", "Replays Online", MB_OK | MB_ICONEXCLAMATION);
+		return;
+	}
+	for (int i = 0; i < g_online_count; i++) {
+		N02ReplayEntry* e = &g_online_entries[i];
+		char buf[64];
+		RecordsListDlg_list.AddRow(e->when, i);
+		RecordsListDlg_list.FillRow(e->player_names[0] ? e->player_names : (char*)"?", 1, i);
+		RecordsListDlg_list.FillRow(e->game_name, 2, i);
+		FormatReplayDuration(e->duration_seconds, buf);
+		RecordsListDlg_list.FillRow(buf, 3, i);
+		FormatReplaySize(e->size_bytes, buf);
+		RecordsListDlg_list.FillRow(buf, 4, i);
+		RecordsListDlg_list.FillRow(e->download_name, 5, i);
+	}
+}
+
 #define PB_NUM_COLS 6
 #define IDM_COL_TOGGLE 40100
 
@@ -622,6 +710,9 @@ LRESULT CALLBACK RecordsListDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
 			}
 
 			RecordsListDlg_list.FullRowSelect();
+			g_online_mode = false;
+			CheckDlgButton(hDlg, CHK_ONLINE, BST_UNCHECKED);
+			SetDlgItemText(hDlg, BTN_DELETE, "Delete");
 			RecordsList_Populate();
 
 			// Default sort: date descending (newest first)
@@ -654,7 +745,8 @@ LRESULT CALLBACK RecordsListDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
 		switch (LOWORD(wParam)) {
 		case IDCREFRESH:
 			{
-				RecordsList_Populate();
+				if (g_online_mode) RecordsList_PopulateOnline();
+				else RecordsList_Populate();
 			}
 			break;
 		case BTN_PLAY:
@@ -664,7 +756,16 @@ LRESULT CALLBACK RecordsListDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
 			player_EndGame();
 			break;
 		case BTN_DELETE:
-			RecordsList_DeleteSelected();
+			if (g_online_mode) RecordsList_DownloadSelected();
+			else RecordsList_DeleteSelected();
+			break;
+		case CHK_ONLINE:
+			if (HIWORD(wParam) == BN_CLICKED) {
+				g_online_mode = IsDlgButtonChecked(hDlg, CHK_ONLINE) == BST_CHECKED;
+				SetDlgItemText(hDlg, BTN_DELETE, g_online_mode ? "Download" : "Delete");
+				if (g_online_mode) RecordsList_PopulateOnline();
+				else RecordsList_Populate();
+			}
 			break;
 		case BTN_OPENFOLDER:
 			{
