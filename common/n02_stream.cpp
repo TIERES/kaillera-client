@@ -303,31 +303,53 @@ public:
 	void run() {
 		running = true;
 		char sendBuf[64 * 1024 + sizeof(g_session_header)];
+
+		// A batch that failed to POST stays here (same bytes, same
+		// X-Sequence) and is retried next tick instead of being dropped -
+		// the receiving server just appends bytes as they arrive with no
+		// gap detection (see spectate.py's /spectate/ingest), so silently
+		// losing a batch used to permanently corrupt the record framing for
+		// the rest of the session. New frames keep queuing (bounded,
+		// drop-oldest - see StreamEnqueue) while a batch is stuck retrying.
+		bool havePending = false;
+		char* pendingPayload = NULL;
+		int pendingLen = 0;
+		bool pendingEnded = false;
+
 		while (!stop_requested) {
 			Sleep(N02_STREAM_BATCH_MS);
 
-			bool ended = g_session_ended;
-			int n = StreamDrain(sendBuf + sizeof(g_session_header), sizeof(sendBuf) - sizeof(g_session_header));
+			if (!havePending) {
+				bool ended = g_session_ended;
+				int n = StreamDrain(sendBuf + sizeof(g_session_header), sizeof(sendBuf) - sizeof(g_session_header));
 
-			bool isFirst = (g_session_sequence == 0);
-			char* payload = sendBuf + sizeof(g_session_header);
-			int payloadLen = n;
-			if (isFirst) {
-				memcpy(sendBuf, g_session_header, sizeof(g_session_header));
-				payload = sendBuf;
-				payloadLen = n + (int)sizeof(g_session_header);
-			}
-
-			if (payloadLen > 0 || ended) {
-				if (!HttpPostBytes(g_stream_host, g_stream_port, g_stream_path, g_stream_api_key, g_session_id, g_session_owner, g_session_sequence, ended, payload, payloadLen)) {
-					StatsAppendLine("stream: POST failed (seq %u, %d bytes)", g_session_sequence, payloadLen);
+				bool isFirst = (g_session_sequence == 0);
+				char* payload = sendBuf + sizeof(g_session_header);
+				int payloadLen = n;
+				if (isFirst) {
+					memcpy(sendBuf, g_session_header, sizeof(g_session_header));
+					payload = sendBuf;
+					payloadLen = n + (int)sizeof(g_session_header);
 				}
-				g_session_sequence++;
+
+				if (payloadLen <= 0 && !ended)
+					continue; // nothing to send yet
+
+				pendingPayload = payload;
+				pendingLen = payloadLen;
+				pendingEnded = ended;
+				havePending = true;
 			}
 
-			if (ended) {
-				g_session_active = false;
-				break;
+			if (HttpPostBytes(g_stream_host, g_stream_port, g_stream_path, g_stream_api_key, g_session_id, g_session_owner, g_session_sequence, pendingEnded, pendingPayload, pendingLen)) {
+				g_session_sequence++;
+				havePending = false;
+				if (pendingEnded) {
+					g_session_active = false;
+					break;
+				}
+			} else {
+				StatsAppendLine("stream: POST failed (seq %u, %d bytes) - will retry", g_session_sequence, pendingLen);
 			}
 		}
 		running = false;

@@ -141,7 +141,17 @@ bool kaillera_disconnect(char * quitmsg){
 		ls.type = USERLEAV;
 		ls.store_short(-1);
 		ls.store_string(quitmsg);
-		KAILLERAC.connection->send_instruction(&ls);
+		// USERLEAV is a single fire-and-forget UDP packet sent right before
+		// the caller tears down the connection (kaillera_core_cleanup()) -
+		// there's no chance for the usual retransmission cache to resend it
+		// if it's lost. Send it a few times back-to-back so a single dropped
+		// packet doesn't leave a ghost session on the server that blocks a
+		// quick reconnect (e.g. right after using the lobby's "Watch" menu).
+		for (int i = 0; i < 3; i++) {
+			KAILLERAC.connection->send_instruction(&ls);
+			if (i < 2)
+				Sleep(20);
+		}
 	}
 	// Always reset state
 	KAILLERAC.USERSTAT = 0;
