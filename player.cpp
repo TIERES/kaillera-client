@@ -8,6 +8,7 @@
 #include "common/nSettings.h"
 #include "common/n02_watch.h"
 #include "common/n02_replays.h"
+#include "common/krec_reader.h"
 
 static void UpdateModeRadioButtons(HWND hDlg){
 	int mode = get_active_mode_index();
@@ -187,81 +188,95 @@ static void player_watch_begin(const char* sessionId, const char* roomName) {
 nLVw RecordsListDlg_list;
 HWND RecordsListDlg;
 char record_filenames[MAX_RECORDS][260];
+// Static local-file playback (retry-connect Fase 1): reads via the shared
+// krec_reader helper instead of hand-parsing PlayBackBuffer directly. Watch
+// mode (player_watch_begin(), further below) still uses the legacy
+// PlayBackBufferC global unchanged - only this local-file path was migrated.
+static krec_reader g_playback_reader;
+
+// --- retry-connect Fase 1: temporary test-only "pause at frame N" hook ---
+// Not part of the final retry-connect design (that will pause both peers via
+// RPAUSE/RPACK network instructions) - this exists purely to prove out the
+// "freeze the emulator on an exact replay frame, then resume" technique
+// locally, with one player, before any protocol work. Set the environment
+// variable N02_KREC_TEST_PAUSE_FRAME to an input-frame index (as counted by
+// krec_reader::frame_index(), i.e. only 0x12 records) to arm it: playback
+// freezes right after delivering that frame (re-delivering its bytes every
+// call, so the core keeps receiving valid input rather than nothing) until
+// F9 is pressed, then resumes exactly where it left off. Unset/absent = the
+// hook is a no-op and player_MPV() behaves exactly as it did before Fase 1.
+static int g_test_pause_frame = -2; // -2 = not yet read from env, -1 = disabled
+static bool g_test_paused = false;
+static char g_test_last_input[256];
+static int g_test_last_input_len = 0;
+
+static void player_test_pause_reset() {
+	g_test_pause_frame = -2;
+	g_test_paused = false;
+	g_test_last_input_len = 0;
+}
+
+// Set true only when N02_KREC_TEST_PAUSE_FRAME is actually present in the
+// environment (regardless of its parsed value) - gates the end-of-playback
+// frame-count report below so normal Playback mode use never sees it.
+static bool g_test_report_enabled = false;
+
+static void player_test_pause_init() {
+	if (g_test_pause_frame != -2)
+		return;
+	char val[32];
+	DWORD n = GetEnvironmentVariableA("N02_KREC_TEST_PAUSE_FRAME", val, sizeof(val));
+	g_test_report_enabled = (n > 0);
+	g_test_pause_frame = (n > 0 && n < sizeof(val)) ? atoi(val) : -1;
+}
+
+// Called once per player_MPV() loop iteration while frozen. Returns true
+// (and re-delivers the last input frame into `values`) as long as the test
+// is still "paused"; returns false once F9 releases it, letting the caller
+// fall through to normal playback again.
+static bool player_test_pause_frozen(void* values, int size) {
+	if (!g_test_paused)
+		return false;
+	if (GetAsyncKeyState(VK_F9) & 1) {
+		g_test_paused = false;
+		return false;
+	}
+	int n = min(g_test_last_input_len, size);
+	if (n > 0)
+		memcpy(values, g_test_last_input, n);
+	return true;
+}
+
 void player_play(char * fn){
 	n02_TRACE();
 	//char * fn = BrowseFile(0);
 	if(fn== 0)
 		return;
-	
-	HANDLE in = CreateFile(fn, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 
-	if (in == INVALID_HANDLE_VALUE)
-		return;
-
-	DWORD len = SetFilePointer(in, 0, NULL, FILE_END);
-	SetFilePointer(in, 0, NULL, FILE_BEGIN);
-	if (len < 272) {
-		CloseHandle(in);
+	if (!g_playback_reader.open_file(fn)) {
 		MessageBox(RecordsListDlg, "File too short", "Error", MB_OK | MB_ICONSTOP);
 		return;
 	}
 
-	PlayBackBuffer.buffer = (char*)malloc(len+66);
-
-	DWORD bytesRead;
-	ReadFile(in, PlayBackBuffer.buffer, len, &bytesRead, NULL);
-
-	PlayBackBuffer.end = PlayBackBuffer.buffer + len;
-
-	CloseHandle(in);
-
-	// Detect format version
-	bool isKRC1 = (memcmp(PlayBackBuffer.buffer, "KRC1", 4) == 0);
-	DWORD headerSize = isKRC1 ? 400 : 272;
-
-	if (len < headerSize) {
-		free(PlayBackBuffer.buffer);
-		MessageBox(RecordsListDlg, "File too short", "Error", MB_OK | MB_ICONSTOP);
-		return;
-	}
-
-	PlayBackBuffer.ptr = PlayBackBuffer.buffer + 4;
-
-	char APPC[128];
-
-	PlayBackBuffer.load_str(APPC, 128);
-
-	if (strcmp(APP, APPC)!= 0) {
+	if (strcmp(APP, g_playback_reader.appName) != 0) {
 		char wdr[2000];
-		wsprintf(wdr, "Application name mismatch.\nExpected \"%s\" but recieved \"%s\".\nUsing a different emulator for playback may cause things to behave in an unexpected manner.\nDo you want to continue?", APPC, APP);
+		wsprintf(wdr, "Application name mismatch.\nExpected \"%s\" but recieved \"%s\".\nUsing a different emulator for playback may cause things to behave in an unexpected manner.\nDo you want to continue?", g_playback_reader.appName, APP);
 		if (MessageBox(RecordsListDlg, wdr, "Error", MB_YESNO | MB_ICONEXCLAMATION) != IDYES) {
-			free(PlayBackBuffer.buffer);
+			g_playback_reader.close();
 			return;
 		}
 	}
 
-	PlayBackBuffer.ptr = PlayBackBuffer.buffer + 132;
-
-
-	PlayBackBuffer.load_str(GAME,128);
-
-	PlayBackBuffer.ptr = PlayBackBuffer.buffer + 264;
-
-	playerno = PlayBackBuffer.load_int();
-	numplayers = PlayBackBuffer.load_int();
-
-	// Skip player names in KRC1 - records start at offset 400
-	PlayBackBuffer.ptr = PlayBackBuffer.buffer + headerSize;
+	strcpy(GAME, g_playback_reader.gameName);
+	playerno = g_playback_reader.playerno;
+	numplayers = g_playback_reader.numplayers;
 
 	player_playing = true;
 	memset(player_was_dropped, 0, sizeof(player_was_dropped));
+	player_test_pause_reset();
 
 	KSSDFA.input = KSSDFA_START_GAME;
-	
-	//while(player_playing)
-		//Sleep(2000);
-	
-	//free (PlayBackBuffer.buffer);
+
 	n02_TRACE();
 }
 void RecordsList_PlaySelected(){
@@ -848,8 +863,13 @@ void player_GUI(){
 
 int player_MPV(void*values,int size){
 	n02_TRACE();
-	if (player_playing){
-		if (player_watch_mode && PlayBackBuffer.ptr + 10 >= PlayBackBuffer.end)
+	if (!player_playing)
+		return -1;
+
+	if (player_watch_mode) {
+		// Unchanged: growing/streaming buffer path, still on the legacy
+		// PlayBackBufferC global (retry-connect Fase 1 doesn't touch this).
+		if (PlayBackBuffer.ptr + 10 >= PlayBackBuffer.end)
 			PlayBackBuffer_WatchRefill();
 		if (PlayBackBuffer.ptr + 10 < PlayBackBuffer.end) {
 			char b = PlayBackBuffer.load_char();
@@ -886,11 +906,69 @@ int player_MPV(void*values,int size){
 				return player_MPV(values, size);
 			}
 		} else player_EndGame();
+		return -1;
 	}
-	return -1;
+
+	// Static local-file playback (retry-connect Fase 1): via krec_reader,
+	// plus the temporary "pause at frame N" test hook.
+	for (;;) {
+		if (player_test_pause_frozen(values, size))
+			return g_test_last_input_len;
+
+		int len = 0;
+		int type = g_playback_reader.next_record(values, size, &len);
+
+		if (type == KREC_EOF) {
+			player_EndGame();
+			return -1;
+		}
+
+		if (type == KREC_INPUT) {
+			int n = min(len, (int)sizeof(g_test_last_input));
+			if (n > 0)
+				memcpy(g_test_last_input, values, n);
+			g_test_last_input_len = len;
+
+			player_test_pause_init();
+			if (g_test_pause_frame >= 0 && g_playback_reader.frame_index() == g_test_pause_frame)
+				g_test_paused = true;
+
+			return len;
+		}
+
+		if (type == KREC_DROP) {
+			int pn = g_playback_reader.last_drop_playerno;
+			if (pn >= 1 && pn <= 16)
+				player_was_dropped[pn - 1] = true;
+			if (pn == playerno) {
+				// Recording player dropped - end playback
+				player_EndGame();
+				return -1;
+			}
+			// Other player dropped - skip, continue playback
+			continue;
+		}
+
+		if (type == KREC_CHAT) {
+			infos.chatReceivedCallback(g_playback_reader.last_chat_nick, g_playback_reader.last_chat_msg);
+			continue;
+		}
+
+		// KREC_UNKNOWN - matches the original's "falls through, returns -1"
+		return -1;
+	}
 }
 void player_EndGame(){
 	n02_TRACE();
+	// retry-connect Fase 1 test aid: report the final krec_reader frame count
+	// so it can be compared against the Records list's independently-computed
+	// Duration-column frame count (RecordsList_Populate_fn) - only shown when
+	// N02_KREC_TEST_PAUSE_FRAME was set this session, never in normal use.
+	if (!player_watch_mode && g_test_report_enabled) {
+		char msg[128];
+		wsprintf(msg, "krec_reader frame_index() at end of playback: %d", g_playback_reader.frame_index());
+		MessageBox(RecordsListDlg, msg, "retry-connect test", MB_OK | MB_ICONINFORMATION);
+	}
 	player_playing = false;
 	if (player_watch_mode) {
 		n02_watch_stop();
