@@ -71,21 +71,29 @@ public:
 
 extern HWND RecordsListDlg; // defined below; used by player_watch_begin()'s error MessageBox
 
-// Appends freshly-pulled bytes onto PlayBackBuffer's allocation, preserving
-// its ptr/end pointers across the realloc (which may move the block) - this
+// Appends freshly-pulled bytes for watch mode's ever-growing playback - this
 // is how watch mode keeps the same load_bytes()/load_short()/load_str()
 // parsing player_MPV() already uses for static .krec playback working
 // unchanged against a buffer that keeps growing during a live game.
+//
+// Drops everything already consumed (before ptr) instead of keeping it
+// around: player_MPV() only calls this once the buffer is nearly drained
+// (ptr within 10 bytes of end - see its refill check), so the unconsumed
+// tail carried forward here is always tiny, while the discarded prefix is
+// every byte watched so far - unbounded over a long live session otherwise.
 static void PlayBackBuffer_Append(const char* data, int len) {
 	if (len <= 0) return;
-	int usedOffset = (int)(PlayBackBuffer.ptr - PlayBackBuffer.buffer);
-	int oldLen = (int)(PlayBackBuffer.end - PlayBackBuffer.buffer);
-	char* nb = (char*)realloc(PlayBackBuffer.buffer, oldLen + len);
+	int unconsumed = (int)(PlayBackBuffer.end - PlayBackBuffer.ptr);
+	if (unconsumed < 0) unconsumed = 0;
+	char* nb = (char*)malloc(unconsumed + len);
 	if (nb == NULL) return; // OOM: chunk dropped, next refill attempt tries again
-	memcpy(nb + oldLen, data, len);
+	if (unconsumed > 0)
+		memcpy(nb, PlayBackBuffer.ptr, unconsumed);
+	memcpy(nb + unconsumed, data, len);
+	free(PlayBackBuffer.buffer);
 	PlayBackBuffer.buffer = nb;
-	PlayBackBuffer.ptr = nb + usedOffset;
-	PlayBackBuffer.end = nb + oldLen + len;
+	PlayBackBuffer.ptr = nb;
+	PlayBackBuffer.end = nb + unconsumed + len;
 }
 
 // Called from player_MPV() when watch mode's buffer has run dry. Blocks (in

@@ -18,6 +18,16 @@
 // /spectate/stream chunks at 1MB (MAX_STREAM_CHUNK_BYTES in spectate.py).
 #define N02_WATCH_RECV_CAP (1024 * 1024 + 8192)
 
+// Cached DNS result for the (essentially static, community-server) stream
+// host - see the matching comment in n02_stream.cpp's HttpPostBytes. This
+// matters even more here: the watch thread below polls every 30-200ms, so
+// a fresh gethostbyname() (and an unbounded connect()) on every single call
+// stalls the spectator's live view far more often than the host's own
+// once-per-300ms upload would hit the same issue.
+static char g_watch_resolved_host[256] = { 0 };
+static struct in_addr g_watch_resolved_addr;
+static bool g_watch_resolved_valid = false;
+
 // GETs `path`, copies the response body into outBuf (up to outCap bytes,
 // truncated if larger - caller just polls again for the rest) and returns
 // its length, or -1 on any network/non-2xx error. If outStatusHeader is
@@ -39,19 +49,47 @@ static int HttpGetBody(const char* host, int port, const char* path, const char*
 	if (host[0] >= '0' && host[0] <= '9') {
 		server.sin_addr.s_addr = inet_addr(host);
 	} else {
-		struct hostent* he = gethostbyname(host);
-		if (he == NULL || he->h_addr_list == NULL || he->h_addr_list[0] == NULL) {
-			closesocket(s);
-			return -1;
+		if (!g_watch_resolved_valid || strcmp(g_watch_resolved_host, host) != 0) {
+			struct hostent* he = gethostbyname(host);
+			if (he == NULL || he->h_addr_list == NULL || he->h_addr_list[0] == NULL) {
+				closesocket(s);
+				return -1;
+			}
+			g_watch_resolved_addr = *(struct in_addr*)he->h_addr_list[0];
+			strncpy(g_watch_resolved_host, host, sizeof(g_watch_resolved_host) - 1);
+			g_watch_resolved_host[sizeof(g_watch_resolved_host) - 1] = 0;
+			g_watch_resolved_valid = true;
 		}
-		server.sin_addr = *(struct in_addr*)he->h_addr_list[0];
+		server.sin_addr = g_watch_resolved_addr;
 	}
 
 	int timeoutMs = 3000;
 	setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeoutMs, sizeof(timeoutMs));
 	setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeoutMs, sizeof(timeoutMs));
 
-	if (connect(s, (struct sockaddr*)&server, sizeof(server)) != 0) {
+	// connect() itself ignores SO_SNDTIMEO/SO_RCVTIMEO on a blocking socket
+	// and can otherwise stall for many seconds on a network blip - during
+	// which the spectator's whole live view is frozen (player_MPV's refill
+	// blocks the emulator's own thread waiting on this). Bound it via a
+	// non-blocking connect, same as n02_stream.cpp's HttpPostBytes.
+	u_long nonBlocking = 1;
+	ioctlsocket(s, FIONBIO, &nonBlocking);
+
+	bool connected = (connect(s, (struct sockaddr*)&server, sizeof(server)) == 0);
+	if (!connected && WSAGetLastError() == WSAEWOULDBLOCK) {
+		fd_set wfds, efds;
+		FD_ZERO(&wfds); FD_SET(s, &wfds);
+		FD_ZERO(&efds); FD_SET(s, &efds);
+		struct timeval tv;
+		tv.tv_sec = timeoutMs / 1000;
+		tv.tv_usec = (timeoutMs % 1000) * 1000;
+		connected = (select(0, NULL, &wfds, &efds, &tv) > 0) && !FD_ISSET(s, &efds);
+	}
+
+	u_long blocking = 0;
+	ioctlsocket(s, FIONBIO, &blocking);
+
+	if (!connected) {
 		closesocket(s);
 		return -1;
 	}

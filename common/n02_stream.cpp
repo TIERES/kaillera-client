@@ -83,7 +83,11 @@ void n02_stream_configure_from_text(const char* rawEndpoint, const char* default
 ///////////////////////////////////////////////////////////////////////////////
 
 #define N02_STREAM_RECORD_MAX 512
-#define N02_STREAM_QUEUE_CAP  512
+// At ~60 frames/sec, 512 slots is only ~8.5s of buffering - too little to
+// survive a real network stall (e.g. a slow DNS lookup or a dropped
+// connection needing a retry) without silently dropping the oldest frames.
+// 8192 slots is ~2.3 minutes, a much safer margin; cost is ~4MB static.
+#define N02_STREAM_QUEUE_CAP  8192
 
 struct StreamRecord {
 	int len; // total bytes in data, including the leading type byte
@@ -194,6 +198,15 @@ static void BuildSessionHeader(const char* appName, const char* gameName, int pl
 // DownloadListToBuffer() in kaillera_ui_mslist.cpp.
 ///////////////////////////////////////////////////////////////////////////////
 
+// Cached DNS result for the (essentially static, community-server) stream
+// host - gethostbyname() used to run on *every* POST, and a slow/flaky
+// resolver stalling that blocking call was enough by itself to stall the
+// whole StreamThread for seconds at a time (see the queue-overflow comment
+// on g_stream_queue below).
+static char g_resolved_host[256] = { 0 };
+static struct in_addr g_resolved_addr;
+static bool g_resolved_valid = false;
+
 static bool HttpPostBytes(const char* host, int port, const char* path, const char* apiKey, const char* sessionId, const char* ownerName, unsigned int sequence, bool sessionEnd, const char* body, int bodyLen) {
 	if (host == NULL || host[0] == 0 || port <= 0)
 		return false;
@@ -210,19 +223,46 @@ static bool HttpPostBytes(const char* host, int port, const char* path, const ch
 	if (host[0] >= '0' && host[0] <= '9') {
 		server.sin_addr.s_addr = inet_addr(host);
 	} else {
-		struct hostent* he = gethostbyname(host);
-		if (he == NULL || he->h_addr_list == NULL || he->h_addr_list[0] == NULL) {
-			closesocket(s);
-			return false;
+		if (!g_resolved_valid || strcmp(g_resolved_host, host) != 0) {
+			struct hostent* he = gethostbyname(host);
+			if (he == NULL || he->h_addr_list == NULL || he->h_addr_list[0] == NULL) {
+				closesocket(s);
+				return false;
+			}
+			g_resolved_addr = *(struct in_addr*)he->h_addr_list[0];
+			strncpy(g_resolved_host, host, sizeof(g_resolved_host) - 1);
+			g_resolved_host[sizeof(g_resolved_host) - 1] = 0;
+			g_resolved_valid = true;
 		}
-		server.sin_addr = *(struct in_addr*)he->h_addr_list[0];
+		server.sin_addr = g_resolved_addr;
 	}
 
 	int timeoutMs = 2000;
 	setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeoutMs, sizeof(timeoutMs));
 	setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeoutMs, sizeof(timeoutMs));
 
-	if (connect(s, (struct sockaddr*)&server, sizeof(server)) != 0) {
+	// connect() itself ignores SO_SNDTIMEO/SO_RCVTIMEO on a blocking socket
+	// and can otherwise stall for many seconds (Windows' default TCP connect
+	// retry/timeout) on a network blip - during which nothing drains the
+	// frame queue below. Bound it explicitly via a non-blocking connect.
+	u_long nonBlocking = 1;
+	ioctlsocket(s, FIONBIO, &nonBlocking);
+
+	bool connected = (connect(s, (struct sockaddr*)&server, sizeof(server)) == 0);
+	if (!connected && WSAGetLastError() == WSAEWOULDBLOCK) {
+		fd_set wfds, efds;
+		FD_ZERO(&wfds); FD_SET(s, &wfds);
+		FD_ZERO(&efds); FD_SET(s, &efds);
+		struct timeval tv;
+		tv.tv_sec = timeoutMs / 1000;
+		tv.tv_usec = (timeoutMs % 1000) * 1000;
+		connected = (select(0, NULL, &wfds, &efds, &tv) > 0) && !FD_ISSET(s, &efds);
+	}
+
+	u_long blocking = 0;
+	ioctlsocket(s, FIONBIO, &blocking);
+
+	if (!connected) {
 		closesocket(s);
 		return false;
 	}
