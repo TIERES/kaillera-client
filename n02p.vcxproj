@@ -140,6 +140,7 @@
     <ClCompile Include="common\n02_stream.cpp" />
     <ClCompile Include="common\n02_watch.cpp" />
     <ClCompile Include="common\n02_replays.cpp" />
+    <ClCompile Include="common\n02_update.cpp" />
     <ClCompile Include="common\nSettings.cpp" />
     <ClCompile Include="common\nThread.cpp" />
     <ClCompile Include="core\p2p_core.cpp" />
@@ -163,6 +164,7 @@
     <ClInclude Include="common\n02_version.h" />
     <ClInclude Include="common\n02_watch.h" />
     <ClInclude Include="common\n02_replays.h" />
+    <ClInclude Include="common\n02_update.h" />
     <ClInclude Include="common\nSettings.h" />
     <ClInclude Include="common\nSTL.h" />
     <ClInclude Include="common\nThread.h" />

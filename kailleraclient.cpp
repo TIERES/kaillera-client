@@ -16,6 +16,7 @@
 #include "common/k_socket.h"
 #include "common/nSettings.h"
 #include "common/n02_stream.h"
+#include "common/n02_update.h"
 
 #include "errr.h"
 #include <limits.h>
@@ -454,6 +455,8 @@ extern "C" {
 
 
 #endif
+
+		n02_update_check_and_prompt();
 
 		return 0;
 	}
