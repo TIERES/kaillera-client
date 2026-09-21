@@ -26,7 +26,7 @@
             "options": {
                 "shell": {
                     "executable": "C:\\Program Files\\Git\\bin\\bash.exe",
-                    "args": ["-l"]
+                    "args": ["-l", "-c"]
                 }
             },
             "group": "none",
