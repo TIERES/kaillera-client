@@ -17,6 +17,27 @@
                 "isDefault": true
             },
             "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "Publish release to updater",
+            "detail": "Downloads the latest (or a chosen) GitHub release and publishes it to the community server so the self-updater offers it - see deploy/publish_release.sh",
+            "type": "shell",
+            "command": "bash deploy/publish_release.sh ${input:releaseTag}",
+            "options": {
+                "shell": {
+                    "executable": "C:\\Program Files\\Git\\bin\\bash.exe",
+                    "args": ["-l"]
+                }
+            },
+            "group": "none",
+            "problemMatcher": []
+        }
+    ],
+    "inputs": [
+        {
+            "id": "releaseTag",
+            "type": "promptString",
+            "description": "Release tag to publish (e.g. v.TIERES.0.15) - leave empty for the latest release"
         }
     ]
 }
