@@ -1,7 +1,9 @@
 
 #include "kaillera_core.h"
 #include "k_message.h"
+#include "kaillera_retryconnect.h"
 #include "../common/k_framecache.h"
+#include "../common/n02_replays.h"
 #include "../errr.h"
 #include "../kailleraclient.h"
 
@@ -468,6 +470,34 @@ void kaillera_ProcessGeneralInstruction(k_instruction * ki) {
 			}
 			break;
 		}
+	case RETRYCON:
+		{
+			unsigned char subtype = ki->load_char();
+			unsigned short payload_len = ki->load_short();
+			switch (subtype) {
+			case RETRYCON_SELECT:
+				{
+					char session_id[64];
+					unsigned int n = min((unsigned int)payload_len, (unsigned int)sizeof(session_id) - 1);
+					ki->load_bytes(session_id, n);
+					session_id[n] = 0;
+					kaillera_retryconnect_select_callback(ki->user, session_id);
+					break;
+				}
+			case RETRYCON_CONTROL:
+				{
+					unsigned char action = ki->load_char();
+					int frame_index = 0;
+					ki->load_bytes(&frame_index, sizeof(frame_index));
+					kaillera_retryconnect_control_callback(ki->user, action, frame_index);
+					break;
+				}
+			case RETRYCON_NAK:
+				kaillera_retryconnect_nak_callback(ki->user);
+				break;
+			}
+			break;
+		}
 	case PARTCHAT:
 		kaillera_chat_callback(ki->user, ki->buffer);
 		break;
@@ -615,6 +645,56 @@ void kaillera_game_chat_send(char * text) {
 	}
 }
 
+
+// --- retry-connect - transport only, see kaillera_retryconnect.cpp for the
+// state machine that calls these and implements the *_callback functions
+// dispatched above. ---
+static void RetryConnectSend(unsigned char subtype, const void* payload, unsigned short payload_len) {
+	if (!(KAILLERAC.USERSTAT > 1 && KAILLERAC.connection)) return;
+	k_instruction kx;
+	kx.type = RETRYCON;
+	kx.store_char(subtype);
+	kx.store_short(payload_len);
+	if (payload_len > 0 && payload != NULL)
+		kx.store_bytes(payload, payload_len);
+	KAILLERAC.connection->send_instruction(&kx);
+}
+
+void kaillera_retryconnect_send_select(const char* session_id, unsigned short session_id_len) {
+	RetryConnectSend(RETRYCON_SELECT, session_id, session_id_len);
+}
+void kaillera_retryconnect_send_control(int action, int frame_index) {
+	unsigned char payload[1 + sizeof(int)];
+	payload[0] = (unsigned char)action;
+	memcpy(payload + 1, &frame_index, sizeof(frame_index));
+	RetryConnectSend(RETRYCON_CONTROL, payload, sizeof(payload));
+}
+void kaillera_retryconnect_send_nak() {
+	RetryConnectSend(RETRYCON_NAK, NULL, 0);
+}
+
+// Non-blocking drain of any pending instructions - RETRYCON included, same
+// dispatch as kaillera_step()'s loop above. Needed because kaillera_step()
+// itself stops running once KSSDFA reaches "game running"
+// (kailleraSelectServerDialog()'s state==2 branch only pumps window
+// messages - see kailleraclient.cpp), so this is the only place retry-connect
+// messages get processed once actual gameplay/replay is underway. Returns
+// false immediately (no socket work at all) when there's no retry-connect
+// session active, so this is a no-op for every normal match.
+bool kaillera_retryconnect_pump() {
+	if (!kaillera_retryconnect_active())
+		return false;
+	while (KAILLERAC.connection && KAILLERAC.connection->has_data()) {
+		k_instruction ki;
+		sockaddr_in saddr;
+		if (!KAILLERAC.connection) break;
+		if (KAILLERAC.connection->receive_instruction(&ki, false, &saddr))
+			kaillera_ProcessGeneralInstruction(&ki);
+	}
+	// Re-check: a RETRYCON_CONTROL(GO_LIVE) or RETRYCON_NAK processed just
+	// above may have cleared it.
+	return kaillera_retryconnect_active();
+}
 
 void kaillera_kick_user (unsigned short id) {
 	if (KAILLERAC.USERSTAT > 1 && KAILLERAC.connection) {
@@ -842,6 +922,16 @@ inline void kaillera_ProcessGameInstruction(k_instruction * ki) {
 int kaillera_modify_play_values (void * values, int size) {
 	n02_TRACE();
 	if (!KAILLERAC.connection) return -1;
+
+	// retry-connect: drains pending RETRYCON messages (no-op unless a
+	// retry-connect session is active) and, while one is, serves this frame
+	// from the local recording instead of falling through to the normal live
+	// exchange below. kaillera_retryconnect_pump() itself may flip us out of
+	// the session this same call (RETRYCON_CONTROL GO_LIVE / RETRYCON_NAK),
+	// in which case it returns false and we fall straight through to the
+	// unmodified live-play code below, for this same frame.
+	if (kaillera_retryconnect_pump())
+		return kaillera_retryconnect_modify_play_values(values, size);
 
 	if (KAILLERAC.USERSTAT > 2 && KAILLERAC.PLAYERSTAT > 0) {
 		if (KAILLERAC.PLAYERSTAT == 2) {

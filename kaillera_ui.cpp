@@ -12,6 +12,8 @@
 #include "common/nSettings.h"
 #include "common/n02_stream.h"
 #include "common/n02_watch.h"
+#include "common/n02_replays.h"
+#include "kcore/kaillera_retryconnect.h"
 #include "player.h"
 
 static bool IsNonGameLobbyName(const char* name);
@@ -82,6 +84,7 @@ HWND kaillera_sdlg_BTN_KICK;
 HWND kaillera_sdlg_BTN_LAGSTAT;
 HWND kaillera_sdlg_BTN_OPTIONS;
 HWND kaillera_sdlg_BTN_ADVERTISE;
+HWND kaillera_sdlg_BTN_RETRYCONNECT;
 HWND kaillera_sdlg_BTN_GCHAT;
 HWND kaillera_sdlg_MINGUIUPDATE;
 HWND kaillera_sdlg_TXT_MSG;
@@ -183,6 +186,7 @@ static KailleraResizeItem g_kaillera_resize_items[] = {
 	{ CHK_REC, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_BOTTOM, { 0, 0, 0, 0 } },
 	{ BTN_OPTIONS, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_BOTTOM, { 0, 0, 0, 0 } },
 	{ BTN_ADVERTISE, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_BOTTOM, { 0, 0, 0, 0 } },
+	{ BTN_RETRYCONNECT, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_BOTTOM, { 0, 0, 0, 0 } },
 	{ IDC_JOINMSG_LBL, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_BOTTOM, { 0, 0, 0, 0 } },
 	{ TXT_MSG, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_BOTTOM, { 0, 0, 0, 0 } },
 };
@@ -726,6 +730,11 @@ void kaillera_sdlgGameMode(bool toggle = false){
 	ShowWindow(kaillera_sdlg_BTN_LAGSTAT,SW_SHOW);
 	ShowWindow(kaillera_sdlg_BTN_OPTIONS,SW_SHOW);
 	ShowWindow(kaillera_sdlg_BTN_ADVERTISE,SW_SHOW);
+	// retry-connect: only the room's owner picks the replay to resume from
+	// (avoids each player accidentally choosing a different one - see the
+	// project's retry-connect design notes).
+	ShowWindow(kaillera_sdlg_BTN_RETRYCONNECT, SW_SHOW);
+	EnableWindow(kaillera_sdlg_BTN_RETRYCONNECT, hosting);
 	ShowWindow(kaillera_sdlg_BTN_GCHAT,SW_SHOW);
 	ShowWindow(kaillera_sdlg_MINGUIUPDATE,SW_SHOW);
 	ShowWindow(kaillera_sdlg_TXT_MSG,SW_SHOW);
@@ -753,6 +762,7 @@ void kaillera_sdlgNormalMode(bool toggle = false){
 	ShowWindow(kaillera_sdlg_BTN_LAGSTAT,SW_HIDE);
 	ShowWindow(kaillera_sdlg_BTN_OPTIONS,SW_HIDE);
 	ShowWindow(kaillera_sdlg_BTN_ADVERTISE,SW_HIDE);
+	ShowWindow(kaillera_sdlg_BTN_RETRYCONNECT,SW_HIDE);
 	ShowWindow(kaillera_sdlg_BTN_GCHAT,SW_HIDE);
 	ShowWindow(kaillera_sdlg_MINGUIUPDATE,SW_HIDE);
 	ShowWindow(kaillera_sdlg_TXT_MSG,SW_HIDE);
@@ -1690,6 +1700,131 @@ static INT_PTR CALLBACK OptionsDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 	return (INT_PTR)FALSE;
 }
 //===========================================================================================
+// retry-connect (Fase 3): host-only "Continuar" flow - lets the room's owner
+// pick a server-side replay to resume from, filtered to only the ones whose
+// player_names line up with everyone currently in the room (avoids two
+// players ending up with different files - see the project's design notes).
+
+static N02ReplayEntry g_retryconnect_entries[N02_REPLAYS_MAX_ENTRIES];
+static int g_retryconnect_filtered[N02_REPLAYS_MAX_ENTRIES]; // indices into g_retryconnect_entries
+static int g_retryconnect_filtered_count;
+static nLVw g_retryconnect_list;
+
+static bool CaseInsensitiveContains(const char* haystack, const char* needle) {
+	if (needle == NULL || needle[0] == 0) return true;
+	if (haystack == NULL) return false;
+	size_t hn = strlen(haystack), nn = strlen(needle);
+	if (nn > hn) return false;
+	for (size_t i = 0; i + nn <= hn; i++) {
+		if (_strnicmp(haystack + i, needle, (int)nn) == 0)
+			return true;
+	}
+	return false;
+}
+
+static void FormatRetryConnectDuration(int seconds, char* out, size_t cap) {
+	if (seconds < 0) seconds = 0;
+	_snprintf(out, cap, "%d:%02d", seconds / 60, seconds % 60);
+}
+
+// True if every player currently in the room (kaillera_sdlg_LV_GULIST) shows
+// up in this replay's player_names field - both sides compared
+// case-insensitively. A replay with extra names (e.g. someone who since
+// left) still matches; only a missing name disqualifies it.
+static bool RetryConnectEntryMatchesRoom(const N02ReplayEntry* e) {
+	int roomCount = kaillera_sdlg_LV_GULIST.RowsCount();
+	if (roomCount == 0) return true; // nothing to filter by yet
+	for (int i = 0; i < roomCount; i++) {
+		char name[32];
+		kaillera_sdlg_LV_GULIST.CheckRow(name, sizeof(name) - 1, 0, i);
+		name[sizeof(name) - 1] = 0;
+		if (name[0] == 0) continue;
+		if (!CaseInsensitiveContains(e->player_names, name))
+			return false;
+	}
+	return true;
+}
+
+static void RetryConnect_PopulateList(HWND hDlg) {
+	g_retryconnect_list.DeleteAllRows();
+	g_retryconnect_filtered_count = 0;
+
+	int total = n02_replays_fetch_list(g_retryconnect_entries, N02_REPLAYS_MAX_ENTRIES);
+	if (total == 0) {
+		MessageBox(hDlg, "Nao foi possivel buscar a lista de replays do servidor.", "Continuar", MB_OK | MB_ICONEXCLAMATION);
+		return;
+	}
+
+	for (int i = 0; i < total; i++) {
+		N02ReplayEntry* e = &g_retryconnect_entries[i];
+		if (!RetryConnectEntryMatchesRoom(e))
+			continue;
+
+		int row = g_retryconnect_filtered_count++;
+		g_retryconnect_filtered[row] = i;
+
+		char durBuf[16];
+		FormatRetryConnectDuration(e->duration_seconds, durBuf, sizeof(durBuf));
+
+		g_retryconnect_list.AddRow(e->when, row);
+		g_retryconnect_list.FillRow(e->player_names[0] ? e->player_names : (char*)"?", 1, row);
+		g_retryconnect_list.FillRow(e->game_name, 2, row);
+		g_retryconnect_list.FillRow(durBuf, 3, row);
+	}
+
+	if (g_retryconnect_filtered_count == 0) {
+		MessageBox(hDlg, "Nenhum replay no servidor bate com os jogadores desta sala.", "Continuar", MB_OK | MB_ICONINFORMATION);
+	}
+}
+
+static INT_PTR CALLBACK RetryConnectSelectDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+	(void)lParam;
+	switch (uMsg) {
+	case WM_INITDIALOG:
+		{
+			g_retryconnect_list.initialize();
+			g_retryconnect_list.handle = GetDlgItem(hDlg, LV_RETRYLIST);
+			g_retryconnect_list.AddColumn("Quando", 100);
+			g_retryconnect_list.AddColumn("Jogadores", 130);
+			g_retryconnect_list.AddColumn("Jogo", 90);
+			g_retryconnect_list.AddColumn("Duracao", 60);
+			g_retryconnect_list.FullRowSelect();
+			RetryConnect_PopulateList(hDlg);
+			return (INT_PTR)TRUE;
+		}
+	case WM_COMMAND:
+		switch (LOWORD(wParam)) {
+		case IDOK:
+			{
+				int sel = g_retryconnect_list.SelectedRow();
+				if (sel < 0 || sel >= g_retryconnect_list.RowsCount()) {
+					MessageBox(hDlg, "Selecione um replay na lista.", "Continuar", MB_OK | MB_ICONEXCLAMATION);
+					return (INT_PTR)TRUE;
+				}
+				int row = (int)g_retryconnect_list.RowNo(sel);
+				if (row < 0 || row >= g_retryconnect_filtered_count)
+					return (INT_PTR)TRUE;
+				N02ReplayEntry* e = &g_retryconnect_entries[g_retryconnect_filtered[row]];
+				if (kaillera_retryconnect_host_select(e->session_id))
+					EndDialog(hDlg, 1);
+				// On failure, kaillera_retryconnect_host_select() already
+				// raised an error via kaillera_error_callback - leave the
+				// dialog open so the host can try a different replay.
+				return (INT_PTR)TRUE;
+			}
+		case IDCANCEL:
+			EndDialog(hDlg, 0);
+			return (INT_PTR)TRUE;
+		}
+		break;
+	}
+	return (INT_PTR)FALSE;
+}
+
+static void RetryConnect_ShowSelectDialog(HWND owner) {
+	DialogBox(hx, (LPCTSTR)RETRYCONNECT_SELECT_DLG, owner, (DLGPROC)RetryConnectSelectDlgProc);
+}
+//===========================================================================================
 
 LRESULT CALLBACK KailleraServerDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 	switch (uMsg) {
@@ -1775,6 +1910,7 @@ LRESULT CALLBACK KailleraServerDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 			kaillera_sdlg_BTN_LAGSTAT = GetDlgItem(hDlg, BTN_LAGSTAT);
 			kaillera_sdlg_BTN_OPTIONS = GetDlgItem(hDlg, BTN_OPTIONS);
 			kaillera_sdlg_BTN_ADVERTISE = GetDlgItem(hDlg, BTN_ADVERTISE);
+			kaillera_sdlg_BTN_RETRYCONNECT = GetDlgItem(hDlg, BTN_RETRYCONNECT);
 			kaillera_sdlg_BTN_GCHAT = GetDlgItem(hDlg, BTN_GCHAT);
 			kaillera_sdlg_MINGUIUPDATE = GetDlgItem(hDlg, CHK_MINGUIUPD);
 			kaillera_sdlg_TXT_MSG = GetDlgItem(hDlg, TXT_MSG);
@@ -2020,6 +2156,9 @@ LRESULT CALLBACK KailleraServerDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 				} else {
 					kaillera_start_game();
 				}
+				break;
+			case BTN_RETRYCONNECT:
+				RetryConnect_ShowSelectDialog(hDlg);
 				break;
 			case BTN_LAGSTAT:
 				{

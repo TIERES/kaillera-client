@@ -151,6 +151,7 @@
     <ClCompile Include="kaillera_ui.cpp" />
     <ClCompile Include="kaillera_ui_mslist.cpp" />
     <ClCompile Include="kcore\kaillera_core.cpp" />
+    <ClCompile Include="kcore\kaillera_retryconnect.cpp" />
     <ClCompile Include="kcore\k_instruction.cpp" />
     <ClCompile Include="p2p_ui.cpp" />
     <ClCompile Include="player.cpp" />
@@ -178,6 +179,7 @@
     <ClInclude Include="kailleraclient.h" />
     <ClInclude Include="kaillera_ui.h" />
     <ClInclude Include="kcore\kaillera_core.h" />
+    <ClInclude Include="kcore\kaillera_retryconnect.h" />
     <ClInclude Include="kcore\k_instruction.h" />
     <ClInclude Include="kcore\k_message.h" />
     <ClInclude Include="p2p_ui.h" />

@@ -10,6 +10,7 @@
 
 #include "p2p_ui.h"
 #include "kaillera_ui.h"
+#include "kcore/kaillera_retryconnect.h"
 #include "player.h"
 
 #include "common/nThread.h"
@@ -621,9 +622,46 @@ extern "C" {
 	   or Watch Live) apart from P2P/Server: unlike those two, Playback has no
 	   live peer to stay in lockstep with, so it's safe to allow fast-forward/
 	   frame-advance hotkeys the frontend would otherwise disable while any
-	   Kaillera session is active. Returns 1 in Playback mode, 0 otherwise. */
+	   Kaillera session is active. Returns 1 in Playback mode, 0 otherwise -
+	   also 1 during a retry-connect group replay (kcore/kaillera_retryconnect.h),
+	   for the same reason: no live peer to stay in lockstep with either. */
 	int KAILLERA_DLLEXP kailleraIsPlaybackMode(){
-		return get_active_mode_index() == 2;
+		return get_active_mode_index() == 2 || kaillera_retryconnect_active();
+	}
+
+	/* retry-connect (kcore/kaillera_retryconnect.h) - optional exports, same
+	   GetProcAddress()-if-present convention as kailleraIsPlaybackMode above.
+	   A frontend (retroarch-k3-ffw) uses these to let the room's host drive a
+	   group replay with RetroArch's own native Pause/Enter keys instead of a
+	   custom UI, and to relay that to every other player. */
+
+	/* True only for the room's host while a retry-connect session is active -
+	   the frontend must check this before letting local Pause/Enter do
+	   anything during a Kaillera session (a peer's local presses must not
+	   affect anyone). */
+	int KAILLERA_DLLEXP kailleraRetryConnectCanControl(){
+		return kaillera_retryconnect_can_control() ? 1 : 0;
+	}
+
+	/* Call when the local user (already confirmed to be the host via
+	   kailleraRetryConnectCanControl() above) presses native Pause/Resume, or
+	   Enter to go live. action is one of RC_ACTION_PAUSE/RESUME/GO_LIVE
+	   (kcore/k_instruction.h); frame_index is the frontend's own authoritative
+	   frame counter at that moment - relayed to every other player unchanged. */
+	void KAILLERA_DLLEXP kailleraRetryConnectNotifyLocalControl(int action, int frame_index){
+		kaillera_retryconnect_notify_local_control(action, frame_index);
+	}
+
+	/* Call once per frontend tick, including while natively paused (this is
+	   the only channel retry-connect has to reach a paused client -
+	   kailleraModifyPlayValues() itself stops being called while paused, so
+	   its own drain never runs then; this export drains the connection on
+	   its own for exactly that reason). Returns 1 and fills
+	   *outAction/*outFrameIndex exactly once per remote action received; 0
+	   when there's nothing new. */
+	int KAILLERA_DLLEXP kailleraRetryConnectPoll(int* outAction, int* outFrameIndex){
+		kaillera_retryconnect_pump();
+		return kaillera_retryconnect_poll(outAction, outFrameIndex) ? 1 : 0;
 	}
 };
 

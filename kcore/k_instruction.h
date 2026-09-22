@@ -22,7 +22,8 @@
 enum INSTRUCTION{
 	INVDNONE, USERLEAV, USERJOIN, USERLOGN, LONGSUCC, SERVPING, USERPONG, PARTCHAT,
 	GAMECHAT, TMOUTRST, GAMEMAKE, GAMRLEAV, GAMRJOIN, GAMRSLST, GAMESTAT, GAMRKICK,
-	GAMESHUT, GAMEBEGN, GAMEDATA, GAMCDATA, GAMRDROP, GAMRSRDY, LOGNSTAT, MOTDLINE
+	GAMESHUT, GAMEBEGN, GAMEDATA, GAMCDATA, GAMRDROP, GAMRSRDY, LOGNSTAT, MOTDLINE,
+	RETRYCON
 };
 /////////////////////////////////////////////////////////////////////////////*/
 
@@ -51,6 +52,29 @@ enum INSTRUCTION{
 #define INSTRUCTION_GAMRSRDY GAMRSRDY
 #define INSTRUCTION_LOGNSTAT LOGNSTAT
 #define INSTRUCTION_MOTDCHAT MOTDLINE
+//0x18 - opaque retry-connect relay (RetryConnect.kt on the server); subtype+payload are
+//defined entirely client-side, see kaillera_core.cpp's "retry-connect" section.
+#define INSTRUCTION_RETRYCON RETRYCON
+
+// RETRYCON subtypes - carried in the message body as [subtype: 1 byte][payload_len: uint16 LE][payload].
+// Flow: host picks a server-side replay -> RETRYCON_SELECT(session_id) tells everyone else to
+// download that exact same file and start a synchronized group replay (each client feeds its own
+// downloaded .krec into kailleraModifyPlayValues() instead of the real controller). The host
+// navigates that replay using RetroArch's own native Pause key (repeatable - pause/resume as many
+// times as needed) and, once satisfied, a dedicated "go live" key (Enter, only while paused) -
+// RETRYCON_CONTROL relays whichever of those just happened to everyone else, so their local
+// RetroArch instance mirrors it (see kcore/kaillera_retryconnect.h).
+#define RETRYCON_SELECT  1  // payload: session_id, NOT NUL-terminated (length given by payload_len)
+#define RETRYCON_CONTROL 2  // payload: [action: 1 byte][frame_index: int32 LE] - see RC_ACTION_*
+#define RETRYCON_NAK     3  // payload: none - "can't resume" (download failed, no local recording, ...)
+
+// RETRYCON_CONTROL actions (the payload's leading byte):
+#define RC_ACTION_PAUSE     1  // host paused (RetroArch native pause) at frame_index - peers catch
+                                // up to frame_index in their own local replay, then pause too
+#define RC_ACTION_RESUME    2  // host resumed the recorded replay (still not live) from frame_index
+#define RC_ACTION_GO_LIVE   3  // host committed (Enter, only valid while paused) - everyone switches
+                                // from replay-driven input to the real controller from frame_index+1
+#define RC_ACTION_REWIND_TO 4  // reserved - rewind support not implemented yet
 
 #pragma intrinsic(memcmp, memcpy, memset, strcat, strcmp, strcpy, strlen)
 
