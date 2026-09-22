@@ -37,8 +37,19 @@ public:
 	char * end;
     
 	void load_bytes(void* arg_0, unsigned int arg_4) {
-		if (ptr + 10 < end) {
-			int p = min(arg_4, (unsigned int)(end - ptr));
+		// No arbitrary safety margin here - just cap to what's actually
+		// available. The old "ptr+10 < end" gate refused to copy *anything*
+		// (not even a partial read) whenever 10 or fewer bytes remained,
+		// regardless of how few bytes were actually being requested - which
+		// silently desynced watch mode's incremental parser (see
+		// WatchEnsureBuffered() in the Watch Live code below) whenever a
+		// record landed near the tail of what had streamed in so far. Static
+		// Playback preloads the whole file so this only ever mattered at the
+		// very last few bytes of a file there.
+		int available = (int)(end - ptr);
+		if (available < 0) available = 0;
+		int p = min((int)arg_4, available);
+		if (p > 0) {
 			memcpy(arg_0, ptr, p);
 			ptr += p;
 		}
@@ -78,9 +89,9 @@ extern HWND RecordsListDlg; // defined below; used by player_watch_begin()'s err
 //
 // Drops everything already consumed (before ptr) instead of keeping it
 // around: player_MPV() only calls this once the buffer is nearly drained
-// (ptr within 10 bytes of end - see its refill check), so the unconsumed
-// tail carried forward here is always tiny, while the discarded prefix is
-// every byte watched so far - unbounded over a long live session otherwise.
+// (see WatchEnsureBuffered() below), so the unconsumed tail carried forward
+// here is always tiny, while the discarded prefix is every byte watched so
+// far - unbounded over a long live session otherwise.
 static void PlayBackBuffer_Append(const char* data, int len) {
 	if (len <= 0) return;
 	int unconsumed = (int)(PlayBackBuffer.end - PlayBackBuffer.ptr);
@@ -101,11 +112,37 @@ static void PlayBackBuffer_Append(const char* data, int len) {
 // still live and nothing new has arrived - a spectator caught up to the
 // live edge stalls here instead of player_MPV ending playback, same as
 // kaillera_modify_play_values() stalls waiting for the next network frame.
-static void PlayBackBuffer_WatchRefill() {
+// Returns true if it appended new bytes, false only when n02_watch_pull has
+// confirmed the stream is genuinely finished with nothing left to fetch.
+static bool PlayBackBuffer_WatchRefill() {
 	char chunk[64 * 1024];
 	int n = n02_watch_pull(chunk, sizeof(chunk), true);
-	if (n > 0)
+	if (n > 0) {
 		PlayBackBuffer_Append(chunk, n);
+		return true;
+	}
+	return false;
+}
+
+// Blocks (refilling in a loop as needed) until at least `need` bytes are
+// buffered ahead of ptr, or the stream ends first. A single refill only
+// pulls up to 64KB, which is not guaranteed to cover a whole record (a
+// 0x08 chat can be up to ~601 bytes, and a 0x12 input frame's payload
+// length isn't even known until its 2-byte length field has itself been
+// read) - the old code only checked for a flat 10 bytes of headroom before
+// starting a new record, which load_bytes()/load_str() would silently
+// under-fill without erroring, leaving the parser out of sync with reality
+// from that point on. Since a fresh "Watch Live" always restarts at byte
+// offset 0, this desync happens at the exact same file offset (thus the
+// exact same buffered-bytes-remaining count) on every single attempt to
+// watch the same match - looking like a deterministic crash/freeze rather
+// than a timing-dependent one.
+static bool WatchEnsureBuffered(int need) {
+	while ((int)(PlayBackBuffer.end - PlayBackBuffer.ptr) < need) {
+		if (!PlayBackBuffer_WatchRefill())
+			return false;
+	}
+	return true;
 }
 
 void player_request_watch(const char* sessionId, const char* roomName) {
@@ -846,12 +883,26 @@ void player_GUI(){
 	FreeLibrary(p2p_riched_hm);
 }
 
+// Largest a 0x08 (chat) or 0x14 (drop) record's variable-length fields can
+// be per the format's own field caps: nick(100) + msg(500), or nick(100) +
+// playerno(4) - 700 covers either with slack. Used only to make sure watch
+// mode's buffer has the whole record before parsing starts (see
+// WatchEnsureBuffered's comment) - static Playback mode never needs this,
+// its whole file is already in memory.
+#define WATCH_RECORD_SAFETY_MARGIN 700
+
 int player_MPV(void*values,int size){
 	n02_TRACE();
 	if (player_playing){
-		if (player_watch_mode && PlayBackBuffer.ptr + 10 >= PlayBackBuffer.end)
-			PlayBackBuffer_WatchRefill();
-		if (PlayBackBuffer.ptr + 10 < PlayBackBuffer.end) {
+		if (player_watch_mode) {
+			// At least 3 bytes (type + a 0x12's 2-byte length) before even
+			// looking at the type byte - enough to safely branch below.
+			if (!WatchEnsureBuffered(3)) {
+				player_EndGame();
+				return -1;
+			}
+		}
+		if (PlayBackBuffer.ptr + 10 < PlayBackBuffer.end || player_watch_mode) {
 			char b = PlayBackBuffer.load_char();
 			if (b==0x12) {
 				int l = PlayBackBuffer.load_short();
@@ -859,11 +910,24 @@ int player_MPV(void*values,int size){
 					player_EndGame();
 					return -1;
 				}
-				if (l > 0)
-					PlayBackBuffer.load_bytes((char*)values, l);//access error
+				if (l > 0) {
+					// The 3-byte header only guaranteed *a* length field could
+					// be read safely - not that its declared payload (up to
+					// 65535 bytes) is buffered yet. Wait for the rest of it
+					// rather than letting load_bytes() silently under-copy.
+					if (player_watch_mode && !WatchEnsureBuffered(l)) {
+						player_EndGame();
+						return -1;
+					}
+					PlayBackBuffer.load_bytes((char*)values, l);
+				}
 				return l;
 			}
 			if (b==20) {
+				if (player_watch_mode && !WatchEnsureBuffered(WATCH_RECORD_SAFETY_MARGIN)) {
+					player_EndGame();
+					return -1;
+				}
 				char playernick[100];
 				PlayBackBuffer.load_str(playernick, 100);
 				int pn = PlayBackBuffer.load_int();
@@ -878,6 +942,10 @@ int player_MPV(void*values,int size){
 				return player_MPV(values, size);
 			}
 			if (b==8) {
+				if (player_watch_mode && !WatchEnsureBuffered(WATCH_RECORD_SAFETY_MARGIN)) {
+					player_EndGame();
+					return -1;
+				}
 				char nick[100];
 				char msg[500];
 				PlayBackBuffer.load_str(nick, 100);
@@ -885,7 +953,11 @@ int player_MPV(void*values,int size){
 				infos.chatReceivedCallback(nick, msg);
 				return player_MPV(values, size);
 			}
-		} else player_EndGame();
+			// Unknown record type - player_MPV() has no default branch either,
+			// it just falls through and the caller ends up returning -1.
+		} else {
+			player_EndGame();
+		}
 	}
 	return -1;
 }
