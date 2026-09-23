@@ -168,6 +168,25 @@ static char g_session_owner[64] = { 0 }; // hosting user's name - see X-Owner-Na
 static unsigned int g_session_sequence = 0;
 static char g_session_header[400];      // KRC1-style header, sent with sequence 0
 
+// Running total of bytes successfully POSTed to /spectate/ingest for the
+// current session - i.e. exactly how many bytes are on the server's own
+// <session_id>.krec.part file right now, which is what a spectator's
+// GET /spectate/stream/<id>?offset=N reads from. n02_stream_upload_state()
+// below pairs this with a core_serialize() taken at roughly the same moment,
+// so "Ir direto para o Ao Vivo!" (kaillera-client's Watch Live toolbar) knows
+// which stream offset to resume reading from after applying that state -
+// see n02_stream_check_state_requested()/n02_stream_upload_state().
+//
+// Not perfectly frame-exact: the state is captured on the emulator's own
+// thread the instant a request is noticed, while this counter only advances
+// after a batch is confirmed POSTed (up to N02_STREAM_BATCH_MS behind) - so
+// the state can reflect a few more frames than this offset accounts for,
+// meaning a spectator jumping to it may reprocess a handful of frames the
+// state already applied. Bounded to well under a second in practice, and
+// self-corrects the next frame - accepted for what this feature is for
+// (get a spectator roughly caught up right now, not a byte-perfect resume).
+static int g_session_bytes_sent = 0;
+
 static void BuildSessionHeader(const char* appName, const char* gameName, int playerno, int numplayers, char playerNames[4][32]) {
 	memset(g_session_header, 0, sizeof(g_session_header));
 	char* p = g_session_header;
@@ -383,6 +402,7 @@ public:
 
 			if (HttpPostBytes(g_stream_host, g_stream_port, g_stream_path, g_stream_api_key, g_session_id, g_session_owner, g_session_sequence, pendingEnded, pendingPayload, pendingLen)) {
 				g_session_sequence++;
+				g_session_bytes_sent += pendingLen;
 				havePending = false;
 				if (pendingEnded) {
 					g_session_active = false;
@@ -404,6 +424,199 @@ static void StreamThreadStop() {
 		if (g_stream_thread.running)
 			g_stream_thread.destroy();
 	}
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// "Ir direto para o Ao Vivo!" - host-side half (poll for a pending request,
+// capture+upload a state). See common/n02_watch.cpp for the spectator-side
+// half (request + download) and spectate.py's /spectate/<id>/state-request
+// and /state routes for the wire contract both sides agree on.
+///////////////////////////////////////////////////////////////////////////////
+
+// Simple blocking GET, reusing g_resolved_host/g_resolved_addr above (same
+// endpoint as the ingest POSTs). Returns the body length copied into outBuf
+// (up to outCap), or -1 on any network/non-2xx error.
+static int HttpGetSimple(const char* host, int port, const char* path, const char* apiKey, char* outBuf, int outCap) {
+	if (host == NULL || host[0] == 0 || port <= 0)
+		return -1;
+
+	SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+	if (s == INVALID_SOCKET)
+		return -1;
+
+	sockaddr_in server;
+	memset(&server, 0, sizeof(server));
+	server.sin_family = AF_INET;
+	server.sin_port = htons((u_short)port);
+
+	if (host[0] >= '0' && host[0] <= '9') {
+		server.sin_addr.s_addr = inet_addr(host);
+	} else {
+		if (!g_resolved_valid || strcmp(g_resolved_host, host) != 0) {
+			struct hostent* he = gethostbyname(host);
+			if (he == NULL || he->h_addr_list == NULL || he->h_addr_list[0] == NULL) {
+				closesocket(s);
+				return -1;
+			}
+			g_resolved_addr = *(struct in_addr*)he->h_addr_list[0];
+			strncpy(g_resolved_host, host, sizeof(g_resolved_host) - 1);
+			g_resolved_host[sizeof(g_resolved_host) - 1] = 0;
+			g_resolved_valid = true;
+		}
+		server.sin_addr = g_resolved_addr;
+	}
+
+	int timeoutMs = 2000;
+	setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeoutMs, sizeof(timeoutMs));
+	setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeoutMs, sizeof(timeoutMs));
+
+	u_long nonBlocking = 1;
+	ioctlsocket(s, FIONBIO, &nonBlocking);
+	bool connected = (connect(s, (struct sockaddr*)&server, sizeof(server)) == 0);
+	if (!connected && WSAGetLastError() == WSAEWOULDBLOCK) {
+		fd_set wfds, efds;
+		FD_ZERO(&wfds); FD_SET(s, &wfds);
+		FD_ZERO(&efds); FD_SET(s, &efds);
+		struct timeval tv;
+		tv.tv_sec = timeoutMs / 1000;
+		tv.tv_usec = (timeoutMs % 1000) * 1000;
+		connected = (select(0, NULL, &wfds, &efds, &tv) > 0) && !FD_ISSET(s, &efds);
+	}
+	u_long blocking = 0;
+	ioctlsocket(s, FIONBIO, &blocking);
+	if (!connected) {
+		closesocket(s);
+		return -1;
+	}
+
+	char apiKeyHeader[192];
+	apiKeyHeader[0] = 0;
+	if (apiKey != NULL && apiKey[0] != 0)
+		_snprintf(apiKeyHeader, sizeof(apiKeyHeader), "X-Api-Key: %s\r\n", apiKey);
+
+	char header[1024];
+	int headerLen = _snprintf(header, sizeof(header),
+		"GET %s HTTP/1.1\r\nHost: %s\r\n%sConnection: close\r\n\r\n",
+		path, host, apiKeyHeader);
+	if (headerLen < 0 || headerLen >= (int)sizeof(header) || send(s, header, headerLen, 0) != headerLen) {
+		closesocket(s);
+		return -1;
+	}
+
+	char recvBuf[8192];
+	int total = 0;
+	while (total < (int)sizeof(recvBuf) - 1) {
+		int r = recv(s, recvBuf + total, sizeof(recvBuf) - 1 - total, 0);
+		if (r <= 0) break;
+		total += r;
+	}
+	closesocket(s);
+	recvBuf[total] = 0;
+
+	if (total < 12 || strncmp(recvBuf, "HTTP/1.", 7) != 0 || recvBuf[9] != '2')
+		return -1;
+
+	char* bodyStart = strstr(recvBuf, "\r\n\r\n");
+	if (bodyStart == NULL)
+		return -1;
+	bodyStart += 4;
+
+	int bodyLen = total - (int)(bodyStart - recvBuf);
+	if (bodyLen < 0) bodyLen = 0;
+	if (bodyLen > outCap) bodyLen = outCap;
+	if (bodyLen > 0)
+		memcpy(outBuf, bodyStart, bodyLen);
+	return bodyLen;
+}
+
+// Simple blocking POST with a raw body (no multipart/form encoding) - used
+// both for the empty-body state-request POST and the state-upload POST.
+static bool HttpPostSimple(const char* host, int port, const char* path, const char* apiKey, const void* body, int bodyLen) {
+	if (host == NULL || host[0] == 0 || port <= 0)
+		return false;
+
+	SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+	if (s == INVALID_SOCKET)
+		return false;
+
+	sockaddr_in server;
+	memset(&server, 0, sizeof(server));
+	server.sin_family = AF_INET;
+	server.sin_port = htons((u_short)port);
+
+	if (host[0] >= '0' && host[0] <= '9') {
+		server.sin_addr.s_addr = inet_addr(host);
+	} else {
+		if (!g_resolved_valid || strcmp(g_resolved_host, host) != 0) {
+			struct hostent* he = gethostbyname(host);
+			if (he == NULL || he->h_addr_list == NULL || he->h_addr_list[0] == NULL) {
+				closesocket(s);
+				return false;
+			}
+			g_resolved_addr = *(struct in_addr*)he->h_addr_list[0];
+			strncpy(g_resolved_host, host, sizeof(g_resolved_host) - 1);
+			g_resolved_host[sizeof(g_resolved_host) - 1] = 0;
+			g_resolved_valid = true;
+		}
+		server.sin_addr = g_resolved_addr;
+	}
+
+	int timeoutMs = 3000; // state uploads are bigger than a normal batch - a bit more slack
+	setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeoutMs, sizeof(timeoutMs));
+	setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeoutMs, sizeof(timeoutMs));
+
+	u_long nonBlocking = 1;
+	ioctlsocket(s, FIONBIO, &nonBlocking);
+	bool connected = (connect(s, (struct sockaddr*)&server, sizeof(server)) == 0);
+	if (!connected && WSAGetLastError() == WSAEWOULDBLOCK) {
+		fd_set wfds, efds;
+		FD_ZERO(&wfds); FD_SET(s, &wfds);
+		FD_ZERO(&efds); FD_SET(s, &efds);
+		struct timeval tv;
+		tv.tv_sec = timeoutMs / 1000;
+		tv.tv_usec = (timeoutMs % 1000) * 1000;
+		connected = (select(0, NULL, &wfds, &efds, &tv) > 0) && !FD_ISSET(s, &efds);
+	}
+	u_long blocking = 0;
+	ioctlsocket(s, FIONBIO, &blocking);
+	if (!connected) {
+		closesocket(s);
+		return false;
+	}
+
+	char apiKeyHeader[192];
+	apiKeyHeader[0] = 0;
+	if (apiKey != NULL && apiKey[0] != 0)
+		_snprintf(apiKeyHeader, sizeof(apiKeyHeader), "X-Api-Key: %s\r\n", apiKey);
+
+	char header[512];
+	int headerLen = _snprintf(header, sizeof(header),
+		"POST %s HTTP/1.1\r\nHost: %s\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n%sConnection: close\r\n\r\n",
+		path, host, bodyLen, apiKeyHeader);
+	if (headerLen < 0 || headerLen >= (int)sizeof(header) || send(s, header, headerLen, 0) != headerLen) {
+		closesocket(s);
+		return false;
+	}
+	if (bodyLen > 0) {
+		int sent = 0;
+		while (sent < bodyLen) {
+			int r = send(s, (const char*)body + sent, bodyLen - sent, 0);
+			if (r <= 0) {
+				closesocket(s);
+				return false;
+			}
+			sent += r;
+		}
+	}
+
+	char discard[512];
+	DWORD start = GetTickCount();
+	while (GetTickCount() - start < (DWORD)timeoutMs) {
+		int r = recv(s, discard, sizeof(discard), 0);
+		if (r <= 0) break;
+	}
+	closesocket(s);
+	return true;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -432,6 +645,7 @@ void n02_stream_start_session(const char* appName, const char* gameName, int pla
 	g_session_owner[sizeof(g_session_owner) - 1] = 0;
 	g_session_sequence = 0;
 	g_session_ended = false;
+	g_session_bytes_sent = 0;
 	BuildSessionHeader(appName, gameName, playerno, numplayers, playerNames);
 	g_session_active = true;
 
@@ -479,6 +693,49 @@ void n02_stream_push_drop(const char* nick, int playernb) {
 		p += 4;
 	}
 	StreamEnqueue(rec, p);
+}
+
+// Rate-limits the actual network poll (called every frame by the frontend,
+// see kailleraStreamCheckStateRequested() in kailleraclient.cpp - hitting
+// the server 60x/sec would be pointless spam) to once every this many ms.
+#define N02_STREAM_STATE_POLL_INTERVAL_MS 3000
+static DWORD g_last_state_poll_tick = 0;
+
+bool n02_stream_check_state_requested() {
+	if (!g_session_active || g_session_ended)
+		return false;
+
+	DWORD now = GetTickCount();
+	if (g_last_state_poll_tick != 0 && now - g_last_state_poll_tick < N02_STREAM_STATE_POLL_INTERVAL_MS)
+		return false; // too soon since the last poll - caller just tries again next frame
+	g_last_state_poll_tick = now;
+
+	char path[128];
+	_snprintf(path, sizeof(path), "/spectate/%s/state-request", g_session_id);
+	char body[128];
+	int n = HttpGetSimple(g_stream_host, g_stream_port, path, g_stream_api_key, body, sizeof(body) - 1);
+	if (n <= 0)
+		return false;
+	body[n] = 0;
+	return strstr(body, "\"pending\": true") != NULL || strstr(body, "\"pending\":true") != NULL;
+}
+
+void n02_stream_upload_state(int frameIndex, const void* data, int size) {
+	if (!g_session_active || g_session_ended || data == NULL || size <= 0)
+		return;
+
+	int headerLen = 8; // [frame_index:int32 LE][byte_offset:int32 LE]
+	char* buf = (char*)malloc(headerLen + size);
+	if (buf == NULL)
+		return;
+	memcpy(buf, &frameIndex, 4);
+	memcpy(buf + 4, &g_session_bytes_sent, 4); // see g_session_bytes_sent's own comment above
+	memcpy(buf + headerLen, data, size);
+
+	char path[128];
+	_snprintf(path, sizeof(path), "/spectate/%s/state", g_session_id);
+	HttpPostSimple(g_stream_host, g_stream_port, path, g_stream_api_key, buf, headerLen + size);
+	free(buf);
 }
 
 void n02_stream_end_session() {

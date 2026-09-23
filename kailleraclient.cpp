@@ -10,6 +10,7 @@
 
 #include "p2p_ui.h"
 #include "kaillera_ui.h"
+#include "kcore/kaillera_retryconnect.h"
 #include "player.h"
 
 #include "common/nThread.h"
@@ -17,6 +18,7 @@
 #include "common/nSettings.h"
 #include "common/n02_stream.h"
 #include "common/n02_update.h"
+#include "common/n02_watch.h"
 
 #include "errr.h"
 #include <limits.h>
@@ -607,7 +609,15 @@ extern "C" {
 #ifdef RECORDER
 		close_recording();
 #endif
-		active_mod.EndGame();
+		// "Acompanhar ao vivo!" never switches active_mod (see
+		// kaillera_modify_play_values()) - active_mod.EndGame() would run
+		// mod_kaillera's own EndGame (sends GAMRDROP for a "game" the server
+		// was never told about) instead of the watch-mode cleanup that
+		// actually applies here.
+		if (player_is_watching())
+			player_EndGame();
+		else
+			active_mod.EndGame();
 #else
 		p2p_EndGame();
 #endif
@@ -621,9 +631,148 @@ extern "C" {
 	   or Watch Live) apart from P2P/Server: unlike those two, Playback has no
 	   live peer to stay in lockstep with, so it's safe to allow fast-forward/
 	   frame-advance hotkeys the frontend would otherwise disable while any
-	   Kaillera session is active. Returns 1 in Playback mode, 0 otherwise. */
+	   Kaillera session is active. Returns 1 in Playback mode, 0 otherwise -
+	   also 1 during a retry-connect group replay (kcore/kaillera_retryconnect.h)
+	   and while "Acompanhar ao vivo!" is spectating without leaving the room
+	   (player_is_watching(), player.cpp) - both stay on active_mod ==
+	   mod_kaillera (get_active_mode_index() == 1) now, but have exactly the
+	   same "no live peer to stay in lockstep with" property Playback mode
+	   does, so fast-forward needs to stay allowed for them too. */
 	int KAILLERA_DLLEXP kailleraIsPlaybackMode(){
-		return get_active_mode_index() == 2;
+		return get_active_mode_index() == 2 || kaillera_retryconnect_active() || player_is_watching();
+	}
+
+	/* retry-connect (kcore/kaillera_retryconnect.h) - optional exports, same
+	   GetProcAddress()-if-present convention as kailleraIsPlaybackMode above.
+	   A frontend (retroarch-k3-ffw) uses these to let the room's host drive a
+	   group replay with RetroArch's own native Pause/Enter keys instead of a
+	   custom UI, and to relay that to every other player. */
+
+	/* True only for the room's host while a retry-connect session is active -
+	   the frontend must check this before letting local Pause/Enter do
+	   anything during a Kaillera session (a peer's local presses must not
+	   affect anyone). */
+	int KAILLERA_DLLEXP kailleraRetryConnectCanControl(){
+		return kaillera_retryconnect_can_control() ? 1 : 0;
+	}
+
+	/* Call when the local user (already confirmed to be the host via
+	   kailleraRetryConnectCanControl() above) presses native Pause/Resume, or
+	   Enter to go live. action is one of RC_ACTION_PAUSE/RESUME/GO_LIVE
+	   (kcore/k_instruction.h); frame_index is the frontend's own authoritative
+	   frame counter at that moment - relayed to every other player unchanged. */
+	void KAILLERA_DLLEXP kailleraRetryConnectNotifyLocalControl(int action, int frame_index){
+		kaillera_retryconnect_notify_local_control(action, frame_index);
+	}
+
+	/* Call once per frontend tick, including while natively paused (this is
+	   the only channel retry-connect has to reach a paused client -
+	   kailleraModifyPlayValues() itself stops being called while paused, so
+	   its own drain never runs then; this export drains the connection on
+	   its own for exactly that reason). Returns 1 and fills
+	   *outAction/*outFrameIndex exactly once per remote action received; 0
+	   when there's nothing new. */
+	int KAILLERA_DLLEXP kailleraRetryConnectPoll(int* outAction, int* outFrameIndex){
+		kaillera_retryconnect_pump();
+		return kaillera_retryconnect_poll(outAction, outFrameIndex) ? 1 : 0;
+	}
+
+	/* True for every client (host or peer) while a retry-connect session is
+	   active - unlike kailleraRetryConnectCanControl() above, does not imply
+	   "is host". Lets the frontend tell a retry-connect peer apart from
+	   someone using n02's ordinary standalone Playback/Watch mode
+	   (kailleraIsPlaybackMode() is true in both cases, but only the former
+	   has a host to defer to) - needed so a peer's own fast-forward hotkey
+	   can be suppressed during a group replay while solo playback keeps
+	   fast-forwarding freely. */
+	int KAILLERA_DLLEXP kailleraRetryConnectActive(){
+		return kaillera_retryconnect_active() ? 1 : 0;
+	}
+
+	/* Host-only fast-forward handoff (kcore/kaillera_retryconnect.h). `data`/
+	   `size` is a full core savestate the frontend just took the instant it
+	   stopped fast-forwarding - uploaded to the community server and relayed
+	   to every other player as RC_ACTION_STATE_READY so they can jump
+	   straight there instead of trying to reach the same frame by
+	   fast-forwarding themselves (not reliable across different
+	   machines/cores). No-op if not host. */
+	void KAILLERA_DLLEXP kailleraRetryConnectUploadState(const void* data, int size){
+		kaillera_retryconnect_upload_state(data, size);
+	}
+
+	/* Downloads the state kailleraRetryConnectUploadState() above just
+	   uploaded into outBuffer (capacity bufferCap - the frontend must size
+	   this from its own core_serialize_size(), matching the host's since
+	   everyone runs the same core/content). Returns the byte count written,
+	   ready to hand to core_unserialize(), or -1 on any failure. */
+	int KAILLERA_DLLEXP kailleraRetryConnectDownloadState(void* outBuffer, int bufferCap, int* outFrameIndex){
+		return kaillera_retryconnect_download_state(outBuffer, bufferCap, outFrameIndex);
+	}
+
+	/* Host-only local rewind support (toolbar "Rebobinar" button) - see
+	   kcore/kaillera_retryconnect.h's own doc comments for the exact 3-step
+	   flow these are meant to be used in (restore a local checkpoint, seek,
+	   then re-use kailleraRetryConnectUploadState() above to broadcast it). */
+	int KAILLERA_DLLEXP kailleraRetryConnectGetFrameIndex(){
+		return kaillera_retryconnect_get_frame_index();
+	}
+	int KAILLERA_DLLEXP kailleraRetryConnectGetTotalFrames(){
+		return kaillera_retryconnect_get_total_frames();
+	}
+	void KAILLERA_DLLEXP kailleraRetryConnectSeekLocal(int frame_index){
+		kaillera_retryconnect_seek_local(frame_index);
+	}
+
+	/* Checkpoint-based rewind (solo "Reproducao de Replay", not retry-connect
+	   or Watch Live) - see player.h. -1 outside static local-file playback. */
+	int KAILLERA_DLLEXP kailleraPlaybackGetFrameIndex(){
+		return player_get_frame_index();
+	}
+	void KAILLERA_DLLEXP kailleraPlaybackSeekToFrame(int frame){
+		player_seek_to_frame(frame);
+	}
+	int KAILLERA_DLLEXP kailleraPlaybackGetTotalFrames(){
+		return player_get_total_frames();
+	}
+	/* Same action as the Player dialog's own "Stop" button
+	   (player.cpp, BTN_STOP) - calls player_EndGame() directly. */
+	void KAILLERA_DLLEXP kailleraPlaybackStop(){
+		player_EndGame();
+	}
+
+	/* "Ir direto para o Ao Vivo!" (Watch Live toolbar) - spectator-side.
+	   Marks/checks a pending request and downloads the state the host
+	   uploads in response - see common/n02_watch.h's own doc comments for
+	   the exact flow these three are meant to be called in. */
+	int KAILLERA_DLLEXP kailleraWatchRequestState(){
+		return n02_watch_request_state() ? 1 : 0;
+	}
+	int KAILLERA_DLLEXP kailleraWatchStateReady(){
+		return n02_watch_state_ready() ? 1 : 0;
+	}
+	int KAILLERA_DLLEXP kailleraWatchDownloadState(void* outBuffer, int bufferCap, int* outFrameIndex, int* outByteOffset){
+		return n02_watch_download_state(outBuffer, bufferCap, outFrameIndex, outByteOffset);
+	}
+	/* Call right after core_unserialize()ing the state kailleraWatchDownloadState()
+	   above just returned, passing the same outFrameIndex/outByteOffset it
+	   gave back - see player_watch_jump_to_live()'s own comment (player.cpp)
+	   for why this needs to be a distinct call from the rewind-style seek
+	   kailleraPlaybackSeekToFrame() above does. */
+	void KAILLERA_DLLEXP kailleraWatchJumpToLive(int frameIndex, int byteOffset){
+		player_watch_jump_to_live(frameIndex, byteOffset);
+	}
+
+	/* "Ir direto para o Ao Vivo!" - host-side. See common/n02_stream.h's own
+	   doc comments; call kailleraStreamCheckStateRequested() every frame
+	   while hosting with streaming enabled (self-rate-limits the actual
+	   network poll, so this is cheap to call unconditionally) and, when it
+	   returns nonzero, take a retro_serialize() and hand it to
+	   kailleraStreamUploadState(). */
+	int KAILLERA_DLLEXP kailleraStreamCheckStateRequested(){
+		return n02_stream_check_state_requested() ? 1 : 0;
+	}
+	void KAILLERA_DLLEXP kailleraStreamUploadState(int frameIndex, const void* data, int size){
+		n02_stream_upload_state(frameIndex, data, size);
 	}
 };
 

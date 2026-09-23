@@ -1,5 +1,6 @@
 #include "n02_watch.h"
 #include "n02_stream.h" // N02_STREAM_DEFAULT_HOST/PORT/API_KEY - same community server, different paths
+#include "n02_replays.h" // n02_replays_request_live_state/live_state_ready/download_live_state - "Ir direto para o Ao Vivo!"
 
 #include <windows.h>
 #include "k_socket.h"
@@ -285,6 +286,10 @@ static void WatchBufAppend(const char* data, int len) {
 	LeaveCriticalSection(&g_watch_lock);
 }
 
+// Set by n02_watch_start()/n02_watch_restart_from_offset() right before
+// creating the thread below - read once at the top of run().
+static int g_watch_start_offset = 0;
+
 class WatchThread : public nThread {
 public:
 	volatile bool running;
@@ -297,7 +302,7 @@ public:
 		sessionId[sizeof(sessionId) - 1] = 0;
 
 		static char chunk[1024 * 1024 + 4096];
-		int offset = 0;
+		int offset = g_watch_start_offset;
 
 		while (!stop_requested) {
 			char path[256];
@@ -337,8 +342,56 @@ void n02_watch_start(const char* sessionId) {
 	strncpy(g_watch_session_id, sessionId, sizeof(g_watch_session_id) - 1);
 	g_watch_session_id[sizeof(g_watch_session_id) - 1] = 0;
 
+	g_watch_start_offset = 0;
 	g_watch_thread.stop_requested = false;
 	g_watch_thread.create();
+}
+
+void n02_watch_restart_from_offset(int byteOffset) {
+	if (g_watch_session_id[0] == 0)
+		return; // no session started yet - nothing to restart
+
+	n02_watch_stop();
+
+	WatchEnsureLock();
+	EnterCriticalSection(&g_watch_lock);
+	g_watch_buf_len = 0;
+	g_watch_finished = false;
+	LeaveCriticalSection(&g_watch_lock);
+
+	g_watch_start_offset = byteOffset;
+	g_watch_thread.stop_requested = false;
+	g_watch_thread.create();
+}
+
+bool n02_watch_request_state() {
+	if (g_watch_session_id[0] == 0)
+		return false;
+	return n02_replays_request_live_state(g_watch_session_id);
+}
+
+bool n02_watch_state_ready() {
+	if (g_watch_session_id[0] == 0)
+		return false;
+	return n02_replays_live_state_ready(g_watch_session_id);
+}
+
+int n02_watch_download_state(void* outBuffer, int bufferCap, int* outFrameIndex, int* outByteOffset) {
+	if (g_watch_session_id[0] == 0)
+		return -1;
+
+	int frameIndex = 0, byteOffset = 0, size = 0;
+	void* state = n02_replays_download_live_state(g_watch_session_id, &frameIndex, &byteOffset, &size);
+	if (state == NULL)
+		return -1;
+
+	int copyLen = min(size, bufferCap);
+	memcpy(outBuffer, state, copyLen);
+	free(state);
+
+	if (outFrameIndex) *outFrameIndex = frameIndex;
+	if (outByteOffset) *outByteOffset = byteOffset;
+	return copyLen;
 }
 
 int n02_watch_pull(char* outBuf, int outCap, bool blockIfLive) {

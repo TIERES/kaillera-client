@@ -21,6 +21,7 @@
 #define N02_ERRORDLG                    110
 #define N02_STATSDLG                    113
 #define KAILLERA_OPTIONS                114
+#define RETRYCONNECT_SELECT_DLG         115
 #define IDC_PORT                        1000
 #define IDC_CONNECT                     1001
 #define IDC_IP                          1002
@@ -123,14 +124,17 @@
 #define IDC_ABOUT_GITHUB                1106
 #define CHK_ONLINE                      1107
 #define IDC_ABOUT_VERSION               1108
+#define BTN_RETRYCONNECT                1109
+#define LV_RETRYLIST                    1110
+#define IDC_RETRYCONNECT_HINT           1111
 
 // Next default values for new objects
 //
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        115
+#define _APS_NEXT_RESOURCE_VALUE        116
 #define _APS_NEXT_COMMAND_VALUE         40001
-#define _APS_NEXT_CONTROL_VALUE         1109
+#define _APS_NEXT_CONTROL_VALUE         1112
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif
