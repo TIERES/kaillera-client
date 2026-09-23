@@ -1372,13 +1372,6 @@ void kailelra_sdlg_join_selected_game(){
 static char g_own_status_before_watch[32] = { 0 };
 static bool g_own_status_saved = false;
 
-// "Sair do Acompanhar ao vivo!" - bloqueia um novo "Assistir" por um
-// tempo, evitando que alguém fique entrando e saindo repetidamente e gere
-// flood de conexoes/lookups contra o servidor comunitario (que pode acabar
-// bloqueando o IP). 0 = sem bloqueio ativo.
-static DWORD g_watch_cooldown_until = 0;
-#define WATCH_REJOIN_COOLDOWN_MS 60000
-
 // "<player1> x <player2>..." dos jogadores da partida sendo assistida -
 // calculado uma vez ao entrar (kaillera_sdlg_watch_selected_game()) e
 // reaproveitado na mensagem de saida (RestoreOwnStatusAfterWatch()), ja que
@@ -1411,10 +1404,6 @@ static void RestoreOwnStatusAfterWatch() {
 	char msg[300];
 	wsprintf(msg, "%s nao quer mais ver %s!", myName, g_watch_matchup);
 	kaillera_chat_send(msg);
-
-	g_watch_cooldown_until = GetTickCount() + WATCH_REJOIN_COOLDOWN_MS;
-	if (g_watch_cooldown_until == 0)
-		g_watch_cooldown_until = 1; // 0 e o sentinela "sem bloqueio ativo"
 }
 
 // "Watch" on a lobby room: looks up (blocking, brief) whether that room is
@@ -1430,12 +1419,6 @@ void kaillera_sdlg_watch_selected_game(HWND handle){
 	int sel = kaillera_sdlg_gameslv.SelectedRow();
 	if (sel < 0 || sel >= kaillera_sdlg_gameslv.RowsCount() || inGame)
 		return;
-
-	if (g_watch_cooldown_until != 0 && (LONG)(GetTickCount() - g_watch_cooldown_until) < 0) {
-		int remaining = (int)((g_watch_cooldown_until - GetTickCount() + 999) / 1000);
-		kaillera_error_callback("Aguarde %d segundo(s) antes de assistir ao vivo novamente.", remaining);
-		return;
-	}
 
 	char room[128];
 	kaillera_sdlg_gameslv.CheckRow(room, 128, 0, sel);  // Game column (== room name)
