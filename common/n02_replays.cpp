@@ -221,3 +221,181 @@ bool n02_replays_download(const char* sessionId, const char* destPath) {
 	closesocket(s);
 	return ok;
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// POST /replays/<session_id>/state and GET it back - retry-connect's
+// fast-forward handoff. Body on both ends is [frame_index: int32 LE][raw
+// savestate bytes], matching wg-camp's app/replays.py.
+///////////////////////////////////////////////////////////////////////////////
+
+static SOCKET ConnectAndPost(const char* host, int port, const char* path, const char* apiKey, int bodyLen, int timeoutMs) {
+	if (host == NULL || host[0] == 0 || port <= 0)
+		return INVALID_SOCKET;
+
+	SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+	if (s == INVALID_SOCKET)
+		return INVALID_SOCKET;
+
+	sockaddr_in server;
+	memset(&server, 0, sizeof(server));
+	server.sin_family = AF_INET;
+	server.sin_port = htons((u_short)port);
+
+	if (host[0] >= '0' && host[0] <= '9') {
+		server.sin_addr.s_addr = inet_addr(host);
+	} else {
+		struct hostent* he = gethostbyname(host);
+		if (he == NULL || he->h_addr_list == NULL || he->h_addr_list[0] == NULL) {
+			closesocket(s);
+			return INVALID_SOCKET;
+		}
+		server.sin_addr = *(struct in_addr*)he->h_addr_list[0];
+	}
+
+	setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeoutMs, sizeof(timeoutMs));
+	setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeoutMs, sizeof(timeoutMs));
+
+	if (connect(s, (struct sockaddr*)&server, sizeof(server)) != 0) {
+		closesocket(s);
+		return INVALID_SOCKET;
+	}
+
+	char apiKeyHeader[192];
+	apiKeyHeader[0] = 0;
+	if (apiKey != NULL && apiKey[0] != 0)
+		_snprintf(apiKeyHeader, sizeof(apiKeyHeader), "X-Api-Key: %s\r\n", apiKey);
+
+	char header[1024];
+	int headerLen = _snprintf(header, sizeof(header),
+		"POST %s HTTP/1.1\r\n"
+		"Host: %s\r\n"
+		"%s"
+		"Content-Type: application/octet-stream\r\n"
+		"Content-Length: %d\r\n"
+		"Connection: close\r\n"
+		"\r\n",
+		path, host, apiKeyHeader, bodyLen);
+	if (headerLen < 0 || headerLen >= (int)sizeof(header) || send(s, header, headerLen, 0) != headerLen) {
+		closesocket(s);
+		return INVALID_SOCKET;
+	}
+
+	return s;
+}
+
+// dataSize is capped well under what any real N64 core's retro_serialize()
+// produces - just a sanity bound so a corrupt caller can't wedge the socket
+// trying to send a bogus multi-GB body.
+#define N02_REPLAYS_STATE_MAX_BYTES (32 * 1024 * 1024)
+
+bool n02_replays_upload_state(const char* sessionId, int frameIndex, const void* data, int dataSize) {
+	if (data == NULL || dataSize <= 0 || dataSize > N02_REPLAYS_STATE_MAX_BYTES)
+		return false;
+
+	char path[128];
+	_snprintf(path, sizeof(path), "/replays/%s/state", sessionId);
+
+	int bodyLen = (int)sizeof(int) + dataSize;
+	SOCKET s = ConnectAndPost(N02_STREAM_DEFAULT_HOST, N02_STREAM_DEFAULT_PORT, path, N02_STREAM_DEFAULT_API_KEY, bodyLen, 5000);
+	if (s == INVALID_SOCKET) return false;
+
+	bool ok = send(s, (const char*)&frameIndex, sizeof(frameIndex), 0) == sizeof(frameIndex);
+	if (ok) {
+		const char* p = (const char*)data;
+		int remaining = dataSize;
+		while (ok && remaining > 0) {
+			int chunk = min(remaining, 64 * 1024);
+			int sent = send(s, p, chunk, 0);
+			if (sent <= 0) { ok = false; break; }
+			p += sent;
+			remaining -= sent;
+		}
+	}
+
+	if (ok) {
+		char leftover[256];
+		int leftoverLen = 0;
+		ok = ReadHttpHeaders(s, leftover, sizeof(leftover), &leftoverLen);
+	}
+
+	closesocket(s);
+	return ok;
+}
+
+void* n02_replays_download_state(const char* sessionId, int* outFrameIndex, int* outSize) {
+	if (outFrameIndex) *outFrameIndex = 0;
+	if (outSize) *outSize = 0;
+
+	char path[128];
+	_snprintf(path, sizeof(path), "/replays/%s/state", sessionId);
+
+	SOCKET s = ConnectAndGet(N02_STREAM_DEFAULT_HOST, N02_STREAM_DEFAULT_PORT, path, N02_STREAM_DEFAULT_API_KEY, 5000);
+	if (s == INVALID_SOCKET) return NULL;
+
+	char leftover[8192];
+	int leftoverLen = 0;
+	if (!ReadHttpHeaders(s, leftover, sizeof(leftover), &leftoverLen)) {
+		closesocket(s);
+		return NULL;
+	}
+
+	int cap = 256 * 1024;
+	int len = 0;
+	char* buf = (char*)malloc(cap);
+	if (buf == NULL) {
+		closesocket(s);
+		return NULL;
+	}
+
+	if (leftoverLen > 0) {
+		memcpy(buf, leftover, leftoverLen);
+		len = leftoverLen;
+	}
+
+	char chunk[64 * 1024];
+	for (;;) {
+		int r = recv(s, chunk, sizeof(chunk), 0);
+		if (r <= 0) break;
+		if (len + r > cap) {
+			int newCap = cap * 2;
+			while (newCap < len + r) newCap *= 2;
+			if (newCap > N02_REPLAYS_STATE_MAX_BYTES + (int)sizeof(int)) {
+				closesocket(s);
+				free(buf);
+				return NULL;
+			}
+			char* grown = (char*)realloc(buf, newCap);
+			if (grown == NULL) {
+				closesocket(s);
+				free(buf);
+				return NULL;
+			}
+			buf = grown;
+			cap = newCap;
+		}
+		memcpy(buf + len, chunk, r);
+		len += r;
+	}
+	closesocket(s);
+
+	if (len < (int)sizeof(int)) {
+		free(buf);
+		return NULL;
+	}
+
+	int frameIndex;
+	memcpy(&frameIndex, buf, sizeof(frameIndex));
+	int stateSize = len - (int)sizeof(int);
+
+	char* state = (char*)malloc(stateSize > 0 ? stateSize : 1);
+	if (state == NULL) {
+		free(buf);
+		return NULL;
+	}
+	memcpy(state, buf + sizeof(int), stateSize);
+	free(buf);
+
+	if (outFrameIndex) *outFrameIndex = frameIndex;
+	if (outSize) *outSize = stateSize;
+	return state;
+}

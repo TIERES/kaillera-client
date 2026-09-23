@@ -663,6 +663,55 @@ extern "C" {
 		kaillera_retryconnect_pump();
 		return kaillera_retryconnect_poll(outAction, outFrameIndex) ? 1 : 0;
 	}
+
+	/* True for every client (host or peer) while a retry-connect session is
+	   active - unlike kailleraRetryConnectCanControl() above, does not imply
+	   "is host". Lets the frontend tell a retry-connect peer apart from
+	   someone using n02's ordinary standalone Playback/Watch mode
+	   (kailleraIsPlaybackMode() is true in both cases, but only the former
+	   has a host to defer to) - needed so a peer's own fast-forward hotkey
+	   can be suppressed during a group replay while solo playback keeps
+	   fast-forwarding freely. */
+	int KAILLERA_DLLEXP kailleraRetryConnectActive(){
+		return kaillera_retryconnect_active() ? 1 : 0;
+	}
+
+	/* Host-only fast-forward handoff (kcore/kaillera_retryconnect.h). `data`/
+	   `size` is a full core savestate the frontend just took the instant it
+	   stopped fast-forwarding - uploaded to the community server and relayed
+	   to every other player as RC_ACTION_STATE_READY so they can jump
+	   straight there instead of trying to reach the same frame by
+	   fast-forwarding themselves (not reliable across different
+	   machines/cores). No-op if not host. */
+	void KAILLERA_DLLEXP kailleraRetryConnectUploadState(const void* data, int size){
+		kaillera_retryconnect_upload_state(data, size);
+	}
+
+	/* Downloads the state kailleraRetryConnectUploadState() above just
+	   uploaded into outBuffer (capacity bufferCap - the frontend must size
+	   this from its own core_serialize_size(), matching the host's since
+	   everyone runs the same core/content). Returns the byte count written,
+	   ready to hand to core_unserialize(), or -1 on any failure. */
+	int KAILLERA_DLLEXP kailleraRetryConnectDownloadState(void* outBuffer, int bufferCap, int* outFrameIndex){
+		return kaillera_retryconnect_download_state(outBuffer, bufferCap, outFrameIndex);
+	}
+
+	/* Checkpoint-based rewind (solo "Reproducao de Replay", not retry-connect
+	   or Watch Live) - see player.h. -1 outside static local-file playback. */
+	int KAILLERA_DLLEXP kailleraPlaybackGetFrameIndex(){
+		return player_get_frame_index();
+	}
+	void KAILLERA_DLLEXP kailleraPlaybackSeekToFrame(int frame){
+		player_seek_to_frame(frame);
+	}
+	int KAILLERA_DLLEXP kailleraPlaybackGetTotalFrames(){
+		return player_get_total_frames();
+	}
+	/* Same action as the Player dialog's own "Stop" button
+	   (player.cpp, BTN_STOP) - calls player_EndGame() directly. */
+	void KAILLERA_DLLEXP kailleraPlaybackStop(){
+		player_EndGame();
+	}
 };
 
 

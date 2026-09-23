@@ -193,59 +193,7 @@ char record_filenames[MAX_RECORDS][260];
 // mode (player_watch_begin(), further below) still uses the legacy
 // PlayBackBufferC global unchanged - only this local-file path was migrated.
 static krec_reader g_playback_reader;
-
-// --- retry-connect Fase 1: temporary test-only "pause at frame N" hook ---
-// Not part of the final retry-connect design (that will pause both peers via
-// RPAUSE/RPACK network instructions) - this exists purely to prove out the
-// "freeze the emulator on an exact replay frame, then resume" technique
-// locally, with one player, before any protocol work. Set the environment
-// variable N02_KREC_TEST_PAUSE_FRAME to an input-frame index (as counted by
-// krec_reader::frame_index(), i.e. only 0x12 records) to arm it: playback
-// freezes right after delivering that frame (re-delivering its bytes every
-// call, so the core keeps receiving valid input rather than nothing) until
-// F9 is pressed, then resumes exactly where it left off. Unset/absent = the
-// hook is a no-op and player_MPV() behaves exactly as it did before Fase 1.
-static int g_test_pause_frame = -2; // -2 = not yet read from env, -1 = disabled
-static bool g_test_paused = false;
-static char g_test_last_input[256];
-static int g_test_last_input_len = 0;
-
-static void player_test_pause_reset() {
-	g_test_pause_frame = -2;
-	g_test_paused = false;
-	g_test_last_input_len = 0;
-}
-
-// Set true only when N02_KREC_TEST_PAUSE_FRAME is actually present in the
-// environment (regardless of its parsed value) - gates the end-of-playback
-// frame-count report below so normal Playback mode use never sees it.
-static bool g_test_report_enabled = false;
-
-static void player_test_pause_init() {
-	if (g_test_pause_frame != -2)
-		return;
-	char val[32];
-	DWORD n = GetEnvironmentVariableA("N02_KREC_TEST_PAUSE_FRAME", val, sizeof(val));
-	g_test_report_enabled = (n > 0);
-	g_test_pause_frame = (n > 0 && n < sizeof(val)) ? atoi(val) : -1;
-}
-
-// Called once per player_MPV() loop iteration while frozen. Returns true
-// (and re-delivers the last input frame into `values`) as long as the test
-// is still "paused"; returns false once F9 releases it, letting the caller
-// fall through to normal playback again.
-static bool player_test_pause_frozen(void* values, int size) {
-	if (!g_test_paused)
-		return false;
-	if (GetAsyncKeyState(VK_F9) & 1) {
-		g_test_paused = false;
-		return false;
-	}
-	int n = min(g_test_last_input_len, size);
-	if (n > 0)
-		memcpy(values, g_test_last_input, n);
-	return true;
-}
+static int g_playback_total_frames = -1; // cached at open time - see player_get_total_frames()
 
 void player_play(char * fn){
 	n02_TRACE();
@@ -270,10 +218,10 @@ void player_play(char * fn){
 	strcpy(GAME, g_playback_reader.gameName);
 	playerno = g_playback_reader.playerno;
 	numplayers = g_playback_reader.numplayers;
+	g_playback_total_frames = g_playback_reader.count_total_frames();
 
 	player_playing = true;
 	memset(player_was_dropped, 0, sizeof(player_was_dropped));
-	player_test_pause_reset();
 
 	KSSDFA.input = KSSDFA_START_GAME;
 
@@ -909,32 +857,27 @@ int player_MPV(void*values,int size){
 		return -1;
 	}
 
-	// Static local-file playback (retry-connect Fase 1): via krec_reader,
-	// plus the temporary "pause at frame N" test hook.
+	// Static local-file playback: via krec_reader.
 	for (;;) {
-		if (player_test_pause_frozen(values, size))
-			return g_test_last_input_len;
-
 		int len = 0;
-		int type = g_playback_reader.next_record(values, size, &len);
+		// `size` is the caller's per-player convention constant (e.g. 12),
+		// NOT the physical capacity of `values` (RetroArch's contiguous
+		// multi-player buffer, sized for every player in the room) - the
+		// same bug already found and fixed for retry-connect's own reader
+		// (kaillera_retryconnect.cpp's next_record(values, sizeof(g_last_frame), ...) -
+		// capping at `size` here silently truncated any recording with more
+		// than one player's worth of bytes, desyncing the reader's position
+		// from the very first multi-player frame onward (every subsequent
+		// byte gets misread as if it were mid-record). Mirror that same fix.
+		int type = g_playback_reader.next_record(values, 256, &len);
 
 		if (type == KREC_EOF) {
 			player_EndGame();
 			return -1;
 		}
 
-		if (type == KREC_INPUT) {
-			int n = min(len, (int)sizeof(g_test_last_input));
-			if (n > 0)
-				memcpy(g_test_last_input, values, n);
-			g_test_last_input_len = len;
-
-			player_test_pause_init();
-			if (g_test_pause_frame >= 0 && g_playback_reader.frame_index() == g_test_pause_frame)
-				g_test_paused = true;
-
+		if (type == KREC_INPUT)
 			return len;
-		}
 
 		if (type == KREC_DROP) {
 			int pn = g_playback_reader.last_drop_playerno;
@@ -958,17 +901,26 @@ int player_MPV(void*values,int size){
 		return -1;
 	}
 }
+int player_get_frame_index() {
+	if (!player_playing || player_watch_mode)
+		return -1;
+	return g_playback_reader.frame_index();
+}
+
+void player_seek_to_frame(int frame) {
+	if (!player_playing || player_watch_mode)
+		return;
+	g_playback_reader.seek_to_frame(frame);
+}
+
+int player_get_total_frames() {
+	if (!player_playing || player_watch_mode)
+		return -1;
+	return g_playback_total_frames;
+}
+
 void player_EndGame(){
 	n02_TRACE();
-	// retry-connect Fase 1 test aid: report the final krec_reader frame count
-	// so it can be compared against the Records list's independently-computed
-	// Duration-column frame count (RecordsList_Populate_fn) - only shown when
-	// N02_KREC_TEST_PAUSE_FRAME was set this session, never in normal use.
-	if (!player_watch_mode && g_test_report_enabled) {
-		char msg[128];
-		wsprintf(msg, "krec_reader frame_index() at end of playback: %d", g_playback_reader.frame_index());
-		MessageBox(RecordsListDlg, msg, "retry-connect test", MB_OK | MB_ICONINFORMATION);
-	}
 	player_playing = false;
 	if (player_watch_mode) {
 		n02_watch_stop();

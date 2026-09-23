@@ -1700,7 +1700,7 @@ static INT_PTR CALLBACK OptionsDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 	return (INT_PTR)FALSE;
 }
 //===========================================================================================
-// retry-connect (Fase 3): host-only "Continuar" flow - lets the room's owner
+// retry-connect (Fase 3): host-only "Reconectar" flow - lets the room's owner
 // pick a server-side replay to resume from, filtered to only the ones whose
 // player_names line up with everyone currently in the room (avoids two
 // players ending up with different files - see the project's design notes).
@@ -1784,9 +1784,9 @@ static INT_PTR CALLBACK RetryConnectSelectDlgProc(HWND hDlg, UINT uMsg, WPARAM w
 		{
 			g_retryconnect_list.initialize();
 			g_retryconnect_list.handle = GetDlgItem(hDlg, LV_RETRYLIST);
-			g_retryconnect_list.AddColumn("Quando", 100);
+			g_retryconnect_list.AddColumn("Data/hora", 100);
 			g_retryconnect_list.AddColumn("Jogadores", 130);
-			g_retryconnect_list.AddColumn("Jogo", 90);
+			g_retryconnect_list.AddColumn("Jogo", 225);
 			g_retryconnect_list.AddColumn("Duracao", 60);
 			g_retryconnect_list.FullRowSelect();
 			RetryConnect_PopulateList(hDlg);
@@ -1805,7 +1805,7 @@ static INT_PTR CALLBACK RetryConnectSelectDlgProc(HWND hDlg, UINT uMsg, WPARAM w
 				if (row < 0 || row >= g_retryconnect_filtered_count)
 					return (INT_PTR)TRUE;
 				N02ReplayEntry* e = &g_retryconnect_entries[g_retryconnect_filtered[row]];
-				if (kaillera_retryconnect_host_select(e->session_id))
+				if (kaillera_retryconnect_host_select(e->session_id, e->when))
 					EndDialog(hDlg, 1);
 				// On failure, kaillera_retryconnect_host_select() already
 				// raised an error via kaillera_error_callback - leave the
@@ -1911,6 +1911,27 @@ LRESULT CALLBACK KailleraServerDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 			kaillera_sdlg_BTN_OPTIONS = GetDlgItem(hDlg, BTN_OPTIONS);
 			kaillera_sdlg_BTN_ADVERTISE = GetDlgItem(hDlg, BTN_ADVERTISE);
 			kaillera_sdlg_BTN_RETRYCONNECT = GetDlgItem(hDlg, BTN_RETRYCONNECT);
+			{
+				// Tooltip explaining what "Reconectar" does, since the label
+				// alone doesn't say this only resumes a match dropped mid-game
+				// (not a way to start a brand new one) - TTF_SUBCLASS keeps it
+				// working even though this button gets created fresh every
+				// time this dialog reopens.
+				HWND hRetryTip = CreateWindowEx(0, TOOLTIPS_CLASS, NULL,
+					WS_POPUP | TTS_ALWAYSTIP,
+					CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+					hDlg, NULL, hx, NULL);
+				if (hRetryTip) {
+					TOOLINFO ti = { 0 };
+					ti.cbSize = sizeof(ti);
+					ti.uFlags = TTF_SUBCLASS | TTF_IDISHWND;
+					ti.hwnd = hDlg;
+					ti.uId = (UINT_PTR)kaillera_sdlg_BTN_RETRYCONNECT;
+					ti.hinst = hx;
+					ti.lpszText = (LPSTR)"Escolha um replay que ocorreu durante a queda de conexao para continuar uma partida!";
+					SendMessage(hRetryTip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+				}
+			}
 			kaillera_sdlg_BTN_GCHAT = GetDlgItem(hDlg, BTN_GCHAT);
 			kaillera_sdlg_MINGUIUPDATE = GetDlgItem(hDlg, CHK_MINGUIUPD);
 			kaillera_sdlg_TXT_MSG = GetDlgItem(hDlg, TXT_MSG);
@@ -3007,7 +3028,7 @@ LRESULT CALLBACK KailleraServerSelectDialogProc(HWND hDlg, UINT uMsg, WPARAM wPa
 void kaillera_GUI(){
 	INITCOMMONCONTROLSEX icx;
 	icx.dwSize = sizeof(icx);
-	icx.dwICC = ICC_LISTVIEW_CLASSES | ICC_TAB_CLASSES;
+	icx.dwICC = ICC_LISTVIEW_CLASSES | ICC_TAB_CLASSES | ICC_WIN95_CLASSES; // WIN95_CLASSES needed for TOOLTIPS_CLASS
 	InitCommonControlsEx(&icx);
 
 	HMODULE p2p_riched_hm = LoadLibrary("riched32.dll");

@@ -24,14 +24,19 @@
 // separate, not-yet-implemented piece - see the project's retry-connect
 // design notes. Everything in this file is ready for that side to call into.
 
-// Called by the UI (the "Continuar" button's filtered replay list) once the
-// host has picked a replay. Downloads it into .\records\, loads it, starts
-// the normal GAMEBEGN/GAMRSRDY handshake (kaillera_start_game()) and, on
-// success, broadcasts RETRYCON_SELECT so every other player in the room
-// fetches the exact same file. Returns false on failure (caller should show
-// an error - this function already raises one via kaillera_error_callback,
-// so the caller only needs to avoid proceeding, not show its own).
-bool kaillera_retryconnect_host_select(const char* session_id);
+// Called by the UI (the "Reconectar" button's filtered replay list) once the
+// host has picked a replay - `when` is that entry's own N02ReplayEntry::when
+// ("DD-MM-YYYY HH:MM", already formatted server-side), used only to word the
+// deferred "CONTINUANDO PARTIDA: ..." room-chat announcement below (a single
+// real GAMECHAT broadcast - the server relays it back to the host too, so
+// everyone including the host sees the exact same wording; no separate wire
+// field needed). Downloads the replay into .\records\, loads it, starts the
+// normal GAMEBEGN/GAMRSRDY handshake (kaillera_start_game()) and, on success,
+// broadcasts RETRYCON_SELECT so every other player in the room fetches the
+// exact same file. Returns false on failure (caller should show an error -
+// this function already raises one via kaillera_error_callback, so the caller
+// only needs to avoid proceeding, not show its own).
+bool kaillera_retryconnect_host_select(const char* session_id, const char* when);
 
 // True from a successful select (host or peer) until a RETRYCON_CONTROL
 // GO_LIVE or RETRYCON_NAK ends the attempt. Gates
@@ -68,8 +73,48 @@ void kaillera_retryconnect_notify_local_control(int action, int frame_index);
 // flips to false for that case). Returns false when there's nothing new.
 bool kaillera_retryconnect_poll(int* out_action, int* out_frame_index);
 
+// Called once per kaillera_retryconnect_pump() (kaillera_core.cpp) - fires
+// the host's deferred "CONTINUANDO PARTIDA: ..." game-chat announcement
+// (queued by kaillera_retryconnect_host_select()) once its few-second delay
+// has elapsed. No-op with nothing pending (the overwhelmingly common case,
+// since this only ever has something queued for a few seconds right after
+// "Reconectar").
+void kaillera_retryconnect_check_pending_announce();
+
 // Called from kaillera_core.cpp's kaillera_modify_play_values() once it's
 // confirmed we're still active after draining pending instructions - serves
 // the next input frame from the local recording. Same return convention as
 // the emulator's normal MPV (byte length served).
 int kaillera_retryconnect_modify_play_values(void* values, int size);
+
+// Host-only fast-forward handoff. Fast-forwarding a group replay is host-only
+// and purely local (RetroArch's own hotkey handling, not this file) precisely
+// because different machines/cores aren't guaranteed to reach the same frame
+// at the same real-world time - so the moment the host stops, it calls this
+// (via a new export) with a full core savestate (RetroArch's core_serialize()
+// output) instead of trying to get everyone to reproduce the same frame by
+// replaying it themselves. Uploads `data`/`size` to the community server and,
+// on success, broadcasts RC_ACTION_STATE_READY(frame_index) - frame_index is
+// this reader's own current position, meaningful across machines because
+// kaillera_retryconnect_host_select()/select_callback() already guarantee
+// every client is reading the exact same file. Falls back to a plain
+// RC_ACTION_PAUSE broadcast if the upload itself fails, so peers at least
+// stop (even though no longer frame-accurate with the host). No-op if not
+// host (defense in depth - RetroArch is expected to have already gated this
+// via kaillera_retryconnect_can_control()).
+void kaillera_retryconnect_upload_state(const void* data, int size);
+
+// Companion to kaillera_retryconnect_upload_state() above, called (via a new
+// export) once RetroArch sees a remote RC_ACTION_STATE_READY (from
+// kaillera_retryconnect_poll()). Downloads the state into outBuffer (capacity
+// bufferCap - the caller must size this from its own core_serialize_size(),
+// which has to match the host's since every client runs the same
+// core/content) and, on success, re-anchors this reader's position to the
+// exact frame the state was taken at (see krec_reader::seek_to_frame()) so
+// future reads/pauses/go-lives from this same session stay aligned -
+// regardless of whether this reader was already ahead of or behind that
+// frame. Fills *out_frame_index (may be NULL) for the caller's own
+// informational use; the repositioning above happens either way. Returns the
+// number of bytes written to outBuffer (hand straight to core_unserialize()),
+// or -1 on any failure (network, no state uploaded yet, buffer too small).
+int kaillera_retryconnect_download_state(void* outBuffer, int bufferCap, int* out_frame_index);

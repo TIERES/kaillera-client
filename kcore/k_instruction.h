@@ -75,6 +75,14 @@ enum INSTRUCTION{
 #define RC_ACTION_GO_LIVE   3  // host committed (Enter, only valid while paused) - everyone switches
                                 // from replay-driven input to the real controller from frame_index+1
 #define RC_ACTION_REWIND_TO 4  // reserved - rewind support not implemented yet
+#define RC_ACTION_STATE_READY 5 // host stopped fast-forwarding at frame_index and uploaded a
+                                 // savestate for it (see n02_replays.h's upload/download_state) -
+                                 // peers download+load that exact state and jump their own local
+                                 // replay position to frame_index, instead of trying to reach it by
+                                 // replaying frame-by-frame themselves (fast-forward is host-only and
+                                 // purely local - real-time frame arrival isn't guaranteed to match
+                                 // across different machines/cores). Implies pause, same as
+                                 // RC_ACTION_PAUSE.
 
 #pragma intrinsic(memcmp, memcpy, memset, strcat, strcmp, strcpy, strlen)
 

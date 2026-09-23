@@ -183,6 +183,53 @@ public:
 		return frames_consumed;
 	}
 
+	// Forces the read position to the exact frame `target` (retry-connect's
+	// state hand-off, kaillera_retryconnect_download_state() - see there for
+	// why an exact frame matters). next_record() only ever moves forward, so
+	// getting there when this reader is already past `target` means starting
+	// over: reset to right after the header and re-walk every record (chat/
+	// drop/input alike, same as next_record() would skip past on its own)
+	// until frames_consumed reaches target or the file runs out. The whole
+	// file is already in memory, so this only costs cheap byte-parsing, no
+	// emulation - safe to call whether this reader was ahead of, behind, or
+	// already exactly at target.
+	void seek_to_frame(int target) {
+		ptr = buffer + (is_krc1 ? 400 : 272);
+		frames_consumed = 0;
+		while (frames_consumed < target) {
+			int len = 0;
+			if (next_record(NULL, 0, &len) == KREC_EOF)
+				break;
+		}
+	}
+
+	// Total input-frame count of the whole file - for a caller-side progress
+	// bar (retroarch-k3's playback toolbar). One full non-destructive scan
+	// (reuses next_record() itself rather than re-implementing record
+	// parsing) from right after the header to KREC_EOF; saves and restores
+	// the current read position first, since this reader has no separate
+	// "just count" mode. Cheap relative to the whole file already being in
+	// memory - meant to be called once, right after open_file(), not per
+	// frame.
+	int count_total_frames() {
+		char* saved_ptr = ptr;
+		int saved_frames = frames_consumed;
+		int total;
+
+		ptr = buffer + (is_krc1 ? 400 : 272);
+		frames_consumed = 0;
+		for (;;) {
+			int len = 0;
+			if (next_record(NULL, 0, &len) == KREC_EOF)
+				break;
+		}
+		total = frames_consumed;
+
+		ptr = saved_ptr;
+		frames_consumed = saved_frames;
+		return total;
+	}
+
 	// Mirrors player_MPV()'s record-type switch (player.cpp), but classifies
 	// and extracts a record instead of acting on it - the caller decides what
 	// a chat/drop/input record means. Returns the record type, or KREC_EOF
@@ -209,9 +256,22 @@ public:
 			int l = load_short();
 			if (l < 0)
 				return KREC_EOF;
-			if (l > 0 && out_values) {
-				int n = min(l, max_size);
-				load_bytes(out_values, n);
+			if (l > 0) {
+				int n = out_values ? min(l, max_size) : 0;
+				if (n > 0)
+					load_bytes(out_values, n);
+				// Always consume the FULL record, even when the caller
+				// didn't want (out_values NULL - seek_to_frame()'s scan) or
+				// couldn't fit (max_size < l) all of it - otherwise ptr is
+				// left partway through this record's own payload instead of
+				// at the next record's type byte, and every read after that
+				// misparses garbage as a bogus record type.
+				int remaining = l - n;
+				if (remaining > 0) {
+					int skip = min(remaining, (int)(end - ptr));
+					if (skip > 0)
+						ptr += skip;
+				}
 			}
 			if (out_len) *out_len = l;
 			frames_consumed++;
