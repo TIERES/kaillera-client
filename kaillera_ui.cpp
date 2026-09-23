@@ -1346,12 +1346,48 @@ void kailelra_sdlg_join_selected_game(){
 	}
 }
 
+// "Acompanhar ao vivo!" (Watch Live) - local-only Status override for our
+// own row in the lobby user list while spectating. The Kaillera protocol's
+// Status column is server-authoritative (see USER_STATUS[]/
+// kaillera_user_add_callback) - there's no "watching" status the server
+// itself can broadcast to everyone else, so this only ever affects our own
+// view. Restored via RestoreOwnStatusAfterWatch() (registered as
+// player_watch_ended_callback below) once watching ends.
+static char g_own_status_before_watch[32] = { 0 };
+static bool g_own_status_saved = false;
+
+static int FindOwnUserRow() {
+	char myName[32];
+	kaillera_get_username(myName, sizeof(myName));
+	int count = kaillera_sdlg_userslv.RowsCount();
+	for (int i = 0; i < count; i++) {
+		char name[32];
+		kaillera_sdlg_userslv.CheckRow(name, sizeof(name), 0, i);
+		if (_stricmp(name, myName) == 0)
+			return i;
+	}
+	return -1;
+}
+
+static void RestoreOwnStatusAfterWatch() {
+	if (!g_own_status_saved)
+		return;
+	int row = FindOwnUserRow();
+	if (row >= 0)
+		kaillera_sdlg_userslv.FillRow(g_own_status_before_watch, 3, row);
+	g_own_status_saved = false;
+}
+
 // "Watch" on a lobby room: looks up (blocking, brief) whether that room is
 // currently streaming to the community spectate server (see n02_stream.h /
-// n02_watch.h), and if so switches into the playback module to replay it
-// live - same mode switch RB_MODE_PLAYBACK does, just with a session queued
-// up via player_request_watch() instead of opening the recordings browser.
+// n02_watch.h), and if so starts spectating right here in the lobby -
+// without leaving the Kaillera server connection or closing any dialog, the
+// same way "Reconectar" (retry-connect) stays in-session:
+// kaillera_modify_play_values() (kcore/kaillera_core.cpp) delegates to
+// player_MPV() while player_is_watching() is true, regardless of which
+// module is "active" (see player_watch_begin(), player.cpp).
 void kaillera_sdlg_watch_selected_game(HWND handle){
+	(void)handle;
 	int sel = kaillera_sdlg_gameslv.SelectedRow();
 	if (sel < 0 || sel >= kaillera_sdlg_gameslv.RowsCount() || inGame)
 		return;
@@ -1367,17 +1403,37 @@ void kaillera_sdlg_watch_selected_game(HWND handle){
 		return;
 	}
 
-	player_request_watch(sessionId, room);
-	bool switched = activate_mode(2);
-	if (switched) {
-		// `handle` (kaillera_sdlg) is a nested DialogBox opened by
-		// ConnectToServer() from inside the outer server-select dialog
-		// (kaillera_ssdlg). Closing it here just unwinds back into
-		// ConnectToServer()'s own disconnect/cleanup code, which checks
-		// get_active_mode_index() itself and closes kaillera_ssdlg too when
-		// it sees a mode switch is pending - see ConnectToServer().
-		SendMessage(handle, WM_CLOSE, 0, 0);
+	if (!player_watch_begin(sessionId, room))
+		return; // already showed its own error MessageBox
+
+	player_watch_ended_callback = RestoreOwnStatusAfterWatch;
+
+	int row = FindOwnUserRow();
+	if (row >= 0) {
+		kaillera_sdlg_userslv.CheckRow(g_own_status_before_watch, sizeof(g_own_status_before_watch), 3, row);
+		g_own_status_saved = true;
+		kaillera_sdlg_userslv.FillRow((char*)"Ao vivo!", 3, row);
 	}
+
+	// Server-wide announcement (this is the actual "let everyone know"
+	// mechanism, since the Status column override above is local-only) -
+	// player names come from the watched stream's own KRC1 header, not the
+	// lobby room list (which only has an aggregate "users" count, not names).
+	char myName[32];
+	kaillera_get_username(myName, sizeof(myName));
+	char players[4][32];
+	player_watch_get_player_names(players);
+	char matchup[80];
+	if (players[0][0] != 0 && players[1][0] != 0)
+		wsprintf(matchup, "%s x %s", players[0], players[1]);
+	else if (players[0][0] != 0)
+		wsprintf(matchup, "%s", players[0]);
+	else
+		wsprintf(matchup, "%s", room);
+
+	char msg[300];
+	wsprintf(msg, "%s esta acompanhando ao vivo %s! Acompanhe voce tambem, baixe: https://we2002.wgs.dev.br", myName, matchup);
+	kaillera_chat_send(msg);
 }
 
 void kaillera_sdlg_show_games_list_menu(HWND handle, bool incjoin = false){

@@ -6,6 +6,7 @@
 #include "../common/n02_replays.h"
 #include "../errr.h"
 #include "../kailleraclient.h"
+#include "../player.h"
 
 #define KAILLERA_CONNECTION_RESP_MAX_DELAY 15000
 #define KAILLERA_LOGIN_RESP_MAX_DELAY 10000
@@ -973,6 +974,18 @@ inline void kaillera_ProcessGameInstruction(k_instruction * ki) {
 int kaillera_modify_play_values (void * values, int size) {
 	n02_TRACE();
 	if (!KAILLERAC.connection) return -1;
+
+	// "Acompanhar ao vivo!" (Watch Live): delegates straight to Playback
+	// module's own player_MPV() while spectating, without ever switching
+	// active_mod away from mod_kaillera - unlike the old activate_mode(2)
+	// flow, the server/lobby connection (and this dialog's own message loop,
+	// on a separate thread from KSSDFA - see kailleraclient.cpp's GuiThread)
+	// just keeps running untouched. player_watch_begin() only needs to force
+	// KSSDFA into "game running" locally (no server round trip - watching
+	// never touches KAILLERAC.USERSTAT/PLAYERSTAT at all), so this is safe to
+	// check unconditionally, before any of the state gating below.
+	if (player_is_watching())
+		return player_MPV(values, size);
 
 	// retry-connect: drains pending RETRYCON messages (no-op unless a
 	// retry-connect session is active) and, while one is, serves this frame

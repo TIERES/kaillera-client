@@ -68,3 +68,20 @@ void n02_stream_end_session();
 // Called from kailleraShutdown(): ends any active session and stops the
 // background thread.
 void n02_stream_shutdown();
+
+// "Ir direto para o Ao Vivo!" (kaillera-client's Watch Live toolbar) -
+// host-side half. Call n02_stream_check_state_requested() from the
+// frontend's per-frame tick while hosting (no-op/false if no session is
+// active - safe to call unconditionally); it self-rate-limits the actual
+// network poll, so calling it every frame is fine. Returns true once (per
+// pending request - the server clears the flag once serviced) when a
+// spectator wants a fresh sync point - the frontend should then take a
+// retro_serialize() (no need to pause - this doesn't touch local gameplay)
+// and hand it to n02_stream_upload_state() below.
+bool n02_stream_check_state_requested();
+
+// Uploads a state a spectator asked for (see above). `frameIndex` need only
+// be locally meaningful (echoed back to whoever downloads it - not
+// interpreted by the server); `data`/`size` is the raw retro_serialize()
+// bytes. No-op if no session is active.
+void n02_stream_upload_state(int frameIndex, const void* data, int size);

@@ -399,3 +399,130 @@ void* n02_replays_download_state(const char* sessionId, int* outFrameIndex, int*
 	if (outSize) *outSize = stateSize;
 	return state;
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// /spectate/<sessionId>/state-request, /spectate/<sessionId>/state - "Ir
+// direto para o Ao Vivo!" (Watch Live toolbar). See n02_replays.h's own doc
+// comments; n02_watch.cpp wraps these three for its callers.
+///////////////////////////////////////////////////////////////////////////////
+
+bool n02_replays_request_live_state(const char* sessionId) {
+	char path[128];
+	_snprintf(path, sizeof(path), "/spectate/%s/state-request", sessionId);
+
+	SOCKET s = ConnectAndPost(N02_STREAM_DEFAULT_HOST, N02_STREAM_DEFAULT_PORT, path, N02_STREAM_DEFAULT_API_KEY, 0, 3000);
+	if (s == INVALID_SOCKET) return false;
+
+	char leftover[256];
+	int leftoverLen = 0;
+	bool ok = ReadHttpHeaders(s, leftover, sizeof(leftover), &leftoverLen);
+	closesocket(s);
+	return ok;
+}
+
+bool n02_replays_live_state_ready(const char* sessionId) {
+	char path[128];
+	_snprintf(path, sizeof(path), "/spectate/%s/state-request", sessionId);
+
+	SOCKET s = ConnectAndGet(N02_STREAM_DEFAULT_HOST, N02_STREAM_DEFAULT_PORT, path, N02_STREAM_DEFAULT_API_KEY, 3000);
+	if (s == INVALID_SOCKET) return false;
+
+	char body[256];
+	int bodyLen = 0;
+	if (!ReadHttpHeaders(s, body, sizeof(body) - 1, &bodyLen)) {
+		closesocket(s);
+		return false;
+	}
+	while (bodyLen < (int)sizeof(body) - 1) {
+		int r = recv(s, body + bodyLen, sizeof(body) - 1 - bodyLen, 0);
+		if (r <= 0) break;
+		bodyLen += r;
+	}
+	closesocket(s);
+	body[bodyLen] = 0;
+
+	// {"pending": false} means the host already serviced the request (or none
+	// was ever pending) - either way, whatever's at /state right now is fresh.
+	return strstr(body, "\"pending\": false") != NULL || strstr(body, "\"pending\":false") != NULL;
+}
+
+void* n02_replays_download_live_state(const char* sessionId, int* outFrameIndex, int* outByteOffset, int* outSize) {
+	if (outFrameIndex) *outFrameIndex = 0;
+	if (outByteOffset) *outByteOffset = 0;
+	if (outSize) *outSize = 0;
+
+	char path[128];
+	_snprintf(path, sizeof(path), "/spectate/%s/state", sessionId);
+
+	SOCKET s = ConnectAndGet(N02_STREAM_DEFAULT_HOST, N02_STREAM_DEFAULT_PORT, path, N02_STREAM_DEFAULT_API_KEY, 5000);
+	if (s == INVALID_SOCKET) return NULL;
+
+	char leftover[8192];
+	int leftoverLen = 0;
+	if (!ReadHttpHeaders(s, leftover, sizeof(leftover), &leftoverLen)) {
+		closesocket(s);
+		return NULL;
+	}
+
+	int cap = 256 * 1024;
+	int len = 0;
+	char* buf = (char*)malloc(cap);
+	if (buf == NULL) {
+		closesocket(s);
+		return NULL;
+	}
+
+	if (leftoverLen > 0) {
+		memcpy(buf, leftover, leftoverLen);
+		len = leftoverLen;
+	}
+
+	char chunk[64 * 1024];
+	for (;;) {
+		int r = recv(s, chunk, sizeof(chunk), 0);
+		if (r <= 0) break;
+		if (len + r > cap) {
+			int newCap = cap * 2;
+			while (newCap < len + r) newCap *= 2;
+			if (newCap > N02_REPLAYS_STATE_MAX_BYTES + 2 * (int)sizeof(int)) {
+				closesocket(s);
+				free(buf);
+				return NULL;
+			}
+			char* grown = (char*)realloc(buf, newCap);
+			if (grown == NULL) {
+				closesocket(s);
+				free(buf);
+				return NULL;
+			}
+			buf = grown;
+			cap = newCap;
+		}
+		memcpy(buf + len, chunk, r);
+		len += r;
+	}
+	closesocket(s);
+
+	if (len < 2 * (int)sizeof(int)) {
+		free(buf);
+		return NULL;
+	}
+
+	int frameIndex, byteOffset;
+	memcpy(&frameIndex, buf, sizeof(frameIndex));
+	memcpy(&byteOffset, buf + sizeof(int), sizeof(byteOffset));
+	int stateSize = len - 2 * (int)sizeof(int);
+
+	char* state = (char*)malloc(stateSize > 0 ? stateSize : 1);
+	if (state == NULL) {
+		free(buf);
+		return NULL;
+	}
+	memcpy(state, buf + 2 * sizeof(int), stateSize);
+	free(buf);
+
+	if (outFrameIndex) *outFrameIndex = frameIndex;
+	if (outByteOffset) *outByteOffset = byteOffset;
+	if (outSize) *outSize = stateSize;
+	return state;
+}

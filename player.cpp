@@ -22,6 +22,8 @@ static bool player_was_dropped[16] = {};
 static bool player_watch_mode = false;
 static char g_pending_watch_session[64] = { 0 };
 static char g_pending_watch_room[128] = { 0 };
+static char g_watch_player_names[4][32] = {};
+void (*player_watch_ended_callback)() = NULL;
 
 // "Replays Online" checkbox state - when checked, the Records list shows
 // N02ReplayEntry entries fetched from the community server instead of local
@@ -72,29 +74,100 @@ public:
 
 extern HWND RecordsListDlg; // defined below; used by player_watch_begin()'s error MessageBox
 
+// --- Watch Live rewind support (bounded retention window) ---
+// Kaillera controller data is tiny (a few bytes/frame/player), so retaining
+// a generous window of already-consumed bytes - instead of discarding it the
+// instant it's consumed, as PlayBackBuffer_Append() did before - costs very
+// little memory even over a long spectate session, and is what lets the
+// on-screen toolbar's Rewind jump backward during Watch Live the same way it
+// already does for static Playback (see player_watch_seek_to_frame() below;
+// mirrors krec_reader::seek_to_frame()'s own technique of resetting the read
+// position and re-walking forward). Bounded by count+frame-gap rather than
+// wall-clock time - approximates "last ~10-15 minutes" for a typical match
+// without needing a clock.
+#define WATCH_RETAIN_MAX_BYTES (16 * 1024 * 1024)
+#define WATCH_SNAPSHOT_COUNT 100
+#define WATCH_SNAPSHOT_MIN_FRAME_GAP 600 // ~10s at 60fps; 100 slots -> ~16-17 min of history
+
+typedef struct {
+	int frame_index; // g_watch_frames_consumed at the time this was recorded
+	int offset;       // byte offset from PlayBackBuffer.buffer
+} WatchSnapshot;
+
+static WatchSnapshot g_watch_snapshots[WATCH_SNAPSHOT_COUNT];
+static int g_watch_snapshot_count = 0;
+static int g_watch_frames_consumed = 0;
+
+static void WatchSnapshotReset() {
+	g_watch_snapshot_count = 0;
+	g_watch_frames_consumed = 0;
+}
+
+// Called after appending a freshly-pulled chunk - cheap, and frequent enough
+// (once per refill) for reasonably fine-grained rewind without any extra
+// timer/bookkeeping elsewhere. No-ops unless enough frames have elapsed
+// since the last recorded snapshot (see WATCH_SNAPSHOT_MIN_FRAME_GAP).
+static void WatchSnapshotRecord() {
+	if (g_watch_snapshot_count > 0 &&
+		g_watch_frames_consumed - g_watch_snapshots[g_watch_snapshot_count - 1].frame_index < WATCH_SNAPSHOT_MIN_FRAME_GAP)
+		return;
+
+	if (g_watch_snapshot_count == WATCH_SNAPSHOT_COUNT) {
+		memmove(&g_watch_snapshots[0], &g_watch_snapshots[1], sizeof(WatchSnapshot) * (WATCH_SNAPSHOT_COUNT - 1));
+		g_watch_snapshot_count--;
+	}
+	WatchSnapshot* slot = &g_watch_snapshots[g_watch_snapshot_count++];
+	slot->frame_index = g_watch_frames_consumed;
+	slot->offset = (int)(PlayBackBuffer.ptr - PlayBackBuffer.buffer);
+}
+
 // Appends freshly-pulled bytes for watch mode's ever-growing playback - this
 // is how watch mode keeps the same load_bytes()/load_short()/load_str()
 // parsing player_MPV() already uses for static .krec playback working
 // unchanged against a buffer that keeps growing during a live game.
 //
-// Drops everything already consumed (before ptr) instead of keeping it
-// around: player_MPV() only calls this once the buffer is nearly drained
-// (ptr within 10 bytes of end - see its refill check), so the unconsumed
-// tail carried forward here is always tiny, while the discarded prefix is
-// every byte watched so far - unbounded over a long live session otherwise.
+// Retains up to WATCH_RETAIN_MAX_BYTES of already-consumed history (before
+// ptr) in addition to the always-tiny unconsumed tail, so
+// player_watch_seek_to_frame() below has somewhere to rewind into - only
+// bytes older than that window get permanently dropped.
 static void PlayBackBuffer_Append(const char* data, int len) {
 	if (len <= 0) return;
 	int unconsumed = (int)(PlayBackBuffer.end - PlayBackBuffer.ptr);
 	if (unconsumed < 0) unconsumed = 0;
-	char* nb = (char*)malloc(unconsumed + len);
+
+	int consumed_history = (int)(PlayBackBuffer.ptr - PlayBackBuffer.buffer);
+	if (consumed_history < 0) consumed_history = 0;
+	int retain = min(consumed_history, WATCH_RETAIN_MAX_BYTES);
+	int dropped = consumed_history - retain; // permanently discarded this call, if any
+
+	int total = retain + unconsumed + len;
+	char* nb = (char*)malloc(total);
 	if (nb == NULL) return; // OOM: chunk dropped, next refill attempt tries again
+	if (retain > 0)
+		memcpy(nb, PlayBackBuffer.ptr - retain, retain);
 	if (unconsumed > 0)
-		memcpy(nb, PlayBackBuffer.ptr, unconsumed);
-	memcpy(nb + unconsumed, data, len);
+		memcpy(nb + retain, PlayBackBuffer.ptr, unconsumed);
+	memcpy(nb + retain + unconsumed, data, len);
 	free(PlayBackBuffer.buffer);
 	PlayBackBuffer.buffer = nb;
-	PlayBackBuffer.ptr = nb;
-	PlayBackBuffer.end = nb + unconsumed + len;
+	PlayBackBuffer.ptr = nb + retain;
+	PlayBackBuffer.end = nb + total;
+
+	// Snapshot offsets are relative to `buffer` - shift them to match, and
+	// drop any whose target byte just got permanently discarded.
+	if (dropped > 0) {
+		int w = 0;
+		for (int i = 0; i < g_watch_snapshot_count; i++) {
+			if (g_watch_snapshots[i].offset >= dropped) {
+				g_watch_snapshots[i].offset -= dropped;
+				if (w != i) g_watch_snapshots[w] = g_watch_snapshots[i];
+				w++;
+			}
+		}
+		g_watch_snapshot_count = w;
+	}
+
+	WatchSnapshotRecord();
 }
 
 // Called from player_MPV() when watch mode's buffer has run dry. Blocks (in
@@ -121,8 +194,10 @@ void player_request_watch(const char* sessionId, const char* roomName) {
 // n02_stream.h), then starts the same KSSDFA_START_GAME sequence player_play()
 // uses for a static .krec file. Unlike player_play(), there's no local file
 // and no "emulator mismatch" prompt - the spectator isn't required to run
-// the same emulator build as the host.
-static void player_watch_begin(const char* sessionId, const char* roomName) {
+// the same emulator build as the host. Public (see player.h) - callable
+// directly from any active module, not just from player_GUI() picking up a
+// player_request_watch() request.
+bool player_watch_begin(const char* sessionId, const char* roomName) {
 	n02_TRACE();
 	if (player_playing) player_EndGame();
 
@@ -148,7 +223,7 @@ static void player_watch_begin(const char* sessionId, const char* roomName) {
 		char msg[256];
 		wsprintf(msg, "Timed out waiting for the \"%s\" stream to start.", roomName);
 		MessageBox(RecordsListDlg, msg, "Error", MB_OK | MB_ICONSTOP);
-		return;
+		return false;
 	}
 
 	PlayBackBuffer.buffer = (char*)malloc(400);
@@ -168,7 +243,17 @@ static void player_watch_begin(const char* sessionId, const char* roomName) {
 	// watch mode so a real player 1 dropping doesn't end the spectator's feed.
 	playerno = 1;
 
+	// recording_player_names (see kailleraclient.cpp's recording writer):
+	// 4x32 bytes right after numplayers, i.e. header offset 272.
+	memset(g_watch_player_names, 0, sizeof(g_watch_player_names));
+	PlayBackBuffer.ptr = PlayBackBuffer.buffer + 272;
+	for (int i = 0; i < 4; i++)
+		PlayBackBuffer.load_str(g_watch_player_names[i], sizeof(g_watch_player_names[i]));
+
 	PlayBackBuffer.ptr = PlayBackBuffer.buffer + 400;
+
+	WatchSnapshotReset();
+	WatchSnapshotRecord(); // frame-0 baseline, so rewinding works even before the first refill
 
 	player_watch_mode = true;
 	player_playing = true;
@@ -176,6 +261,43 @@ static void player_watch_begin(const char* sessionId, const char* roomName) {
 
 	KSSDFA.input = KSSDFA_START_GAME;
 	n02_TRACE();
+	return true;
+}
+
+bool player_is_watching() {
+	return player_watch_mode;
+}
+
+void player_watch_get_player_names(char out[4][32]) {
+	memcpy(out, g_watch_player_names, sizeof(g_watch_player_names));
+}
+
+// "Ir direto para o Ao Vivo!" - called right after the frontend applies a
+// state downloaded via n02_watch_download_state() (core_unserialize()).
+// Unlike WatchSeekToFrame() above (which rewinds *within* what's already
+// retained locally), this jumps *forward* past whatever this spectator had
+// buffered - the downloaded state already reflects everything up to
+// byteOffset in the host's stream, so anything we had buffered before that
+// point is now stale and would double-apply input if fed to the emulator.
+// Discards the buffer entirely and restarts fetching from byteOffset (the
+// host's own stream position when it captured the state - see
+// n02_stream_upload_state()'s doc comment), rather than trying to reconcile
+// with whatever this spectator's own reading had fallen behind to.
+void player_watch_jump_to_live(int frameIndex, int byteOffset) {
+	if (!player_playing || !player_watch_mode)
+		return;
+
+	if (PlayBackBuffer.buffer != NULL) {
+		free(PlayBackBuffer.buffer);
+		PlayBackBuffer.buffer = NULL;
+	}
+	PlayBackBuffer.ptr = NULL;
+	PlayBackBuffer.end = NULL;
+
+	WatchSnapshotReset(); // also zeroes g_watch_frames_consumed - set it after
+	g_watch_frames_consumed = frameIndex;
+
+	n02_watch_restart_from_offset(byteOffset);
 }
 
 //..............................................
@@ -829,6 +951,7 @@ int player_MPV(void*values,int size){
 				}
 				if (l > 0)
 					PlayBackBuffer.load_bytes((char*)values, l);//access error
+				g_watch_frames_consumed++;
 				return l;
 			}
 			if (b==20) {
@@ -901,20 +1024,77 @@ int player_MPV(void*values,int size){
 		return -1;
 	}
 }
+// Rewinds within the retained window (WatchSnapshotRecord() above) - resets
+// to the latest snapshot at or before `frame` (clamping to the oldest one
+// retained if `frame` predates everything kept) and re-walks forward
+// consuming records exactly like player_MPV()'s own watch-mode switch,
+// mirroring krec_reader::seek_to_frame()'s technique. No-op if nothing has
+// been snapshotted yet (e.g. called before the first refill).
+static void WatchSeekToFrame(int frame) {
+	if (g_watch_snapshot_count == 0)
+		return;
+
+	int best = 0;
+	for (int i = 0; i < g_watch_snapshot_count; i++) {
+		if (g_watch_snapshots[i].frame_index <= frame)
+			best = i;
+		else
+			break;
+	}
+
+	PlayBackBuffer.ptr = PlayBackBuffer.buffer + g_watch_snapshots[best].offset;
+	g_watch_frames_consumed = g_watch_snapshots[best].frame_index;
+
+	char scratch[256];
+	while (g_watch_frames_consumed < frame && PlayBackBuffer.ptr + 10 < PlayBackBuffer.end) {
+		char b = PlayBackBuffer.load_char();
+		if (b == 0x12) {
+			int remaining = PlayBackBuffer.load_short();
+			if (remaining < 0) break;
+			while (remaining > 0) { // always consume the record's full length, even if > sizeof(scratch) - see the truncation-bug notes elsewhere in this file
+				int chunk = min(remaining, (int)sizeof(scratch));
+				PlayBackBuffer.load_bytes(scratch, chunk);
+				remaining -= chunk;
+			}
+			g_watch_frames_consumed++;
+		} else if (b == 20) {
+			char nick[100];
+			PlayBackBuffer.load_str(nick, 100);
+			PlayBackBuffer.load_int();
+		} else if (b == 8) {
+			char nick[100], msg[500];
+			PlayBackBuffer.load_str(nick, 100);
+			PlayBackBuffer.load_str(msg, 500);
+		} else break;
+	}
+}
+
 int player_get_frame_index() {
-	if (!player_playing || player_watch_mode)
+	if (!player_playing)
 		return -1;
+	if (player_watch_mode)
+		return g_watch_frames_consumed;
 	return g_playback_reader.frame_index();
 }
 
 void player_seek_to_frame(int frame) {
-	if (!player_playing || player_watch_mode)
+	if (!player_playing)
 		return;
+	if (player_watch_mode) {
+		WatchSeekToFrame(frame);
+		return;
+	}
 	g_playback_reader.seek_to_frame(frame);
 }
 
 int player_get_total_frames() {
-	if (!player_playing || player_watch_mode)
+	if (!player_playing)
+		return -1;
+	// No fixed total during Watch Live - it's an ongoing live stream, not a
+	// file with a known end. -1 same as "not in a seekable mode at all";
+	// the frontend's toolbar treats that as "hide/skip the progress bar"
+	// (see retroarch-k3-ffw's PlaybackToolbarPaint()).
+	if (player_watch_mode)
 		return -1;
 	return g_playback_total_frames;
 }
@@ -925,6 +1105,8 @@ void player_EndGame(){
 	if (player_watch_mode) {
 		n02_watch_stop();
 		player_watch_mode = false;
+		if (player_watch_ended_callback)
+			player_watch_ended_callback();
 	}
 	// Notify emulator of any players not already dropped by the recording
 	for (int i = numplayers; i >= 1; i--) {
