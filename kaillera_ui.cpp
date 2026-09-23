@@ -1372,11 +1372,12 @@ void kailelra_sdlg_join_selected_game(){
 static char g_own_status_before_watch[32] = { 0 };
 static bool g_own_status_saved = false;
 
-// "<player1> x <player2>..." dos jogadores da partida sendo assistida -
-// calculado uma vez ao entrar (kaillera_sdlg_watch_selected_game()) e
-// reaproveitado na mensagem de saida (RestoreOwnStatusAfterWatch()), ja que
-// nesse ponto o watch em si ja foi encerrado.
-static char g_watch_matchup[160] = { 0 };
+// Nome do jogo e do primeiro jogador da partida sendo assistida - guardados
+// uma vez ao entrar (kaillera_sdlg_watch_selected_game()) e reaproveitados
+// na mensagem de saida (RestoreOwnStatusAfterWatch()), ja que nesse ponto o
+// watch em si ja foi encerrado.
+static char g_watch_game_name[128] = { 0 };
+static char g_watch_first_player[32] = { 0 };
 
 static int FindOwnUserRow() {
 	char myName[32];
@@ -1402,7 +1403,7 @@ static void RestoreOwnStatusAfterWatch() {
 	char myName[32];
 	kaillera_get_username(myName, sizeof(myName));
 	char msg[300];
-	wsprintf(msg, "%s nao quer mais ver %s!", myName, g_watch_matchup);
+	wsprintf(msg, "%s nao quer mais ver %s de %s!", myName, g_watch_game_name, g_watch_first_player);
 	kaillera_chat_send(msg);
 }
 
@@ -1463,29 +1464,18 @@ void kaillera_sdlg_watch_selected_game(HWND handle){
 	// mechanism, since the Status column override above is local-only) -
 	// player names come from the watched stream's own KRC1 header, not the
 	// lobby room list (which only has an aggregate "users" count, not names).
+	strncpy(g_watch_game_name, room, sizeof(g_watch_game_name) - 1);
+	g_watch_game_name[sizeof(g_watch_game_name) - 1] = 0;
+
 	char players[4][32];
 	player_watch_get_player_names(players);
-	// Up to 4 names of 31 chars each plus " x " separators - size generously
-	// and build with bounded _snprintf appends rather than strcat, since a
-	// fixed 80-byte buffer would overflow once all 4 slots can be non-empty.
-	int matchupLen = 0;
-	g_watch_matchup[0] = 0;
-	for (int pi = 0; pi < 4; pi++) {
-		if (players[pi][0] == 0)
-			continue;
-		int written = _snprintf(g_watch_matchup + matchupLen, sizeof(g_watch_matchup) - matchupLen, "%s%s", matchupLen != 0 ? " x " : "", players[pi]);
-		if (written > 0)
-			matchupLen += written;
-	}
-	if (matchupLen == 0) {
-		strncpy(g_watch_matchup, room, sizeof(g_watch_matchup) - 1);
-		g_watch_matchup[sizeof(g_watch_matchup) - 1] = 0;
-	}
+	strncpy(g_watch_first_player, players[0], sizeof(g_watch_first_player) - 1);
+	g_watch_first_player[sizeof(g_watch_first_player) - 1] = 0;
 
 	char myName[32];
 	kaillera_get_username(myName, sizeof(myName));
 	char msg[300];
-	wsprintf(msg, "%s esta acompanhando ao vivo %s!", myName, g_watch_matchup);
+	wsprintf(msg, "%s esta acompanhando ao vivo %s de %s!", myName, g_watch_game_name, g_watch_first_player);
 	kaillera_chat_send(msg);
 }
 
