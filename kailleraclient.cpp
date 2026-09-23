@@ -709,6 +709,20 @@ extern "C" {
 		return kaillera_retryconnect_download_state(outBuffer, bufferCap, outFrameIndex);
 	}
 
+	/* Host-only local rewind support (toolbar "Rebobinar" button) - see
+	   kcore/kaillera_retryconnect.h's own doc comments for the exact 3-step
+	   flow these are meant to be used in (restore a local checkpoint, seek,
+	   then re-use kailleraRetryConnectUploadState() above to broadcast it). */
+	int KAILLERA_DLLEXP kailleraRetryConnectGetFrameIndex(){
+		return kaillera_retryconnect_get_frame_index();
+	}
+	int KAILLERA_DLLEXP kailleraRetryConnectGetTotalFrames(){
+		return kaillera_retryconnect_get_total_frames();
+	}
+	void KAILLERA_DLLEXP kailleraRetryConnectSeekLocal(int frame_index){
+		kaillera_retryconnect_seek_local(frame_index);
+	}
+
 	/* Checkpoint-based rewind (solo "Reproducao de Replay", not retry-connect
 	   or Watch Live) - see player.h. -1 outside static local-file playback. */
 	int KAILLERA_DLLEXP kailleraPlaybackGetFrameIndex(){

@@ -45,6 +45,13 @@ extern "C" {
 		void (__stdcall *chatReceivedCallback)(char *nick, char *text);
 		void (__stdcall *clientDroppedCallback)(char *nick, int playernb);
 		void (__stdcall *moreInfosCallback)(char *gamename);
+
+		// Not part of the upstream 0.84 API - retroarch-k3-ffw addition (see
+		// its own kailleraclient.h for the full doc comment). Must stay last
+		// in this struct, matching the SAME position there - there is no
+		// shared/versioned header between the two repos, this struct layout
+		// IS the actual cross-DLL ABI.
+		int (__stdcall *findOrBrowseGameCallback)(char *wantedGame);
 	}kailleraInfos;
 	
 	extern kailleraInfos infos;

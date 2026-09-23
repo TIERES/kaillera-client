@@ -16,6 +16,7 @@ int p2p_GetTime();
 static bool g_active = false;
 static char g_session_id[64];
 static krec_reader g_reader;
+static int g_total_frames = -1; // cached once at open - see kaillera_retryconnect_get_total_frames()
 
 // Last input frame actually served to the emulator - safety net for
 // kaillera_retryconnect_modify_play_values() if the local recording runs dry
@@ -77,6 +78,7 @@ static void ResetSession() {
 	g_reader.close();
 	g_last_frame_len = 0;
 	g_pending_action = 0;
+	g_total_frames = -1;
 }
 
 bool kaillera_retryconnect_host_select(const char* session_id, const char* when) {
@@ -95,6 +97,7 @@ bool kaillera_retryconnect_host_select(const char* session_id, const char* when)
 	g_active = true;
 	g_last_frame_len = 0;
 	g_pending_action = 0;
+	g_total_frames = g_reader.count_total_frames();
 
 	unsigned short len = (unsigned short)strlen(session_id);
 	kaillera_retryconnect_send_select(session_id, len);
@@ -143,6 +146,7 @@ void kaillera_retryconnect_select_callback(char* fromUser, char* session_id) {
 	g_active = true;
 	g_last_frame_len = 0;
 	g_pending_action = 0;
+	g_total_frames = g_reader.count_total_frames();
 
 	// No local debug/announce line here - the host's own deferred
 	// "CONTINUANDO PARTIDA: ..." (kaillera_retryconnect_host_select() above)
@@ -283,4 +287,22 @@ int kaillera_retryconnect_download_state(void* outBuffer, int bufferCap, int* ou
 	g_reader.seek_to_frame(frameIndex);
 	if (out_frame_index) *out_frame_index = frameIndex;
 	return n;
+}
+
+int kaillera_retryconnect_get_frame_index() {
+	if (!g_active)
+		return -1;
+	return g_reader.frame_index();
+}
+
+int kaillera_retryconnect_get_total_frames() {
+	if (!g_active)
+		return -1;
+	return g_total_frames;
+}
+
+void kaillera_retryconnect_seek_local(int frame_index) {
+	if (!kaillera_retryconnect_can_control())
+		return;
+	g_reader.seek_to_frame(frame_index);
 }

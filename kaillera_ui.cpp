@@ -1327,22 +1327,38 @@ void kailelra_sdlg_join_selected_game(){
 			kaillera_join_game(id);
 			return;
 		}
+
+		bool foundInList = false;
 		char * cx = gamelist;
 		while (*cx != 0) {
-				if (strcmp(cx, temp) == 0) {
-					strncpy(GAME, temp, sizeof(GAME) - 1);
-					GAME[sizeof(GAME) - 1] = 0;
-					kaillera_sdlg_gameslv.CheckRow(temp, 128, 2, sel);  // Emulator column
-					if (strcmp(temp, APP) != 0) {
-					if (MessageBox(kaillera_sdlg, "Emulator/version mismatch and the game may desync.\nDo you want to continue?", "Error", MB_YESNO | MB_ICONEXCLAMATION) != IDYES)
-						return;
-				}
-				kaillera_join_game(id);
-				return;
+			if (strcmp(cx, temp) == 0) {
+				foundInList = true;
+				break;
 			}
 			cx += strlen(cx) + 1;
 		}
-		kaillera_error_callback("The rom '%s' is not in your list.", temp);
+
+		if (!foundInList) {
+			// Not in our local list - try to locate/pick it before giving up
+			// (searches folders already in the user's own content history,
+			// then falls back to a native file-pick dialog - see
+			// kailleraFindOrBrowseGame(), retroarch-k3's kaillera.c). NULL
+			// check covers an older retroarch-k3-ffw build that predates
+			// this export.
+			if (infos.findOrBrowseGameCallback == NULL || !infos.findOrBrowseGameCallback(temp)) {
+				kaillera_error_callback("The rom '%s' is not in your list.", temp);
+				return;
+			}
+		}
+
+		strncpy(GAME, temp, sizeof(GAME) - 1);
+		GAME[sizeof(GAME) - 1] = 0;
+		kaillera_sdlg_gameslv.CheckRow(temp, 128, 2, sel);  // Emulator column
+		if (strcmp(temp, APP) != 0) {
+			if (MessageBox(kaillera_sdlg, "Emulator/version mismatch and the game may desync.\nDo you want to continue?", "Error", MB_YESNO | MB_ICONEXCLAMATION) != IDYES)
+				return;
+		}
+		kaillera_join_game(id);
 	}
 }
 
@@ -1355,6 +1371,19 @@ void kailelra_sdlg_join_selected_game(){
 // player_watch_ended_callback below) once watching ends.
 static char g_own_status_before_watch[32] = { 0 };
 static bool g_own_status_saved = false;
+
+// "Sair do Acompanhar ao vivo!" - bloqueia um novo "Assistir" por um
+// tempo, evitando que alguém fique entrando e saindo repetidamente e gere
+// flood de conexoes/lookups contra o servidor comunitario (que pode acabar
+// bloqueando o IP). 0 = sem bloqueio ativo.
+static DWORD g_watch_cooldown_until = 0;
+#define WATCH_REJOIN_COOLDOWN_MS 60000
+
+// "<player1> x <player2>..." dos jogadores da partida sendo assistida -
+// calculado uma vez ao entrar (kaillera_sdlg_watch_selected_game()) e
+// reaproveitado na mensagem de saida (RestoreOwnStatusAfterWatch()), ja que
+// nesse ponto o watch em si ja foi encerrado.
+static char g_watch_matchup[160] = { 0 };
 
 static int FindOwnUserRow() {
 	char myName[32];
@@ -1376,6 +1405,16 @@ static void RestoreOwnStatusAfterWatch() {
 	if (row >= 0)
 		kaillera_sdlg_userslv.FillRow(g_own_status_before_watch, 3, row);
 	g_own_status_saved = false;
+
+	char myName[32];
+	kaillera_get_username(myName, sizeof(myName));
+	char msg[300];
+	wsprintf(msg, "%s nao quer mais ver %s!", myName, g_watch_matchup);
+	kaillera_chat_send(msg);
+
+	g_watch_cooldown_until = GetTickCount() + WATCH_REJOIN_COOLDOWN_MS;
+	if (g_watch_cooldown_until == 0)
+		g_watch_cooldown_until = 1; // 0 e o sentinela "sem bloqueio ativo"
 }
 
 // "Watch" on a lobby room: looks up (blocking, brief) whether that room is
@@ -1392,13 +1431,35 @@ void kaillera_sdlg_watch_selected_game(HWND handle){
 	if (sel < 0 || sel >= kaillera_sdlg_gameslv.RowsCount() || inGame)
 		return;
 
+	if (g_watch_cooldown_until != 0 && (LONG)(GetTickCount() - g_watch_cooldown_until) < 0) {
+		int remaining = (int)((g_watch_cooldown_until - GetTickCount() + 999) / 1000);
+		kaillera_error_callback("Aguarde %d segundo(s) antes de assistir ao vivo novamente.", remaining);
+		return;
+	}
+
 	char room[128];
 	kaillera_sdlg_gameslv.CheckRow(room, 128, 0, sel);  // Game column (== room name)
 	char owner[128];
 	kaillera_sdlg_gameslv.CheckRow(owner, 128, 3, sel);  // Owner column - disambiguates same-named rooms
 
+	// The host's stream sender only POSTs its first batch (the one carrying
+	// the room/game name the server needs to resolve this lookup) after its
+	// own N02_STREAM_BATCH_MS tick, so a spectator clicking "Assistir ao
+	// vivo!" right as the match starts can lose this race against a single
+	// lookup attempt. Measured in practice (cross-machine over LAN) this can
+	// take several seconds, not just one batch interval - retry for up to
+	// ~8s before giving up, instead of making the user re-click. This runs
+	// on the lobby's own thread (like the blocking lookup call itself), not
+	// RetroArch's main thread, so a wait here is safe; it only delays the
+	// true-negative case (host never enabled "Stream ao vivo!" at all).
 	char sessionId[64];
-	if (!n02_watch_lookup_session(room, owner, sessionId, sizeof(sessionId))) {
+	bool found = false;
+	for (int attempt = 0; attempt < 20 && !found; attempt++) {
+		if (attempt > 0)
+			Sleep(400);
+		found = n02_watch_lookup_session(room, owner, sessionId, sizeof(sessionId));
+	}
+	if (!found) {
 		kaillera_error_callback("No live stream found for room '%s'.\nThe host may not have \"Stream ao vivo!\" enabled, or it hasn't started sending data yet - try again in a moment.", room);
 		return;
 	}
@@ -1419,20 +1480,29 @@ void kaillera_sdlg_watch_selected_game(HWND handle){
 	// mechanism, since the Status column override above is local-only) -
 	// player names come from the watched stream's own KRC1 header, not the
 	// lobby room list (which only has an aggregate "users" count, not names).
-	char myName[32];
-	kaillera_get_username(myName, sizeof(myName));
 	char players[4][32];
 	player_watch_get_player_names(players);
-	char matchup[80];
-	if (players[0][0] != 0 && players[1][0] != 0)
-		wsprintf(matchup, "%s x %s", players[0], players[1]);
-	else if (players[0][0] != 0)
-		wsprintf(matchup, "%s", players[0]);
-	else
-		wsprintf(matchup, "%s", room);
+	// Up to 4 names of 31 chars each plus " x " separators - size generously
+	// and build with bounded _snprintf appends rather than strcat, since a
+	// fixed 80-byte buffer would overflow once all 4 slots can be non-empty.
+	int matchupLen = 0;
+	g_watch_matchup[0] = 0;
+	for (int pi = 0; pi < 4; pi++) {
+		if (players[pi][0] == 0)
+			continue;
+		int written = _snprintf(g_watch_matchup + matchupLen, sizeof(g_watch_matchup) - matchupLen, "%s%s", matchupLen != 0 ? " x " : "", players[pi]);
+		if (written > 0)
+			matchupLen += written;
+	}
+	if (matchupLen == 0) {
+		strncpy(g_watch_matchup, room, sizeof(g_watch_matchup) - 1);
+		g_watch_matchup[sizeof(g_watch_matchup) - 1] = 0;
+	}
 
+	char myName[32];
+	kaillera_get_username(myName, sizeof(myName));
 	char msg[300];
-	wsprintf(msg, "%s esta acompanhando ao vivo %s! Acompanhe voce tambem, baixe: https://we2002.wgs.dev.br", myName, matchup);
+	wsprintf(msg, "%s esta acompanhando ao vivo %s!", myName, g_watch_matchup);
 	kaillera_chat_send(msg);
 }
 
@@ -1833,8 +1903,27 @@ static void RetryConnect_PopulateList(HWND hDlg) {
 	}
 }
 
+// Shared by the IDOK handler and the NM_DBLCLK handler below - same pattern
+// already used elsewhere for a list+OK-button dialog (e.g.
+// kailelra_sdlg_join_selected_game(), RecordsList_PlaySelected()).
+static void RetryConnect_TrySelectHighlighted(HWND hDlg) {
+	int sel = g_retryconnect_list.SelectedRow();
+	if (sel < 0 || sel >= g_retryconnect_list.RowsCount()) {
+		MessageBox(hDlg, "Selecione um replay na lista.", "Continuar", MB_OK | MB_ICONEXCLAMATION);
+		return;
+	}
+	int row = (int)g_retryconnect_list.RowNo(sel);
+	if (row < 0 || row >= g_retryconnect_filtered_count)
+		return;
+	N02ReplayEntry* e = &g_retryconnect_entries[g_retryconnect_filtered[row]];
+	if (kaillera_retryconnect_host_select(e->session_id, e->when))
+		EndDialog(hDlg, 1);
+	// On failure, kaillera_retryconnect_host_select() already raised an
+	// error via kaillera_error_callback - leave the dialog open so the host
+	// can try a different replay.
+}
+
 static INT_PTR CALLBACK RetryConnectSelectDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-	(void)lParam;
 	switch (uMsg) {
 	case WM_INITDIALOG:
 		{
@@ -1848,26 +1937,17 @@ static INT_PTR CALLBACK RetryConnectSelectDlgProc(HWND hDlg, UINT uMsg, WPARAM w
 			RetryConnect_PopulateList(hDlg);
 			return (INT_PTR)TRUE;
 		}
+	case WM_NOTIFY:
+		if (((LPNMHDR)lParam)->code == NM_DBLCLK && ((LPNMHDR)lParam)->hwndFrom == g_retryconnect_list.handle) {
+			RetryConnect_TrySelectHighlighted(hDlg);
+			return (INT_PTR)TRUE;
+		}
+		break;
 	case WM_COMMAND:
 		switch (LOWORD(wParam)) {
 		case IDOK:
-			{
-				int sel = g_retryconnect_list.SelectedRow();
-				if (sel < 0 || sel >= g_retryconnect_list.RowsCount()) {
-					MessageBox(hDlg, "Selecione um replay na lista.", "Continuar", MB_OK | MB_ICONEXCLAMATION);
-					return (INT_PTR)TRUE;
-				}
-				int row = (int)g_retryconnect_list.RowNo(sel);
-				if (row < 0 || row >= g_retryconnect_filtered_count)
-					return (INT_PTR)TRUE;
-				N02ReplayEntry* e = &g_retryconnect_entries[g_retryconnect_filtered[row]];
-				if (kaillera_retryconnect_host_select(e->session_id, e->when))
-					EndDialog(hDlg, 1);
-				// On failure, kaillera_retryconnect_host_select() already
-				// raised an error via kaillera_error_callback - leave the
-				// dialog open so the host can try a different replay.
-				return (INT_PTR)TRUE;
-			}
+			RetryConnect_TrySelectHighlighted(hDlg);
+			return (INT_PTR)TRUE;
 		case IDCANCEL:
 			EndDialog(hDlg, 0);
 			return (INT_PTR)TRUE;

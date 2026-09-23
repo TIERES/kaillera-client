@@ -118,3 +118,33 @@ void kaillera_retryconnect_upload_state(const void* data, int size);
 // number of bytes written to outBuffer (hand straight to core_unserialize()),
 // or -1 on any failure (network, no state uploaded yet, buffer too small).
 int kaillera_retryconnect_download_state(void* outBuffer, int bufferCap, int* out_frame_index);
+
+// Host-only local rewind support (toolbar "Rebobinar" button, retroarch-k3).
+// Unlike kaillera_retryconnect_download_state() above, these three never
+// touch the network by themselves - the frontend is expected to (1) restore
+// its own core state from a locally-kept checkpoint (a core_serialize() blob
+// it captured earlier at some prior frame - this file has no opinion on how
+// those are kept, that's the frontend's own checkpoint ring, mirroring the
+// one already built for solo "Reproducao de Replay"), (2) call
+// kaillera_retryconnect_seek_local() to re-anchor this reader to that exact
+// frame, then (3) call the existing kaillera_retryconnect_upload_state() with
+// that same checkpoint's bytes - which reads g_reader's now-updated position
+// as its frame_index and broadcasts RC_ACTION_STATE_READY exactly as a normal
+// Pause would, so every peer converges via the SAME already-working
+// ApplyRetryConnectStateReady() path with no peer-side changes needed.
+
+// Current position in the replay - for a caller-side progress bar and to
+// compute rewind targets relative to "right now". -1 if no session active.
+int kaillera_retryconnect_get_frame_index();
+
+// Total input-frame count of the replay being resumed - for a caller-side
+// progress bar. Cached once when the file is opened (kaillera_retryconnect_
+// host_select()/select_callback()), not recomputed per call. -1 if no
+// session active.
+int kaillera_retryconnect_get_total_frames();
+
+// Repositions g_reader to `frame_index` with no network I/O - see the big
+// comment above. Host-only (kaillera_retryconnect_can_control()); a peer's
+// own view is always authoritatively overwritten by the host's next
+// broadcast anyway, so peers have no legitimate reason to call this.
+void kaillera_retryconnect_seek_local(int frame_index);
