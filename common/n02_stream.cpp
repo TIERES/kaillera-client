@@ -100,6 +100,22 @@ static StreamRecord g_stream_queue[N02_STREAM_QUEUE_CAP];
 static int g_stream_q_head = 0; // next write index
 static int g_stream_q_count = 0;
 
+// Stream offset, in the server's own <session_id>.krec.part coordinates
+// (KRC1 header included - StreamThread always sends it first), right past
+// the last record handed to StreamEnqueue() - i.e. exactly where the *next*
+// record pushed will land once StreamThread gets it there. Advanced
+// synchronously by whoever pushes, which for frames is the emulator's own
+// thread (kailleraModifyPlayValues()) - so when that same thread reads it
+// right after a core_serialize(), every frame the state has already applied
+// is before this offset and every frame it hasn't is after it. That's what
+// makes "Ir direto para o Ao Vivo!" frame-exact - see n02_stream_upload_state().
+// Counting bytes already POSTed instead (what this used to do) lagged a
+// whole batch plus the POST itself behind, so a spectator re-applied a few
+// dozen inputs the state had already consumed and stayed shifted by that
+// many frames for good - a permanent desync, not a self-correcting one.
+// Protected by g_stream_lock.
+static int g_stream_bytes_enqueued = 0;
+
 static void StreamEnsureLock() {
 	if (!g_stream_lock_init) {
 		InitializeCriticalSection(&g_stream_lock);
@@ -115,8 +131,11 @@ static void StreamEnqueue(const char* bytes, int len) {
 	StreamEnsureLock();
 	EnterCriticalSection(&g_stream_lock);
 	int slot = (g_stream_q_head) % N02_STREAM_QUEUE_CAP;
+	if (g_stream_q_count == N02_STREAM_QUEUE_CAP)
+		g_stream_bytes_enqueued -= g_stream_queue[slot].len; // full - this slot is the oldest record, about to be dropped unsent
 	memcpy(g_stream_queue[slot].data, bytes, len);
 	g_stream_queue[slot].len = len;
+	g_stream_bytes_enqueued += len;
 	g_stream_q_head = (g_stream_q_head + 1) % N02_STREAM_QUEUE_CAP;
 	if (g_stream_q_count < N02_STREAM_QUEUE_CAP)
 		g_stream_q_count++;
@@ -167,25 +186,6 @@ static char g_session_id[64] = { 0 };
 static char g_session_owner[64] = { 0 }; // hosting user's name - see X-Owner-Name below
 static unsigned int g_session_sequence = 0;
 static char g_session_header[400];      // KRC1-style header, sent with sequence 0
-
-// Running total of bytes successfully POSTed to /spectate/ingest for the
-// current session - i.e. exactly how many bytes are on the server's own
-// <session_id>.krec.part file right now, which is what a spectator's
-// GET /spectate/stream/<id>?offset=N reads from. n02_stream_upload_state()
-// below pairs this with a core_serialize() taken at roughly the same moment,
-// so "Ir direto para o Ao Vivo!" (kaillera-client's Watch Live toolbar) knows
-// which stream offset to resume reading from after applying that state -
-// see n02_stream_check_state_requested()/n02_stream_upload_state().
-//
-// Not perfectly frame-exact: the state is captured on the emulator's own
-// thread the instant a request is noticed, while this counter only advances
-// after a batch is confirmed POSTed (up to N02_STREAM_BATCH_MS behind) - so
-// the state can reflect a few more frames than this offset accounts for,
-// meaning a spectator jumping to it may reprocess a handful of frames the
-// state already applied. Bounded to well under a second in practice, and
-// self-corrects the next frame - accepted for what this feature is for
-// (get a spectator roughly caught up right now, not a byte-perfect resume).
-static int g_session_bytes_sent = 0;
 
 static void BuildSessionHeader(const char* appName, const char* gameName, int playerno, int numplayers, char playerNames[4][32]) {
 	memset(g_session_header, 0, sizeof(g_session_header));
@@ -402,7 +402,6 @@ public:
 
 			if (HttpPostBytes(g_stream_host, g_stream_port, g_stream_path, g_stream_api_key, g_session_id, g_session_owner, g_session_sequence, pendingEnded, pendingPayload, pendingLen)) {
 				g_session_sequence++;
-				g_session_bytes_sent += pendingLen;
 				havePending = false;
 				if (pendingEnded) {
 					g_session_active = false;
@@ -530,8 +529,8 @@ static int HttpGetSimple(const char* host, int port, const char* path, const cha
 }
 
 // Simple blocking POST with a raw body (no multipart/form encoding) - used
-// both for the empty-body state-request POST and the state-upload POST.
-static bool HttpPostSimple(const char* host, int port, const char* path, const char* apiKey, const void* body, int bodyLen) {
+// for the state-upload POST.
+static bool HttpPostSimple(const char* host, int port, const char* path, const char* apiKey, const void* body, int bodyLen, int timeoutMs) {
 	if (host == NULL || host[0] == 0 || port <= 0)
 		return false;
 
@@ -561,7 +560,6 @@ static bool HttpPostSimple(const char* host, int port, const char* path, const c
 		server.sin_addr = g_resolved_addr;
 	}
 
-	int timeoutMs = 3000; // state uploads are bigger than a normal batch - a bit more slack
 	setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeoutMs, sizeof(timeoutMs));
 	setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeoutMs, sizeof(timeoutMs));
 
@@ -619,6 +617,106 @@ static bool HttpPostSimple(const char* host, int port, const char* path, const c
 	return true;
 }
 
+// Background thread doing all of this feature's host-side network I/O. Both
+// the pending-request poll and the (multi-MB) state upload used to run
+// synchronously inside the frontend's per-frame tick - a GET every few
+// seconds for the whole match, plus a full upload whenever a spectator
+// asked - each one freezing the emulator for the entire round trip, and in
+// Kaillera's lockstep every other player's game along with it. The
+// frontend-facing calls (n02_stream_check_state_requested()/
+// n02_stream_upload_state() below) now only ever flip these flags/hand off
+// this buffer, all under g_stream_lock.
+
+// Rate-limits the poll - hitting the server any faster would be pointless
+// spam, and a spectator's request just waits up to this long to be noticed.
+#define N02_STREAM_STATE_POLL_INTERVAL_MS 3000
+// Generous on purpose: a PCSX ReARMed state is several MB, and this no
+// longer holds up anyone's game while it waits.
+#define N02_STREAM_STATE_UPLOAD_TIMEOUT_MS 20000
+
+// Set by the first n02_stream_check_state_requested() call of a session -
+// StateThread doesn't poll at all for a frontend that never asks (any
+// emulator other than retroarch-k3), same as before this ran on its own
+// thread.
+static volatile bool g_state_frontend_polling = false;
+// StateThread saw the server's pending flag; the frontend hasn't picked it up yet.
+static volatile bool g_state_request_pending = false;
+// [frame_index:int32 LE][byte_offset:int32 LE][state bytes], handed off by
+// n02_stream_upload_state() for StateThread to POST. A newer one replaces
+// one not picked up yet - only the latest ever matters to a spectator.
+static char* g_state_upload_buf = NULL;
+static int g_state_upload_len = 0;
+
+class StateThread : public nThread {
+public:
+	volatile bool running;
+	volatile bool stop_requested;
+
+	void run() {
+		DWORD lastPoll = 0;
+
+		while (!stop_requested && g_session_active && !g_session_ended) {
+			Sleep(100);
+
+			EnterCriticalSection(&g_stream_lock);
+			char* upload = g_state_upload_buf;
+			int uploadLen = g_state_upload_len;
+			g_state_upload_buf = NULL;
+			g_state_upload_len = 0;
+			LeaveCriticalSection(&g_stream_lock);
+
+			if (upload != NULL) {
+				char path[128];
+				_snprintf(path, sizeof(path), "/spectate/%s/state", g_session_id);
+				if (!HttpPostSimple(g_stream_host, g_stream_port, path, g_stream_api_key, upload, uploadLen, N02_STREAM_STATE_UPLOAD_TIMEOUT_MS))
+					StatsAppendLine("stream: state upload failed (%d bytes)", uploadLen);
+				free(upload);
+				// The upload clears the server's pending flag - wait a full
+				// interval before asking again, or we'd re-see the request
+				// this one just serviced if the server hasn't committed yet.
+				// A failed upload leaves the flag set, so the next poll just
+				// triggers a fresh capture.
+				lastPoll = GetTickCount();
+				continue;
+			}
+
+			if (!g_state_frontend_polling || g_state_request_pending)
+				continue; // nobody to hand a request to, or the last one still hasn't been picked up
+
+			DWORD now = GetTickCount();
+			if (lastPoll != 0 && now - lastPoll < N02_STREAM_STATE_POLL_INTERVAL_MS)
+				continue;
+			lastPoll = now;
+
+			char path[128];
+			_snprintf(path, sizeof(path), "/spectate/%s/state-request", g_session_id);
+			char body[128];
+			int n = HttpGetSimple(g_stream_host, g_stream_port, path, g_stream_api_key, body, sizeof(body) - 1);
+			if (n <= 0)
+				continue;
+			body[n] = 0;
+			if (strstr(body, "\"pending\": true") != NULL || strstr(body, "\"pending\":true") != NULL) {
+				EnterCriticalSection(&g_stream_lock);
+				g_state_request_pending = true;
+				LeaveCriticalSection(&g_stream_lock);
+			}
+		}
+		running = false;
+	}
+} g_state_thread;
+
+static void StateThreadStop() {
+	if (g_state_thread.running) {
+		g_state_thread.stop_requested = true;
+		for (int i = 0; i < 20 && g_state_thread.running; i++)
+			Sleep(50);
+		if (g_state_thread.running) {
+			g_state_thread.destroy();
+			g_state_thread.running = false;
+		}
+	}
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // Public API
 ///////////////////////////////////////////////////////////////////////////////
@@ -629,14 +727,21 @@ void n02_stream_start_session(const char* appName, const char* gameName, int pla
 		return;
 	}
 
-	// Make sure a previous session's thread (if any) has fully stopped
+	// Make sure a previous session's threads (if any) have fully stopped
 	// before we reset shared state for the new one.
 	StreamThreadStop();
+	StateThreadStop();
 
 	StreamEnsureLock();
 	EnterCriticalSection(&g_stream_lock);
 	g_stream_q_head = 0;
 	g_stream_q_count = 0;
+	g_stream_bytes_enqueued = sizeof(g_session_header); // StreamThread's first POST always leads with it
+	g_state_frontend_polling = false;
+	g_state_request_pending = false;
+	free(g_state_upload_buf);
+	g_state_upload_buf = NULL;
+	g_state_upload_len = 0;
 	LeaveCriticalSection(&g_stream_lock);
 
 	_snprintf(g_session_id, sizeof(g_session_id), "%lu-%lu", (unsigned long)GetCurrentProcessId(), (unsigned long)time(NULL));
@@ -645,7 +750,6 @@ void n02_stream_start_session(const char* appName, const char* gameName, int pla
 	g_session_owner[sizeof(g_session_owner) - 1] = 0;
 	g_session_sequence = 0;
 	g_session_ended = false;
-	g_session_bytes_sent = 0;
 	BuildSessionHeader(appName, gameName, playerno, numplayers, playerNames);
 	g_session_active = true;
 
@@ -653,6 +757,16 @@ void n02_stream_start_session(const char* appName, const char* gameName, int pla
 	if (g_stream_thread.create() == 0) {
 		StatsAppendLine("stream: failed to start sender thread");
 		g_session_active = false;
+		return;
+	}
+
+	// running is set here rather than at the top of run() so a
+	// StateThreadStop() racing the thread's own startup can't miss it.
+	g_state_thread.stop_requested = false;
+	g_state_thread.running = true;
+	if (g_state_thread.create() == 0) {
+		g_state_thread.running = false;
+		StatsAppendLine("stream: failed to start state thread - \"Ir direto para o Ao Vivo!\" won't be serviced this session");
 	}
 }
 
@@ -695,47 +809,49 @@ void n02_stream_push_drop(const char* nick, int playernb) {
 	StreamEnqueue(rec, p);
 }
 
-// Rate-limits the actual network poll (called every frame by the frontend,
-// see kailleraStreamCheckStateRequested() in kailleraclient.cpp - hitting
-// the server 60x/sec would be pointless spam) to once every this many ms.
-#define N02_STREAM_STATE_POLL_INTERVAL_MS 3000
-static DWORD g_last_state_poll_tick = 0;
-
+// Called every frame by the frontend - never touches the network itself
+// (see StateThread above), so it's just a flag check.
 bool n02_stream_check_state_requested() {
 	if (!g_session_active || g_session_ended)
 		return false;
 
-	DWORD now = GetTickCount();
-	if (g_last_state_poll_tick != 0 && now - g_last_state_poll_tick < N02_STREAM_STATE_POLL_INTERVAL_MS)
-		return false; // too soon since the last poll - caller just tries again next frame
-	g_last_state_poll_tick = now;
-
-	char path[128];
-	_snprintf(path, sizeof(path), "/spectate/%s/state-request", g_session_id);
-	char body[128];
-	int n = HttpGetSimple(g_stream_host, g_stream_port, path, g_stream_api_key, body, sizeof(body) - 1);
-	if (n <= 0)
+	g_state_frontend_polling = true;
+	if (!g_state_request_pending)
 		return false;
-	body[n] = 0;
-	return strstr(body, "\"pending\": true") != NULL || strstr(body, "\"pending\":true") != NULL;
+
+	EnterCriticalSection(&g_stream_lock);
+	bool requested = g_state_request_pending;
+	g_state_request_pending = false;
+	LeaveCriticalSection(&g_stream_lock);
+	return requested;
 }
 
 void n02_stream_upload_state(int frameIndex, const void* data, int size) {
 	if (!g_session_active || g_session_ended || data == NULL || size <= 0)
 		return;
 
+	// Read right away - must be called on the thread pushing frames, right
+	// after the core_serialize() that produced `data` and before the next
+	// frame's input is pushed; see g_stream_bytes_enqueued's own comment.
+	EnterCriticalSection(&g_stream_lock);
+	int byteOffset = g_stream_bytes_enqueued;
+	LeaveCriticalSection(&g_stream_lock);
+
 	int headerLen = 8; // [frame_index:int32 LE][byte_offset:int32 LE]
 	char* buf = (char*)malloc(headerLen + size);
 	if (buf == NULL)
 		return;
 	memcpy(buf, &frameIndex, 4);
-	memcpy(buf + 4, &g_session_bytes_sent, 4); // see g_session_bytes_sent's own comment above
+	memcpy(buf + 4, &byteOffset, 4);
 	memcpy(buf + headerLen, data, size);
 
-	char path[128];
-	_snprintf(path, sizeof(path), "/spectate/%s/state", g_session_id);
-	HttpPostSimple(g_stream_host, g_stream_port, path, g_stream_api_key, buf, headerLen + size);
-	free(buf);
+	// Hand off to StateThread - the actual upload happens off this thread.
+	EnterCriticalSection(&g_stream_lock);
+	char* superseded = g_state_upload_buf;
+	g_state_upload_buf = buf;
+	g_state_upload_len = headerLen + size;
+	LeaveCriticalSection(&g_stream_lock);
+	free(superseded);
 }
 
 void n02_stream_end_session() {
@@ -746,4 +862,5 @@ void n02_stream_end_session() {
 void n02_stream_shutdown() {
 	n02_stream_end_session();
 	StreamThreadStop();
+	StateThreadStop();
 }

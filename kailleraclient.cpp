@@ -764,10 +764,12 @@ extern "C" {
 
 	/* "Ir direto para o Ao Vivo!" - host-side. See common/n02_stream.h's own
 	   doc comments; call kailleraStreamCheckStateRequested() every frame
-	   while hosting with streaming enabled (self-rate-limits the actual
-	   network poll, so this is cheap to call unconditionally) and, when it
-	   returns nonzero, take a retro_serialize() and hand it to
-	   kailleraStreamUploadState(). */
+	   while hosting with streaming enabled (never blocks - the network poll
+	   runs on a background thread - so this is cheap to call
+	   unconditionally) and, when it returns nonzero, take a retro_serialize()
+	   and hand it to kailleraStreamUploadState() right away, before that
+	   frame's kailleraModifyPlayValues() (the upload itself also happens in
+	   the background). */
 	int KAILLERA_DLLEXP kailleraStreamCheckStateRequested(){
 		return n02_stream_check_state_requested() ? 1 : 0;
 	}

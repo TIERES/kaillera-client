@@ -60,10 +60,9 @@ bool n02_watch_request_state();
 // (the server's pending flag cleared) - call this to know when it's safe to
 // n02_watch_download_state() below. Polls the server each call - the
 // frontend should space these out itself (e.g. once every second or two
-// while a request is outstanding), same reasoning as
-// n02_stream_check_state_requested()'s own self-rate-limiting on the host
-// side, just not baked in here since this side is a one-shot user action,
-// not a continuous per-frame tick.
+// while a request is outstanding), same reasoning as the host side's own
+// poll interval (n02_stream.cpp's StateThread), just not baked in here since
+// this side is a one-shot user action, not a continuous per-frame tick.
 bool n02_watch_state_ready();
 
 // Downloads the state the host uploaded into outBuffer (capacity bufferCap -

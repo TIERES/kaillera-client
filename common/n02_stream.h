@@ -72,16 +72,21 @@ void n02_stream_shutdown();
 // "Ir direto para o Ao Vivo!" (kaillera-client's Watch Live toolbar) -
 // host-side half. Call n02_stream_check_state_requested() from the
 // frontend's per-frame tick while hosting (no-op/false if no session is
-// active - safe to call unconditionally); it self-rate-limits the actual
-// network poll, so calling it every frame is fine. Returns true once (per
-// pending request - the server clears the flag once serviced) when a
-// spectator wants a fresh sync point - the frontend should then take a
-// retro_serialize() (no need to pause - this doesn't touch local gameplay)
-// and hand it to n02_stream_upload_state() below.
+// active - safe to call unconditionally). It never blocks: a background
+// thread polls the server and this just reports what it found. Returns true
+// once per pending request when a spectator wants a fresh sync point - the
+// frontend should then take a retro_serialize() (no need to pause - this
+// doesn't touch local gameplay) and hand it to n02_stream_upload_state()
+// below.
 bool n02_stream_check_state_requested();
 
-// Uploads a state a spectator asked for (see above). `frameIndex` need only
-// be locally meaningful (echoed back to whoever downloads it - not
-// interpreted by the server); `data`/`size` is the raw retro_serialize()
-// bytes. No-op if no session is active.
+// Uploads a state a spectator asked for (see above), in the background -
+// returns right after copying `data`. Must be called on the same thread that
+// drives kailleraModifyPlayValues(), after the frame whose end state `data`
+// is and before the next frame's input goes through (the frontend's
+// per-frame tick, right before kailleraSyncData()): that's what lets it pair
+// the state with the exact stream offset of the next input the state hasn't
+// applied yet. `frameIndex` need only be locally meaningful (echoed back to
+// whoever downloads it - not interpreted by the server); `data`/`size` is
+// the raw retro_serialize() bytes. No-op if no session is active.
 void n02_stream_upload_state(int frameIndex, const void* data, int size);
