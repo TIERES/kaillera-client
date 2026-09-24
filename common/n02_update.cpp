@@ -240,6 +240,81 @@ static bool SwapInPendingUpdate(const char* dllPath) {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+// Version comparison. Release tags look like "v.TIERES.0.18" (older ones
+// "v0.11"), and a CI build of a commit past its last tag carries git
+// describe's "-<commits>-g<hash>" suffix, e.g. "v.TIERES.0.18-1-g15dd983" -
+// see n02_version.h.
+///////////////////////////////////////////////////////////////////////////////
+
+#define N02_VERSION_MAX_PARTS 8
+
+struct ParsedVersion {
+	int parts[N02_VERSION_MAX_PARTS]; // the all-digit dot-separated components, e.g. {0, 18}
+	int count;
+	// git describe's "-<N>-g<hash>" -> N (newer than the plain tag); any
+	// other suffix (e.g. "-beta") -> -1, a pre-release of that tag; 0 for
+	// the plain tag itself.
+	int suffixRank;
+};
+
+// False for anything that isn't a "v..." tag-based version - "dev", or a
+// bare commit hash from a tagless `git describe --always`, whose hex digits
+// would otherwise parse as nonsense version numbers.
+static bool ParseVersion(const char* s, ParsedVersion* out) {
+	memset(out, 0, sizeof(*out));
+	if (s == NULL || (s[0] != 'v' && s[0] != 'V'))
+		return false;
+
+	const char* p = s + 1;
+	const char* dash = strchr(p, '-');
+	const char* baseEnd = (dash != NULL) ? dash : p + strlen(p);
+
+	while (p < baseEnd) {
+		const char* tokEnd = p;
+		while (tokEnd < baseEnd && *tokEnd != '.')
+			tokEnd++;
+		bool numeric = (tokEnd > p);
+		for (const char* c = p; c < tokEnd; c++) {
+			if (*c < '0' || *c > '9') {
+				numeric = false;
+				break;
+			}
+		}
+		if (numeric && out->count < N02_VERSION_MAX_PARTS)
+			out->parts[out->count++] = atoi(p); // stops at the '.'/'-' ending the token
+		p = (tokEnd < baseEnd) ? tokEnd + 1 : baseEnd;
+	}
+	if (out->count == 0)
+		return false;
+
+	if (dash != NULL) {
+		const char* q = dash + 1;
+		const char* digitsEnd = q;
+		while (*digitsEnd >= '0' && *digitsEnd <= '9')
+			digitsEnd++;
+		if (digitsEnd > q && digitsEnd[0] == '-' && digitsEnd[1] == 'g')
+			out->suffixRank = atoi(q);
+		else
+			out->suffixRank = -1;
+	}
+	return true;
+}
+
+// <0, 0 or >0, like strcmp. Missing trailing parts count as 0 (0.18 == 0.18.0).
+static int CompareVersions(const ParsedVersion* a, const ParsedVersion* b) {
+	int n = (a->count > b->count) ? a->count : b->count;
+	for (int i = 0; i < n; i++) {
+		int x = (i < a->count) ? a->parts[i] : 0;
+		int y = (i < b->count) ? b->parts[i] : 0;
+		if (x != y)
+			return (x < y) ? -1 : 1;
+	}
+	if (a->suffixRank != b->suffixRank)
+		return (a->suffixRank < b->suffixRank) ? -1 : 1;
+	return 0;
+}
+
+///////////////////////////////////////////////////////////////////////////////
 // Public API
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -277,6 +352,15 @@ void n02_update_check_and_prompt() {
 		return;
 	if (strcmp(version, N02_VERSION) == 0)
 		return; // already current
+
+	// Only offer versions strictly newer than this one - a tester build
+	// handed out ahead of its release (or any CI build of commits past the
+	// last published tag) must never be prompted to "update" back down to
+	// what the site still has. If either string doesn't parse, fall back to
+	// the plain any-difference check above.
+	ParsedVersion local, remote;
+	if (ParseVersion(N02_VERSION, &local) && ParseVersion(version, &remote) && CompareVersions(&remote, &local) <= 0)
+		return;
 
 	char msg[512];
 	wsprintf(msg,
