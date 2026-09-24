@@ -21,6 +21,28 @@ static bool IsNonGameLobbyName(const char* name);
 bool KAILLERA_CORE_INITIALIZED = false;
 bool inGame = false;
 
+bool ValidateGameBeforePlay(const char* gameName) {
+	if (!gameName || *gameName == 0)
+		return false;
+
+	bool foundInList = false;
+	char * cx = gamelist;
+	while (*cx != 0) {
+		if (strcmp(cx, gameName) == 0) {
+			foundInList = true;
+			break;
+		}
+		cx += strlen(cx) + 1;
+	}
+
+	if (!foundInList) {
+		if (infos.findOrBrowseGameCallback == NULL || !infos.findOrBrowseGameCallback((char*)gameName)) {
+			kaillera_error_callback("The rom '%s' is not in your list.", gameName);
+			return false;
+		}
+	}
+	return true;
+}
 
 //extern int PACKETMISOTDERCOUNT;
 
@@ -1328,28 +1350,8 @@ void kailelra_sdlg_join_selected_game(){
 			return;
 		}
 
-		bool foundInList = false;
-		char * cx = gamelist;
-		while (*cx != 0) {
-			if (strcmp(cx, temp) == 0) {
-				foundInList = true;
-				break;
-			}
-			cx += strlen(cx) + 1;
-		}
-
-		if (!foundInList) {
-			// Not in our local list - try to locate/pick it before giving up
-			// (searches folders already in the user's own content history,
-			// then falls back to a native file-pick dialog - see
-			// kailleraFindOrBrowseGame(), retroarch-k3's kaillera.c). NULL
-			// check covers an older retroarch-k3-ffw build that predates
-			// this export.
-			if (infos.findOrBrowseGameCallback == NULL || !infos.findOrBrowseGameCallback(temp)) {
-				kaillera_error_callback("The rom '%s' is not in your list.", temp);
-				return;
-			}
-		}
+		if (!ValidateGameBeforePlay(temp))
+			return;
 
 		strncpy(GAME, temp, sizeof(GAME) - 1);
 		GAME[sizeof(GAME) - 1] = 0;

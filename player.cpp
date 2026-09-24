@@ -2,6 +2,7 @@
 #include "kailleraclient.h"
 #include "resource.h"
 #include "uihlp.h"
+#include "kaillera_ui.h"
 #include <time.h>
 #include <shellapi.h>
 #include "errr.h"
@@ -270,6 +271,13 @@ bool player_watch_begin(const char* sessionId, const char* roomName) {
 	PlayBackBuffer.ptr = PlayBackBuffer.buffer + 132;
 	PlayBackBuffer.load_str(GAME, 128);
 
+	if (!ValidateGameBeforePlay(GAME)) {
+		n02_watch_stop();
+		free(PlayBackBuffer.buffer);
+		PlayBackBuffer.buffer = NULL;
+		return false;
+	}
+
 	PlayBackBuffer.ptr = PlayBackBuffer.buffer + 264;
 	PlayBackBuffer.load_int(); // host's own playerno - not meaningful to a spectator
 	numplayers = PlayBackBuffer.load_int();
@@ -372,6 +380,11 @@ void player_play(char * fn){
 			g_playback_reader.close();
 			return;
 		}
+	}
+
+	if (!ValidateGameBeforePlay(g_playback_reader.gameName)) {
+		g_playback_reader.close();
+		return;
 	}
 
 	strcpy(GAME, g_playback_reader.gameName);

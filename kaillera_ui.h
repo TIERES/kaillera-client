@@ -13,4 +13,6 @@ bool kaillera_StreamingEnabled();
 void kaillera_ConfigureStream();
 void kaillera_GetOwnerName(char* out, int cap);
 
+bool ValidateGameBeforePlay(const char* gameName);
+
 

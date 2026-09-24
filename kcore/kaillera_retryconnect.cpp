@@ -8,6 +8,7 @@
 #include "k_instruction.h"
 #include "../common/n02_replays.h"
 #include "../common/krec_reader.h"
+#include "../kaillera_ui.h"
 
 // Not declared in any shared header - kaillera_core.cpp forward-declares it
 // locally the same way (see its own "int p2p_GetTime();").
@@ -92,6 +93,11 @@ bool kaillera_retryconnect_host_select(const char* session_id, const char* when)
 		return false;
 	}
 
+	if (!ValidateGameBeforePlay(g_reader.gameName)) {
+		g_reader.close();
+		return false;
+	}
+
 	strncpy(g_session_id, session_id, sizeof(g_session_id) - 1);
 	g_session_id[sizeof(g_session_id) - 1] = 0;
 	g_active = true;
@@ -137,6 +143,12 @@ void kaillera_retryconnect_select_callback(char* fromUser, char* session_id) {
 	}
 	if (!g_reader.open_file(dest_path)) {
 		kaillera_error_callback("retry-connect: falha ao abrir o replay baixado (%s).", dest_path);
+		kaillera_retryconnect_send_nak();
+		return;
+	}
+
+	if (!ValidateGameBeforePlay(g_reader.gameName)) {
+		g_reader.close();
 		kaillera_retryconnect_send_nak();
 		return;
 	}
