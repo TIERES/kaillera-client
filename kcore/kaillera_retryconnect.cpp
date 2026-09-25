@@ -188,6 +188,7 @@ void kaillera_retryconnect_notify_local_control(int action, int frame_index) {
 		// doesn't receive its own broadcast back (the server never echoes a
 		// notification to its sender), so it has to apply this itself.
 		g_active = false;
+		kaillera_retryconnect_reset_live_frameno();
 	}
 }
 
@@ -207,6 +208,7 @@ void kaillera_retryconnect_control_callback(char* fromUser, int action, int fram
 		// retroarch-k3 repo) - only the host's actual commit (Enter, sent as
 		// a separate GO_LIVE) ends the replay-serving phase.
 		g_active = false;
+		kaillera_retryconnect_reset_live_frameno();
 	}
 }
 

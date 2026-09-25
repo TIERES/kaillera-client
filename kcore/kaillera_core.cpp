@@ -745,6 +745,19 @@ bool kaillera_retryconnect_pump() {
 	return kaillera_retryconnect_active();
 }
 
+// retry-connect GO_LIVE (host and peers alike): the live path's own
+// input-delay frames (frameno < dframeno) must restart from zero - their
+// alignment with the server's initial-delay padding, which only starts
+// counting once the first live GAMEDATA arrives (the replay phase never sends
+// any), depends on it. frameno is in practice still 0 here - the replay
+// bypass in kaillera_modify_play_values() never touches it after
+// kaillera_GameStartSequence() - so this only makes that explicit instead of
+// incidental.
+void kaillera_retryconnect_reset_live_frameno() {
+	KAILLERAC.frameno = 0;
+	KAILLERAC.USERDATA.reset();
+}
+
 void kaillera_kick_user (unsigned short id) {
 	if (KAILLERAC.USERSTAT > 1 && KAILLERAC.connection) {
 		k_instruction sgc;

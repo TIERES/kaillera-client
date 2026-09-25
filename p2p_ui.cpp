@@ -723,6 +723,8 @@ void p2p_ping_callback(int PING){
 // recognizes on both ends to sync the peer's (disabled, for non-hosts)
 // checkbox instead of showing the line as a normal chat message.
 #define N02_STREAM_LIVE_CHAT_PREFIX "[Stream ao vivo]"
+// Anti-desync fingerprint line from RetroArch - see kaillera_ui.cpp.
+#define N02_SYNC_CHAT_PREFIX "[SYNC] "
 void p2p_chat_callback(char * nick, char * msg){
 	if (msg != NULL && strncmp(msg, N02_STREAM_LIVE_CHAT_PREFIX, strlen(N02_STREAM_LIVE_CHAT_PREFIX)) == 0) {
 		// "desativado" contains "ativado" as a substring, so it must be
@@ -731,6 +733,11 @@ void p2p_chat_callback(char * nick, char * msg){
 		if (!HOST)
 			SendMessage(GetDlgItem(p2p_ui_connection_dlg, CHK_STREAM), BM_SETCHECK, live ? BST_CHECKED : BST_UNCHECKED, 0);
 		outpf("* %s %s o Stream ao vivo!", nick, live ? "ativou" : "desativou");
+		return;
+	}
+	if (msg != NULL && strncmp(msg, N02_SYNC_CHAT_PREFIX, strlen(N02_SYNC_CHAT_PREFIX)) == 0) {
+		if (KSSDFA.state==2 && infos.chatReceivedCallback)
+			infos.chatReceivedCallback(nick, msg);
 		return;
 	}
 	outpf("<%s> %s",nick, msg);

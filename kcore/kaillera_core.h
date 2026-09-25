@@ -68,6 +68,7 @@ void kaillera_retryconnect_nak_callback(char* fromUser);
 // core_run() - see the project's retry-connect design notes) - without this,
 // a RESUME/GO_LIVE sent while a peer is already paused would never be seen.
 bool kaillera_retryconnect_pump();
+void kaillera_retryconnect_reset_live_frameno();
 
 void kaillera_user_add_callback(char*name, int ping, int status, unsigned short id, char conn);
 void kaillera_game_add_callback(char*gname, unsigned int id, char*emulator, char*owner, char*users, char status);

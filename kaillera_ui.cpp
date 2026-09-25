@@ -719,6 +719,10 @@ void kaillera_ConfigureStream(){
 // a "* someone ativou/desativou..." notice in its place. Non-n02 clients in
 // the room just see it as an ordinary chat line.
 #define N02_STREAM_LIVE_CHAT_PREFIX "[Stream ao vivo]"
+// RetroArch (retroarch-k3's kaillera_sync.c) posts one anti-desync
+// fingerprint line with this prefix per player at game start - still handed
+// to the emulator, just kept out of the room chat since it's raw hashes.
+#define N02_SYNC_CHAT_PREFIX "[SYNC] "
 static void kaillera_BroadcastStreamState(bool live){
 	kaillera_game_chat_send(live ? (char*)N02_STREAM_LIVE_CHAT_PREFIX " ativado!" : (char*)N02_STREAM_LIVE_CHAT_PREFIX " desativado.");
 }
@@ -1055,6 +1059,11 @@ void kaillera_game_chat_callback(char*name, char * msg){
 		if (!hosting)
 			SendMessage(GetDlgItem(kaillera_sdlg, CHK_STREAM), BM_SETCHECK, live ? BST_CHECKED : BST_UNCHECKED, 0);
 		kaillera_gdebug("* %s %s o Stream ao vivo!", name, live ? "ativou" : "desativou");
+		return;
+	}
+	if (msg != NULL && strncmp(msg, N02_SYNC_CHAT_PREFIX, strlen(N02_SYNC_CHAT_PREFIX)) == 0) {
+		if (KSSDFA.state==2 && infos.chatReceivedCallback)
+			infos.chatReceivedCallback(name, msg);
 		return;
 	}
 	if (name != NULL && _stricmp(name, "server") == 0) {
