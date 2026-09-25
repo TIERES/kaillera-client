@@ -759,6 +759,10 @@ extern "C" {
 	   for why this needs to be a distinct call from the rewind-style seek
 	   kailleraPlaybackSeekToFrame() above does. */
 	void KAILLERA_DLLEXP kailleraWatchJumpToLive(int frameIndex, int byteOffset){
+		if (player_watch_state_was_sent()) {
+			kaillera_error_callback("Essa funcao esta desabilitada ate que voce aperte Pause ou Rebobinar!");
+			return;
+		}
 		player_watch_jump_to_live(frameIndex, byteOffset);
 	}
 

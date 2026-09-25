@@ -25,6 +25,7 @@ static char g_pending_watch_session[64] = { 0 };
 static char g_pending_watch_room[128] = { 0 };
 static char g_watch_player_names[4][32] = {};
 void (*player_watch_ended_callback)() = NULL;
+static bool g_watch_state_sent = false;
 
 // "Replays Online" checkbox state - when checked, the Records list shows
 // N02ReplayEntry entries fetched from the community server instead of local
@@ -317,6 +318,10 @@ void player_watch_get_player_names(char out[4][32]) {
 	memcpy(out, g_watch_player_names, sizeof(g_watch_player_names));
 }
 
+bool player_watch_state_was_sent() {
+	return g_watch_state_sent;
+}
+
 // "Ir direto para o Ao Vivo!" - called right after the frontend applies a
 // state downloaded via n02_watch_download_state() (core_unserialize()).
 // Unlike WatchSeekToFrame() above (which rewinds *within* what's already
@@ -343,6 +348,7 @@ void player_watch_jump_to_live(int frameIndex, int byteOffset) {
 	g_watch_frames_consumed = frameIndex;
 
 	n02_watch_restart_from_offset(byteOffset);
+	g_watch_state_sent = true;
 }
 
 //..............................................
@@ -1162,6 +1168,10 @@ void player_seek_to_frame(int frame) {
 	if (!player_playing)
 		return;
 	if (player_watch_mode) {
+		if (g_watch_state_sent) {
+			kaillera_error_callback("Essa funcao esta desabilitada ate que voce aperte Pause ou Rebobinar!");
+			return;
+		}
 		WatchSeekToFrame(frame);
 		return;
 	}
@@ -1186,6 +1196,7 @@ void player_EndGame(){
 	if (player_watch_mode) {
 		n02_watch_stop();
 		player_watch_mode = false;
+		g_watch_state_sent = false;
 		if (player_watch_ended_callback)
 			player_watch_ended_callback();
 	}

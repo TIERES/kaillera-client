@@ -40,6 +40,10 @@ bool player_is_watching();
 // kaillera_sdlg_watch_selected_game().
 void player_watch_get_player_names(char out[4][32]);
 
+// True if a state has been sent during Watch Live (via kailleraWatchJumpToLive()),
+// false after pause/rewind or when not in Watch Live mode.
+bool player_watch_state_was_sent();
+
 // "Ir direto para o Ao Vivo!" - call right after the frontend applies a
 // state downloaded via the DLL's kailleraWatchDownloadState() export
 // (core_unserialize()), passing back the same frameIndex/byteOffset that
