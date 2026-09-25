@@ -303,6 +303,11 @@ int kaillera_retryconnect_download_state(void* outBuffer, int bufferCap, int* ou
 	return n;
 }
 
+int kaillera_retryconnect_no_memcard() {
+	// A replay without the marker is from before it existed: with memory card.
+	return g_reader.detect_memcard_marker() > 0 ? 1 : 0;
+}
+
 int kaillera_retryconnect_get_frame_index() {
 	if (!g_active)
 		return -1;

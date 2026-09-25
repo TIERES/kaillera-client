@@ -127,6 +127,7 @@
 #define BTN_RETRYCONNECT                1109
 #define LV_RETRYLIST                    1110
 #define IDC_RETRYCONNECT_HINT           1111
+#define CHK_NOMEMCARD                   1112
 
 // Next default values for new objects
 //
@@ -134,7 +135,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        116
 #define _APS_NEXT_COMMAND_VALUE         40001
-#define _APS_NEXT_CONTROL_VALUE         1112
+#define _APS_NEXT_CONTROL_VALUE         1113
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif

@@ -133,6 +133,11 @@ int kaillera_retryconnect_download_state(void* outBuffer, int bufferCap, int* ou
 // Pause would, so every peer converges via the SAME already-working
 // ApplyRetryConnectStateReady() path with no peer-side changes needed.
 
+// "Sem M. Card" of the replay being resumed (1 = no memory card, 0 = with -
+// also for replays without the marker, see krec_reader.h): every player
+// resumes it the way it was played, whatever the room's checkbox says.
+int kaillera_retryconnect_no_memcard();
+
 // Current position in the replay - for a caller-side progress bar and to
 // compute rewind targets relative to "right now". -1 if no session active.
 int kaillera_retryconnect_get_frame_index();

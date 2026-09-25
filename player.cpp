@@ -27,6 +27,12 @@ static char g_watch_player_names[4][32] = {};
 void (*player_watch_ended_callback)() = NULL;
 static bool g_watch_state_sent = false;
 
+// "Sem M. Card" of the replay/stream being played (1 = no memory card, 0 =
+// with) - read by RetroArch at game start via kailleraGetNoMemoryCard().
+// The replay's own marker decides, then its file name's tag, then "with":
+// what every recording from before the marker existed was played with.
+static int g_playback_no_memcard = 0;
+
 // "Replays Online" checkbox state - when checked, the Records list shows
 // N02ReplayEntry entries fetched from the community server instead of local
 // files (see RecordsList_PopulateOnline()), and Play/Delete act on those
@@ -298,6 +304,40 @@ bool player_watch_begin(const char* sessionId, const char* roomName) {
 
 	PlayBackBuffer.ptr = PlayBackBuffer.buffer + 400;
 
+	// "Sem M. Card": a host's stream starts with the marker record right after
+	// the header (see krec_reader.h) - give it a moment to arrive, since
+	// RetroArch decides the memory card setup as soon as this game starts.
+	// Every byte pulled here is handed to playback. A stream without it (an
+	// older host) plays with memory card, like every replay without one.
+	{
+		char first[600];
+		int got = 0;
+		int mode = -1;
+		DWORD t0 = GetTickCount();
+		while (GetTickCount() - t0 < 1500 && got < (int)sizeof(first)) {
+			int n = n02_watch_pull(first + got, (int)sizeof(first) - got, false);
+			if (n > 0)
+				got += n;
+			else
+				Sleep(20);
+			if (got > 0 && (unsigned char)first[0] != 0x08)
+				break; // first record isn't a chat line: no marker
+			if (got > 1) {
+				char* nick_end = (char*)memchr(first + 1, 0, got - 1);
+				if (nick_end != NULL) {
+					char* msg = nick_end + 1;
+					if (memchr(msg, 0, got - (int)(msg - first)) != NULL) {
+						mode = n02_memcard_from_marker(msg);
+						break;
+					}
+				}
+			}
+		}
+		g_playback_no_memcard = (mode > 0) ? 1 : 0;
+		if (got > 0)
+			PlayBackBuffer_Append(first, got);
+	}
+
 	WatchSnapshotReset();
 	WatchSnapshotRecord(); // frame-0 baseline, so rewinding works even before the first refill
 
@@ -368,6 +408,35 @@ char record_filenames[MAX_RECORDS][260];
 static krec_reader g_playback_reader;
 static int g_playback_total_frames = -1; // cached at open time - see player_get_total_frames()
 
+int player_get_no_memcard() {
+	return g_playback_no_memcard;
+}
+
+// Online replays are named by the server (game + players) - once one is on
+// disk, give it the same "Sem M. Card" tag local recordings carry in their
+// names (see krec_reader.h), from its in-file marker. Updates destPath.
+static void TagDownloadedReplay(char* destPath, size_t cap) {
+	if (n02_memcard_from_name(destPath) >= 0)
+		return; // already tagged
+	krec_reader r;
+	if (!r.open_file(destPath))
+		return;
+	int m = r.detect_memcard_marker();
+	r.close();
+	if (m < 0)
+		return;
+	char tagged[2000];
+	const char* dot = strrchr(destPath, '.');
+	int base = dot ? (int)(dot - destPath) : (int)strlen(destPath);
+	_snprintf(tagged, sizeof(tagged), "%.*s_%s%s", base, destPath,
+		m ? N02_MEMCARD_TAG_ON : N02_MEMCARD_TAG_OFF, dot ? dot : "");
+	tagged[sizeof(tagged) - 1] = 0;
+	if (MoveFileEx(destPath, tagged, MOVEFILE_REPLACE_EXISTING)) {
+		strncpy(destPath, tagged, cap - 1);
+		destPath[cap - 1] = 0;
+	}
+}
+
 void player_play(char * fn){
 	n02_TRACE();
 	//char * fn = BrowseFile(0);
@@ -381,8 +450,10 @@ void player_play(char * fn){
 
 	if (strcmp(APP, g_playback_reader.appName) != 0) {
 		char wdr[2000];
-		wsprintf(wdr, "Application name mismatch.\nExpected \"%s\" but recieved \"%s\".\nUsing a different emulator for playback may cause things to behave in an unexpected manner.\nDo you want to continue?", g_playback_reader.appName, APP);
-		if (MessageBox(RecordsListDlg, wdr, "Error", MB_YESNO | MB_ICONEXCLAMATION) != IDYES) {
+		// No accented letters: this project compiles as MultiByte from UTF-8
+		// sources without /utf-8, so accents would show up garbled here.
+		wsprintf(wdr, "Este replay foi gravado com outro emulador.\n\nGravado com: \"%s\"\nEmulador atual: \"%s\"\n\nReproduzir com um emulador diferente pode fazer o replay se comportar de forma inesperada.\nDeseja continuar mesmo assim?", g_playback_reader.appName, APP);
+		if (MessageBox(RecordsListDlg, wdr, "Emulador diferente", MB_YESNO | MB_ICONEXCLAMATION) != IDYES) {
 			g_playback_reader.close();
 			return;
 		}
@@ -391,6 +462,13 @@ void player_play(char * fn){
 	if (!ValidateGameBeforePlay(g_playback_reader.gameName)) {
 		g_playback_reader.close();
 		return;
+	}
+
+	{
+		int m = g_playback_reader.detect_memcard_marker();
+		if (m < 0)
+			m = n02_memcard_from_name(fn);
+		g_playback_no_memcard = (m > 0) ? 1 : 0;
 	}
 
 	strcpy(GAME, g_playback_reader.gameName);
@@ -421,6 +499,7 @@ void RecordsList_PlaySelected(){
 			MessageBox(RecordsListDlg, "Failed to download the replay from the server.", "Error", MB_OK | MB_ICONSTOP);
 			return;
 		}
+		TagDownloadedReplay(destPath, sizeof(destPath));
 		player_play(destPath);
 		return;
 	}
@@ -701,6 +780,7 @@ void RecordsList_DownloadSelected(){
 	char destPath[2000];
 	wsprintf(destPath, ".\\records\\%s", g_online_entries[idx].download_name);
 	if (n02_replays_download(g_online_entries[idx].session_id, destPath)) {
+		TagDownloadedReplay(destPath, sizeof(destPath));
 		MessageBox(RecordsListDlg, "Replay downloaded to the records folder.", "Download", MB_OK | MB_ICONINFORMATION);
 	} else {
 		MessageBox(RecordsListDlg, "Failed to download the replay from the server.", "Error", MB_OK | MB_ICONSTOP);
@@ -1058,7 +1138,8 @@ int player_MPV(void*values,int size){
 				char msg[500];
 				PlayBackBuffer.load_str(nick, 100);
 				PlayBackBuffer.load_str(msg, 500);
-				infos.chatReceivedCallback(nick, msg);
+				if (n02_memcard_from_marker(msg) < 0) // the marker isn't chat
+					infos.chatReceivedCallback(nick, msg);
 				return player_MPV(values, size);
 			}
 			// Unknown record type - player_MPV() has no default branch either,
@@ -1103,7 +1184,8 @@ int player_MPV(void*values,int size){
 		}
 
 		if (type == KREC_CHAT) {
-			infos.chatReceivedCallback(g_playback_reader.last_chat_nick, g_playback_reader.last_chat_msg);
+			if (n02_memcard_from_marker(g_playback_reader.last_chat_msg) < 0) // the marker isn't chat
+				infos.chatReceivedCallback(g_playback_reader.last_chat_nick, g_playback_reader.last_chat_msg);
 			continue;
 		}
 

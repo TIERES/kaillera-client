@@ -33,6 +33,10 @@ bool player_watch_begin(const char* sessionId, const char* roomName);
 // own normal Kaillera-mode logic.
 bool player_is_watching();
 
+// "Sem M. Card" of the replay/stream being played: 1 = no memory card, 0 =
+// with (the default for replays that don't say). See player.cpp.
+int player_get_no_memcard();
+
 // The up-to-4 player names read from the watched stream's KRC1 header
 // (recording_player_names, see kailleraclient.cpp's recording writer) -
 // empty strings for unused slots. Only meaningful right after a successful

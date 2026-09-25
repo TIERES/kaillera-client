@@ -205,6 +205,7 @@ static KailleraResizeItem g_kaillera_resize_items[] = {
 	{ BTN_KICK, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_TOP, { 0, 0, 0, 0 } },
 	{ BTN_LAGSTAT, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_TOP, { 0, 0, 0, 0 } },
 	{ CHK_STREAM, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_BOTTOM, { 0, 0, 0, 0 } },
+	{ CHK_NOMEMCARD, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_BOTTOM, { 0, 0, 0, 0 } },
 	{ CHK_REC, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_BOTTOM, { 0, 0, 0, 0 } },
 	{ BTN_OPTIONS, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_BOTTOM, { 0, 0, 0, 0 } },
 	{ BTN_ADVERTISE, KAILLERA_ANCHOR_RIGHT | KAILLERA_ANCHOR_BOTTOM, { 0, 0, 0, 0 } },
@@ -726,6 +727,28 @@ void kaillera_ConfigureStream(){
 static void kaillera_BroadcastStreamState(bool live){
 	kaillera_game_chat_send(live ? (char*)N02_STREAM_LIVE_CHAT_PREFIX " ativado!" : (char*)N02_STREAM_LIVE_CHAT_PREFIX " desativado.");
 }
+
+// "Sem M. Card": when checked (the default) RetroArch starts the game with no
+// memory card in either slot (retroarch-k3's kaillera_sync.c), so nobody's
+// own card can make the machines boot differently. It must be the same for
+// every player, so - like "Stream ao vivo!" above - only the host sets it and
+// announces it over the room's chat (on every change and to every player who
+// joins), and everyone else's (disabled) checkbox follows. Kept in a plain
+// variable too: RetroArch reads it (kailleraGetNoMemoryCard()) from the game
+// callback's thread, not this dialog's.
+#define N02_NOMEMCARD_CHAT_PREFIX "[Sem M. Card]"
+static volatile bool g_no_memcard = true;
+static bool g_no_memcard_saved = true; // host's own choice, from n02.ini
+bool kaillera_NoMemcardEnabled(){
+	return g_no_memcard;
+}
+static void kaillera_SetNoMemcardCheck(bool none){
+	g_no_memcard = none;
+	SendMessage(GetDlgItem(kaillera_sdlg, CHK_NOMEMCARD), BM_SETCHECK, none ? BST_CHECKED : BST_UNCHECKED, 0);
+}
+static void kaillera_BroadcastMemcardState(bool none){
+	kaillera_game_chat_send(none ? (char*)N02_NOMEMCARD_CHAT_PREFIX " ativado!" : (char*)N02_NOMEMCARD_CHAT_PREFIX " desativado.");
+}
 void kaillera_GetOwnerName(char* out, int cap){
 	kaillera_get_username(out, cap);
 }
@@ -745,6 +768,17 @@ void kaillera_sdlgGameMode(bool toggle = false){
 		EnableWindow(chkStream, hosting);
 		if (!hosting)
 			SendMessage(chkStream, BM_SETCHECK, BST_UNCHECKED, 0);
+	}
+	{
+		HWND chkMemcard = GetDlgItem(kaillera_sdlg, CHK_NOMEMCARD);
+		ShowWindow(chkMemcard, SW_SHOW);
+		EnableWindow(chkMemcard, hosting);
+		// Only when entering the room, not on the "Swap" view toggle - that
+		// would wipe a non-host's copy of the host's announcement. Everyone
+		// but the host starts from "on": the safe default, and what an older
+		// host that never announces it plays with.
+		if (!toggle)
+			kaillera_SetNoMemcardCheck(hosting ? g_no_memcard_saved : true);
 	}
 	ShowWindow(kaillera_sdlg_RE_GCHAT,SW_SHOW);
 	ShowWindow(kaillera_sdlg_TXT_GINP,SW_SHOW);
@@ -778,6 +812,7 @@ void kaillera_sdlgNormalMode(bool toggle = false){
 	}
 	ShowWindow(kaillera_sdlg_CHK_REC,SW_HIDE);
 	ShowWindow(GetDlgItem(kaillera_sdlg, CHK_STREAM), SW_HIDE);
+	ShowWindow(GetDlgItem(kaillera_sdlg, CHK_NOMEMCARD), SW_HIDE);
 	ShowWindow(kaillera_sdlg_RE_GCHAT,SW_HIDE);
 	ShowWindow(kaillera_sdlg_TXT_GINP,SW_HIDE);
 	ShowWindow(kaillera_sdlg_LV_GULIST.handle,SW_HIDE);
@@ -1061,6 +1096,18 @@ void kaillera_game_chat_callback(char*name, char * msg){
 		kaillera_gdebug("* %s %s o Stream ao vivo!", name, live ? "ativou" : "desativou");
 		return;
 	}
+	if (msg != NULL && strncmp(msg, N02_NOMEMCARD_CHAT_PREFIX, strlen(N02_NOMEMCARD_CHAT_PREFIX)) == 0) {
+		// Same "desativado" contains "ativado" gotcha as above.
+		bool none = strstr(msg, "desativado") == NULL;
+		// The host re-announces it to every joiner - only say something when
+		// it actually changes here (the host announces its own clicks itself).
+		if (!hosting && none != kaillera_NoMemcardEnabled()) {
+			kaillera_SetNoMemcardCheck(none);
+			kaillera_gdebug(none ? "* %s ativou o Sem M. Card (partida sem memory card)."
+				: "* %s desativou o Sem M. Card - cada jogador usa o proprio memory card.", name);
+		}
+		return;
+	}
 	if (msg != NULL && strncmp(msg, N02_SYNC_CHAT_PREFIX, strlen(N02_SYNC_CHAT_PREFIX)) == 0) {
 		if (KSSDFA.state==2 && infos.chatReceivedCallback)
 			infos.chatReceivedCallback(name, msg);
@@ -1190,6 +1237,11 @@ void kaillera_player_joined_callback(char * username, int ping, unsigned short u
 		// up on everyone's client (including this one) to sync the
 		// checkbox and print the notice.
 		kaillera_BroadcastStreamState(true);
+	}
+	if (hosting) {
+		// Always, on or off - a joiner starts from "on" and must learn an
+		// "off" too, or its RetroArch would boot with a different card setup.
+		kaillera_BroadcastMemcardState(kaillera_NoMemcardEnabled());
 	}
 	if (g_beep_on_user_join)
 		MessageBeep(MB_OK);
@@ -1811,45 +1863,72 @@ static INT_PTR CALLBACK OptionsDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 }
 //===========================================================================================
 // retry-connect (Fase 3): host-only "Reconectar" flow - lets the room's owner
-// pick a server-side replay to resume from, filtered to only the ones whose
-// player_names line up with everyone currently in the room (avoids two
-// players ending up with different files - see the project's design notes).
+// pick a server-side replay to resume from, filtered to only the ones of this
+// same match: the room's exact game and exactly the players in the room (see
+// RetryConnectEntryMatchesRoom()).
 
 static N02ReplayEntry g_retryconnect_entries[N02_REPLAYS_MAX_ENTRIES];
 static int g_retryconnect_filtered[N02_REPLAYS_MAX_ENTRIES]; // indices into g_retryconnect_entries
 static int g_retryconnect_filtered_count;
 static nLVw g_retryconnect_list;
 
-static bool CaseInsensitiveContains(const char* haystack, const char* needle) {
-	if (needle == NULL || needle[0] == 0) return true;
-	if (haystack == NULL) return false;
-	size_t hn = strlen(haystack), nn = strlen(needle);
-	if (nn > hn) return false;
-	for (size_t i = 0; i + nn <= hn; i++) {
-		if (_strnicmp(haystack + i, needle, (int)nn) == 0)
-			return true;
-	}
-	return false;
-}
-
 static void FormatRetryConnectDuration(int seconds, char* out, size_t cap) {
 	if (seconds < 0) seconds = 0;
 	_snprintf(out, cap, "%d:%02d", seconds / 60, seconds % 60);
 }
 
-// True if every player currently in the room (kaillera_sdlg_LV_GULIST) shows
-// up in this replay's player_names field - both sides compared
-// case-insensitively. A replay with extra names (e.g. someone who since
-// left) still matches; only a missing name disqualifies it.
+// Calls `fn` for every nick in a replay's player_names - the server joins the
+// .krec header's names with ", " (wg-camp app/spectate.py). Stops early (and
+// returns true) as soon as `fn` does.
+static bool ForEachReplayPlayer(const char* list, bool (*fn)(const char* nick, size_t len, void* ctx), void* ctx) {
+	const char* p = list;
+	while (p != NULL && *p != 0) {
+		while (*p == ' ') p++;
+		const char* end = strchr(p, ',');
+		size_t len = end ? (size_t)(end - p) : strlen(p);
+		while (len > 0 && p[len - 1] == ' ') len--;
+		if (len > 0 && fn(p, len, ctx))
+			return true;
+		p = end ? end + 1 : NULL;
+	}
+	return false;
+}
+
+// Whole nicks only (case-insensitive) - "TIERES" must not match
+// "TIERES_AO_VIVO", which a substring search would.
+static bool ReplayNickEquals(const char* nick, size_t len, void* ctx) {
+	const char* name = (const char*)ctx;
+	return strlen(name) == len && _strnicmp(nick, name, (int)len) == 0;
+}
+
+static bool CountReplayNick(const char* nick, size_t len, void* ctx) {
+	(void)nick; (void)len;
+	(*(int*)ctx)++;
+	return false;
+}
+
+// A replay can only be resumed by the same match: the exact game registered
+// in this room (GAME - e.g. "PCSX ReARMed: MasterLeague12TemporadaLWS2F.bin")
+// and exactly the players in the room (kaillera_sdlg_LV_GULIST) - no one
+// missing, no one extra.
 static bool RetryConnectEntryMatchesRoom(const N02ReplayEntry* e) {
+	if (strcmp(e->game_name, GAME) != 0)
+		return false;
+
 	int roomCount = kaillera_sdlg_LV_GULIST.RowsCount();
-	if (roomCount == 0) return true; // nothing to filter by yet
+	if (roomCount == 0)
+		return false;
+
+	int replayCount = 0;
+	ForEachReplayPlayer(e->player_names, CountReplayNick, &replayCount);
+	if (replayCount != roomCount)
+		return false;
+
 	for (int i = 0; i < roomCount; i++) {
 		char name[32];
 		kaillera_sdlg_LV_GULIST.CheckRow(name, sizeof(name) - 1, 0, i);
 		name[sizeof(name) - 1] = 0;
-		if (name[0] == 0) continue;
-		if (!CaseInsensitiveContains(e->player_names, name))
+		if (name[0] == 0 || !ForEachReplayPlayer(e->player_names, ReplayNickEquals, name))
 			return false;
 	}
 	return true;
@@ -1883,7 +1962,23 @@ static void RetryConnect_PopulateList(HWND hDlg) {
 	}
 
 	if (g_retryconnect_filtered_count == 0) {
-		MessageBox(hDlg, "Nenhum replay no servidor bate com os jogadores desta sala.", "Continuar", MB_OK | MB_ICONINFORMATION);
+		char players[160] = "";
+		int roomCount = kaillera_sdlg_LV_GULIST.RowsCount();
+		for (int i = 0; i < roomCount; i++) {
+			char name[32];
+			kaillera_sdlg_LV_GULIST.CheckRow(name, sizeof(name) - 1, 0, i);
+			name[sizeof(name) - 1] = 0;
+			if (players[0]) strncat(players, ", ", sizeof(players) - strlen(players) - 1);
+			strncat(players, name, sizeof(players) - strlen(players) - 1);
+		}
+		char msg[512];
+		_snprintf(msg, sizeof(msg),
+			"Nenhum replay no servidor com exatamente estes jogadores e este jogo:\n\n"
+			"Jogadores: %s\nJogo: %s\n\n"
+			"Todos os jogadores da partida original precisam estar na sala.",
+			players, GAME);
+		msg[sizeof(msg) - 1] = 0;
+		MessageBox(hDlg, msg, "Continuar", MB_OK | MB_ICONINFORMATION);
 	}
 }
 
@@ -2061,6 +2156,8 @@ LRESULT CALLBACK KailleraServerDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 			{
 				int streamChecked = nSettings::get_int("KAILLERA_STREAM_LIVE", 0);
 				SendMessage(GetDlgItem(hDlg, CHK_STREAM), BM_SETCHECK, streamChecked ? BST_CHECKED : BST_UNCHECKED, 0);
+				g_no_memcard_saved = nSettings::get_int("KAILLERA_NO_MEMCARD", 1) != 0;
+				kaillera_SetNoMemcardCheck(g_no_memcard_saved);
 			}
 
 			re_enable_hyperlinks(kaillera_sdlg_RE_GCHAT);
@@ -2353,6 +2450,20 @@ LRESULT CALLBACK KailleraServerDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 						nSettings::set_int("KAILLERA_STREAM_LIVE", checked ? 1 : 0);
 						if (hosting)
 							kaillera_BroadcastStreamState(checked);
+					}
+					break;
+				case CHK_NOMEMCARD:
+					// Same BN_CLICKED-only reasoning as CHK_STREAM above. Only the
+					// host's is enabled - see kaillera_sdlgGameMode().
+					if (HIWORD(wParam) == BN_CLICKED && hosting)
+					{
+						bool none = SendMessage(GetDlgItem(hDlg, CHK_NOMEMCARD), BM_GETCHECK, 0, 0)==BST_CHECKED;
+						g_no_memcard       = none;
+						g_no_memcard_saved = none;
+						nSettings::set_int("KAILLERA_NO_MEMCARD", none ? 1 : 0);
+						kaillera_BroadcastMemcardState(none);
+						kaillera_gdebug(none ? "* Sem M. Card ativado: a partida vai iniciar sem memory card."
+							: "* Sem M. Card desativado: cada jogador vai usar o proprio memory card.");
 					}
 					break;
 			};

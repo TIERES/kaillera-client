@@ -12,6 +12,7 @@
 #include "kaillera_ui.h"
 #include "kcore/kaillera_retryconnect.h"
 #include "player.h"
+#include "common/krec_reader.h"
 
 #include "common/nThread.h"
 #include "common/k_socket.h"
@@ -165,6 +166,23 @@ static void close_recording() {
 	n02_stream_end_session();
 }
 
+// "Sem M. Card" for the game starting now (1 = no memory card, 0 = each
+// player's own) - shared by the recording below and kailleraGetNoMemoryCard(),
+// so what RetroArch plays with and what the replay says always agree:
+//  - retry-connect: whatever the replay being resumed was played with;
+//  - Server-mode room / P2P connection: that dialog's checkbox
+//    (kaillera_ui.cpp / p2p_ui.cpp);
+//  - Playback / Watch Live: what the replay/stream says (player.cpp).
+static int CurrentGameNoMemcard() {
+	if (kaillera_retryconnect_active())
+		return kaillera_retryconnect_no_memcard();
+	if (get_active_mode_index() == 2 || player_is_watching())
+		return player_get_no_memcard();
+	if (get_active_mode_index() == 1)
+		return kaillera_NoMemcardEnabled() ? 1 : 0;
+	return p2p_NoMemcardEnabled() ? 1 : 0;
+}
+
 int WINAPI _gameCallback(char *game, int player, int numplayers){
 
 	close_recording();
@@ -173,6 +191,9 @@ int WINAPI _gameCallback(char *game, int player, int numplayers){
 	strncpy(GameName, (game != NULL) ? game : "", sizeof(GameName) - 1);
 	GameName[sizeof(GameName) - 1] = 0;
 
+	const int noMemcard = CurrentGameNoMemcard();
+	const char* memcardMarker = noMemcard ? N02_MEMCARD_MARKER_ON : N02_MEMCARD_MARKER_OFF;
+
 	if (active_mod.RecordingEnabled()) {
 		n02_TRACE();
 		RecordingBuffer.reset();
@@ -180,13 +201,16 @@ int WINAPI _gameCallback(char *game, int player, int numplayers){
 		char FileName[2000];
 		CreateDirectory("records", 0);
 
-		// Build filename: YYMMDDHHMMSS.krec (player/game info is in the KRC1 header)
+		// Build filename: YYMMDDHHMMSS_<SemMCard|ComMCard>.krec - player/game
+		// info is in the KRC1 header; the tag says how to play it back (see
+		// N02_MEMCARD_TAG_* in krec_reader.h)
 		time_t t = time(0);
 		tm * lt = localtime(&t);
 		char datePart[16];
 		strftime(datePart, sizeof(datePart), "%y%m%d%H%M%S", lt);
 
-		wsprintf(FileName,".\\records\\%s.krec", datePart);
+		wsprintf(FileName,".\\records\\%s_%s.krec", datePart,
+			noMemcard ? N02_MEMCARD_TAG_ON : N02_MEMCARD_TAG_OFF);
 
 
 		for(unsigned int x=0; x < strlen(FileName); x++){
@@ -211,6 +235,12 @@ int WINAPI _gameCallback(char *game, int player, int numplayers){
 		WriteFile(out, (char*)&player, 4, &written, NULL);
 		WriteFile(out, (char*)&numplayers, 4, &written, NULL);
 		WriteFile(out, (char*)recording_player_names, 128, &written, NULL);
+
+		// First record: the "Sem M. Card" marker - see krec_reader.h.
+		RecordingBuffer.put_char(8);
+		RecordingBuffer.put_bytes((char*)N02_MEMCARD_MARKER_NICK, (int)strlen(N02_MEMCARD_MARKER_NICK) + 1);
+		RecordingBuffer.put_bytes((char*)memcardMarker, (int)strlen(memcardMarker) + 1);
+		RecordingBuffer.write();
 		n02_TRACE();
 	}
 
@@ -219,6 +249,8 @@ int WINAPI _gameCallback(char *game, int player, int numplayers){
 		char ownerName[64];
 		active_mod.GetOwnerName(ownerName, sizeof(ownerName));
 		n02_stream_start_session(infos_copy.appName, GameName, player, numplayers, recording_player_names, ownerName);
+		// Same first record for spectators and the online replay.
+		n02_stream_push_chat(N02_MEMCARD_MARKER_NICK, memcardMarker);
 	}
 
 	if (infos_copy.gameCallback)
@@ -640,6 +672,15 @@ extern "C" {
 	   does, so fast-forward needs to stay allowed for them too. */
 	int KAILLERA_DLLEXP kailleraIsPlaybackMode(){
 		return get_active_mode_index() == 2 || kaillera_retryconnect_active() || player_is_watching();
+	}
+
+	/* "Sem M. Card" for the game starting now (see CurrentGameNoMemcard())
+	   - optional export, same GetProcAddress()-if-present convention as
+	   kailleraIsPlaybackMode above; the frontend reads it from its game
+	   callback. 1 = start with no memory card in either slot, 0 = each
+	   player keeps their own cards. */
+	int KAILLERA_DLLEXP kailleraGetNoMemoryCard(){
+		return CurrentGameNoMemcard();
 	}
 
 	/* retry-connect (kcore/kaillera_retryconnect.h) - optional exports, same

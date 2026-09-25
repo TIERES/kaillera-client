@@ -10,6 +10,7 @@ void kaillera_ui_chat_send(char * xxx);
 bool kaillera_RecordingEnabled();
 bool kaillera_IsHost();
 bool kaillera_StreamingEnabled();
+bool kaillera_NoMemcardEnabled();
 void kaillera_ConfigureStream();
 void kaillera_GetOwnerName(char* out, int cap);
 

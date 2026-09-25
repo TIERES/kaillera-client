@@ -725,6 +725,21 @@ void p2p_ping_callback(int PING){
 #define N02_STREAM_LIVE_CHAT_PREFIX "[Stream ao vivo]"
 // Anti-desync fingerprint line from RetroArch - see kaillera_ui.cpp.
 #define N02_SYNC_CHAT_PREFIX "[SYNC] "
+// "Sem M. Card" - same checkbox and same rules as the Server-mode room
+// (kaillera_ui.cpp): checked by default, only the host sets it, announced to
+// the peer over chat (on every change and when the peer connects), cached in
+// a plain variable for kailleraGetNoMemoryCard()'s thread.
+#define N02_NOMEMCARD_CHAT_PREFIX "[Sem M. Card]"
+static volatile bool g_p2p_no_memcard = true;
+static bool g_p2p_no_memcard_saved = true; // host's own choice, from n02.ini
+bool p2p_NoMemcardEnabled(){
+	return g_p2p_no_memcard;
+}
+static void p2p_SetNoMemcardCheck(bool none){
+	g_p2p_no_memcard = none;
+	if (p2p_ui_connection_dlg != NULL)
+		SendMessage(GetDlgItem(p2p_ui_connection_dlg, CHK_NOMEMCARD), BM_SETCHECK, none ? BST_CHECKED : BST_UNCHECKED, 0);
+}
 void p2p_chat_callback(char * nick, char * msg){
 	if (msg != NULL && strncmp(msg, N02_STREAM_LIVE_CHAT_PREFIX, strlen(N02_STREAM_LIVE_CHAT_PREFIX)) == 0) {
 		// "desativado" contains "ativado" as a substring, so it must be
@@ -738,6 +753,18 @@ void p2p_chat_callback(char * nick, char * msg){
 	if (msg != NULL && strncmp(msg, N02_SYNC_CHAT_PREFIX, strlen(N02_SYNC_CHAT_PREFIX)) == 0) {
 		if (KSSDFA.state==2 && infos.chatReceivedCallback)
 			infos.chatReceivedCallback(nick, msg);
+		return;
+	}
+	if (msg != NULL && strncmp(msg, N02_NOMEMCARD_CHAT_PREFIX, strlen(N02_NOMEMCARD_CHAT_PREFIX)) == 0) {
+		// "desativado" contains "ativado" - check the negative first. The
+		// host re-announces it when the peer connects - only say something
+		// when it actually changes here (the host announces its own clicks).
+		bool none = strstr(msg, "desativado") == NULL;
+		if (!HOST && none != p2p_NoMemcardEnabled()) {
+			p2p_SetNoMemcardCheck(none);
+			outpf(none ? "* %s ativou o Sem M. Card (partida sem memory card)."
+				: "* %s desativou o Sem M. Card - cada jogador usa o proprio memory card.", nick);
+		}
 		return;
 	}
 	outpf("<%s> %s",nick, msg);
@@ -845,6 +872,9 @@ void p2p_ConfigureStream(){
 
 static void p2p_BroadcastStreamState(bool live){
 	p2p_send_chat(live ? (char*)N02_STREAM_LIVE_CHAT_PREFIX " ativado!" : (char*)N02_STREAM_LIVE_CHAT_PREFIX " desativado.");
+}
+static void p2p_BroadcastMemcardState(bool none){
+	p2p_send_chat(none ? (char*)N02_NOMEMCARD_CHAT_PREFIX " ativado!" : (char*)N02_NOMEMCARD_CHAT_PREFIX " desativado.");
 }
 void p2p_GetOwnerName(char* out, int cap){
 	if (cap <= 0) return;
@@ -1144,6 +1174,11 @@ void p2p_peer_joined_callback(){
 		// to sync the checkbox and print the notice.
 		p2p_BroadcastStreamState(true);
 	}
+	if (HOST) {
+		// Always, on or off - the peer starts from "on" and must learn an
+		// "off" too, or its RetroArch would boot with a different card setup.
+		p2p_BroadcastMemcardState(p2p_NoMemcardEnabled());
+	}
 	p2p_cdlg_peer_joined = 1;
 }
 
@@ -1190,6 +1225,8 @@ void IniaialzeConnectionDialog(HWND hDlg){
 			if (!HOST) {
 				SendMessage(GetDlgItem(hDlg, CHK_STREAM), BM_SETCHECK, BST_UNCHECKED, 0);
 			}
+			ShowWindow(GetDlgItem(hDlg, CHK_NOMEMCARD), SW_SHOW);
+			EnableWindow(GetDlgItem(hDlg, CHK_NOMEMCARD), HOST);
 		ShowWindow(GetDlgItem(hDlg, IDC_HOSTT), HOST ? SW_SHOW : SW_HIDE);
 		ShowWindow(GetDlgItem(hDlg, IDC_P2P_FDLY_LBL), HOST ? SW_SHOW : SW_HIDE);
 		ShowWindow(GetDlgItem(hDlg, IDC_P2P_FDLY), HOST ? SW_SHOW : SW_HIDE);
@@ -1318,6 +1355,11 @@ LRESULT CALLBACK ConnectionDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARA
 					int streamChecked = HOST ? nSettings::get_int("P2P_STREAM_LIVE", 0) : 0;
 					SendMessage(GetDlgItem(hDlg, CHK_STREAM), BM_SETCHECK, streamChecked ? BST_CHECKED : BST_UNCHECKED, 0);
 				}
+				// Host: its own saved choice. The peer: "on" (the safe default,
+				// and what an older host that never announces it plays with)
+				// until the host's announcement arrives.
+				g_p2p_no_memcard_saved = nSettings::get_int("P2P_NO_MEMCARD", 1) != 0;
+				p2p_SetNoMemcardCheck(HOST ? g_p2p_no_memcard_saved : true);
 				g_p2p_advanced_visible = false;
 				p2p_set_advanced_ui(hDlg, g_p2p_advanced_visible);
 				p2p_cdlg_timer = SetTimer(hDlg, 0, 1000, 0);
@@ -1572,6 +1614,20 @@ LRESULT CALLBACK ConnectionDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARA
 						const bool checked = (SendMessage(GetDlgItem(hDlg,CHK_ENLIST), BM_GETCHECK, 0, 0)==BST_CHECKED);
 						p2p_SetEnlisted(hDlg, checked);
 					}
+				break;
+			case CHK_NOMEMCARD:
+				// Same BN_CLICKED-only reasoning as CHK_STREAM below. Only the
+				// host's is enabled.
+				if (HIWORD(wParam) == BN_CLICKED && HOST)
+				{
+					const bool none = (SendMessage(GetDlgItem(hDlg, CHK_NOMEMCARD), BM_GETCHECK, 0, 0)==BST_CHECKED);
+					g_p2p_no_memcard       = none;
+					g_p2p_no_memcard_saved = none;
+					nSettings::set_int("P2P_NO_MEMCARD", none ? 1 : 0);
+					p2p_BroadcastMemcardState(none);
+					outpf(none ? "* Sem M. Card ativado: a partida vai iniciar sem memory card."
+						: "* Sem M. Card desativado: cada jogador vai usar o proprio memory card.");
+				}
 				break;
 			case CHK_STREAM:
 				// BS_AUTOCHECKBOX sends WM_COMMAND for more than just clicks

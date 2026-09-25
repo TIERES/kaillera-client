@@ -31,6 +31,45 @@ enum krec_record_type {
 	KREC_DROP = 0x14,
 };
 
+// "Sem M. Card" (the room's checkbox, kaillera_ui.cpp): how the game was
+// played - with no memory card, or with each player's own cards - so a replay
+// can be played back the same way. Carried two ways:
+//  - inside the replay: a chat record with this nick and one of these texts,
+//    written right after the header (kailleraclient.cpp's _gameCallback()),
+//    so it also reaches online replays and Watch Live - the authoritative one;
+//  - in local recordings' file names: N02_MEMCARD_TAG_ON / _OFF, so it's
+//    visible in the records folder (and in online downloads, renamed after
+//    the in-file marker).
+// Neither present (recordings from before this existed): with memory card.
+#define N02_MEMCARD_MARKER_NICK   "n02"
+#define N02_MEMCARD_MARKER_PREFIX "[Sem M. Card]"
+#define N02_MEMCARD_MARKER_ON     "[Sem M. Card] ativado!"
+#define N02_MEMCARD_MARKER_OFF    "[Sem M. Card] desativado."
+#define N02_MEMCARD_TAG_ON        "SemMCard"
+#define N02_MEMCARD_TAG_OFF       "ComMCard"
+
+// 1 / 0 for a chat text that is one of the markers above, -1 otherwise.
+inline int n02_memcard_from_marker(const char* msg) {
+	if (msg == NULL || strncmp(msg, N02_MEMCARD_MARKER_PREFIX, strlen(N02_MEMCARD_MARKER_PREFIX)) != 0)
+		return -1;
+	// "desativado" contains "ativado" - check the negative first.
+	return strstr(msg, "desativado") ? 0 : 1;
+}
+
+// 1 / 0 from a replay file name's tag (case-insensitive), -1 if untagged.
+inline int n02_memcard_from_name(const char* path) {
+	if (path == NULL) return -1;
+	const char* name = path;
+	for (const char* p = path; *p; p++)
+		if (*p == '\\' || *p == '/') name = p + 1;
+	size_t n = strlen(name);
+	for (size_t i = 0; i < n; i++) {
+		if (_strnicmp(name + i, N02_MEMCARD_TAG_ON, strlen(N02_MEMCARD_TAG_ON)) == 0) return 1;
+		if (_strnicmp(name + i, N02_MEMCARD_TAG_OFF, strlen(N02_MEMCARD_TAG_OFF)) == 0) return 0;
+	}
+	return -1;
+}
+
 class krec_reader {
 public:
 	char* buffer;
@@ -228,6 +267,31 @@ public:
 		ptr = saved_ptr;
 		frames_consumed = saved_frames;
 		return total;
+	}
+
+	// The in-replay "Sem M. Card" marker (see N02_MEMCARD_MARKER_*): 1 / 0,
+	// or -1 when this file has none. Only looks at the first few records -
+	// the marker is written right after the header - and, like
+	// count_total_frames(), restores the read position afterwards.
+	int detect_memcard_marker(int max_records = 8) {
+		char* saved_ptr = ptr;
+		int saved_frames = frames_consumed;
+		int found = -1;
+
+		ptr = buffer + (is_krc1 ? 400 : 272);
+		frames_consumed = 0;
+		for (int i = 0; i < max_records && found < 0; i++) {
+			int len = 0;
+			int rt = next_record(NULL, 0, &len);
+			if (rt == KREC_CHAT)
+				found = n02_memcard_from_marker(last_chat_msg);
+			else if (rt != KREC_DROP)
+				break; /* input (or the end) comes before any marker */
+		}
+
+		ptr = saved_ptr;
+		frames_consumed = saved_frames;
+		return found;
 	}
 
 	// Mirrors player_MPV()'s record-type switch (player.cpp), but classifies
