@@ -1,0 +1,85 @@
+diff --git a/common/n02_stream.cpp b/common/n02_stream.cpp
+index 33affdf..ceb582c 100644
+--- a/common/n02_stream.cpp
++++ b/common/n02_stream.cpp
+@@ -1,4 +1,5 @@
+ #include "n02_stream.h"
++#include "n02_watch.h" // n02_watch_debug_dump()
+ 
+ #include <windows.h>
+ #include "k_socket.h"
+@@ -666,6 +667,12 @@ public:
+ 			LeaveCriticalSection(&g_stream_lock);
+ 
+ 			if (upload != NULL) {
++				if (uploadLen > 8) {
++					int dumpFrame, dumpOffset;
++					memcpy(&dumpFrame, upload, 4);
++					memcpy(&dumpOffset, upload + 4, 4);
++					n02_watch_debug_dump("host", g_session_id, dumpFrame, dumpOffset, upload + 8, uploadLen - 8);
++				}
+ 				char path[128];
+ 				_snprintf(path, sizeof(path), "/spectate/%s/state", g_session_id);
+ 				if (!HttpPostSimple(g_stream_host, g_stream_port, path, g_stream_api_key, upload, uploadLen, N02_STREAM_STATE_UPLOAD_TIMEOUT_MS))
+diff --git a/common/n02_watch.cpp b/common/n02_watch.cpp
+index 3bf3c14..f49e5b5 100644
+--- a/common/n02_watch.cpp
++++ b/common/n02_watch.cpp
+@@ -385,6 +385,8 @@ int n02_watch_download_state(void* outBuffer, int bufferCap, int* outFrameIndex,
+ 	if (state == NULL)
+ 		return -1;
+ 
++	n02_watch_debug_dump("spectator", g_watch_session_id, frameIndex, byteOffset, state, size);
++
+ 	int copyLen = min(size, bufferCap);
+ 	memcpy(outBuffer, state, copyLen);
+ 	free(state);
+@@ -394,6 +396,33 @@ int n02_watch_download_state(void* outBuffer, int bufferCap, int* outFrameIndex,
+ 	return copyLen;
+ }
+ 
++#define N02_WATCH_DEBUG_DIR ".\\records\\watch_debug"
++
++void n02_watch_debug_dump(const char* role, const char* sessionId, int frameIndex, int byteOffset, const void* data, int size) {
++	DWORD attr = GetFileAttributesA(N02_WATCH_DEBUG_DIR);
++	if (attr == INVALID_FILE_ATTRIBUTES || !(attr & FILE_ATTRIBUTE_DIRECTORY) || data == NULL || size <= 0)
++		return;
++
++	char path[MAX_PATH];
++	_snprintf(path, sizeof(path), N02_WATCH_DEBUG_DIR "\\%s_%s_f%d_o%d.state", role, sessionId, frameIndex, byteOffset);
++	path[sizeof(path) - 1] = 0;
++	FILE* f = fopen(path, "wb");
++	if (f != NULL) {
++		fwrite(data, 1, size, f);
++		fclose(f);
++	}
++
++	FILE* log = fopen(N02_WATCH_DEBUG_DIR "\\watch_debug.txt", "a");
++	if (log != NULL) {
++		SYSTEMTIME st;
++		GetLocalTime(&st);
++		fprintf(log, "%04d-%02d-%02d %02d:%02d:%02d %s session=%s frame=%d offset=%d size=%d\n",
++			st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
++			role, sessionId, frameIndex, byteOffset, size);
++		fclose(log);
++	}
++}
++
+ int n02_watch_pull(char* outBuf, int outCap, bool blockIfLive) {
+ 	WatchEnsureLock();
+ 	for (;;) {
+diff --git a/common/n02_watch.h b/common/n02_watch.h
+index 4ab8625..5d84f9a 100644
+--- a/common/n02_watch.h
++++ b/common/n02_watch.h
+@@ -75,3 +75,10 @@ bool n02_watch_state_ready();
+ // the byte count written (ready for core_unserialize()), or -1 on any
+ // failure (including "not ready yet").
+ int n02_watch_download_state(void* outBuffer, int bufferCap, int* outFrameIndex, int* outByteOffset);
++
++// Test aid for "Ir direto para o Ao Vivo!": only if a records\watch_debug
++// folder exists next to the emulator, saves `data` there as
++// <role>_<sessionId>_f<frameIndex>_o<byteOffset>.state and logs one line to
++// watch_debug.txt, so tools/krec_harness can replay the exact state against
++// the stream afterwards. No-op for everyone else.
++void n02_watch_debug_dump(const char* role, const char* sessionId, int frameIndex, int byteOffset, const void* data, int size);

@@ -26,3 +26,8 @@ build-and-deploy.bat
 
 # Machine-specific IntelliSense config
 .vscode/c_cpp_properties.json
+
+# krec_harness scratch output
+__pycache__/
+tools/krec_harness/harness_saves/
+tools/krec_harness/*.json
