@@ -25,7 +25,15 @@ static char g_pending_watch_session[64] = { 0 };
 static char g_pending_watch_room[128] = { 0 };
 static char g_watch_player_names[4][32] = {};
 void (*player_watch_ended_callback)() = NULL;
+// "Ir ao vivo!" lock - see player_watch_golive_locked().
 static bool g_watch_state_sent = false;
+// When the last player_MPV() call returned during Watch Live - a gap longer
+// than WATCH_PAUSE_UNLOCK_MS before the next one means the emulator stopped
+// asking for frames (Pause, menu, unfocused window). Measured from the
+// return, not the call, so a stall at the live edge (which blocks *inside*
+// player_MPV()) never counts as a pause.
+#define WATCH_PAUSE_UNLOCK_MS 750
+static DWORD g_watch_mpv_last_return = 0;
 
 // "Sem M. Card" of the replay/stream being played (1 = no memory card, 0 =
 // with) - read by RetroArch at game start via kailleraGetNoMemoryCard().
@@ -358,7 +366,18 @@ void player_watch_get_player_names(char out[4][32]) {
 	memcpy(out, g_watch_player_names, sizeof(g_watch_player_names));
 }
 
-bool player_watch_state_was_sent() {
+// A pause since the last frame puts the spectator behind the live edge
+// again, which is what unlocks "Ir ao vivo!" - see player_watch_golive_locked().
+static void WatchPauseCheck() {
+	if (g_watch_state_sent && g_watch_mpv_last_return != 0
+		&& GetTickCount() - g_watch_mpv_last_return > WATCH_PAUSE_UNLOCK_MS)
+		g_watch_state_sent = false;
+}
+
+bool player_watch_golive_locked() {
+	if (!player_playing || !player_watch_mode)
+		return false;
+	WatchPauseCheck(); // paused right now counts too, not just paused-and-resumed
 	return g_watch_state_sent;
 }
 
@@ -389,6 +408,9 @@ void player_watch_jump_to_live(int frameIndex, int byteOffset) {
 
 	n02_watch_restart_from_offset(byteOffset);
 	g_watch_state_sent = true;
+	// The frontend applies the state (and resumes) while paused if the user
+	// paused first - that pause must not count against the new lock.
+	g_watch_mpv_last_return = GetTickCount();
 }
 
 //..............................................
@@ -1075,7 +1097,7 @@ void player_GUI(){
 // its whole file is already in memory.
 #define WATCH_RECORD_SAFETY_MARGIN 700
 
-int player_MPV(void*values,int size){
+static int player_MPV_records(void*values,int size){
 	n02_TRACE();
 	if (!player_playing)
 		return -1;
@@ -1193,6 +1215,14 @@ int player_MPV(void*values,int size){
 		return -1;
 	}
 }
+
+int player_MPV(void*values,int size){
+	if (player_watch_mode)
+		WatchPauseCheck();
+	int r = player_MPV_records(values, size);
+	g_watch_mpv_last_return = GetTickCount();
+	return r;
+}
 // Rewinds within the retained window (WatchSnapshotRecord() above) - resets
 // to the latest snapshot at or before `frame` (clamping to the oldest one
 // retained if `frame` predates everything kept) and re-walks forward
@@ -1250,10 +1280,12 @@ void player_seek_to_frame(int frame) {
 	if (!player_playing)
 		return;
 	if (player_watch_mode) {
-		if (g_watch_state_sent) {
-			kaillera_error_callback("Essa funcao esta desabilitada ate que voce aperte Pause ou Rebobinar!");
-			return;
-		}
+		// Never refuse: the frontend has already core_unserialize()d the
+		// checkpoint for `frame` by the time it calls this, so skipping the
+		// seek would leave that state reading some other frame's input - a
+		// guaranteed desync. Rewinding puts the spectator behind the live
+		// edge, which is what unlocks "Ir ao vivo!" again.
+		g_watch_state_sent = false;
 		WatchSeekToFrame(frame);
 		return;
 	}

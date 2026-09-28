@@ -44,9 +44,13 @@ int player_get_no_memcard();
 // kaillera_sdlg_watch_selected_game().
 void player_watch_get_player_names(char out[4][32]);
 
-// True if a state has been sent during Watch Live (via kailleraWatchJumpToLive()),
-// false after pause/rewind or when not in Watch Live mode.
-bool player_watch_state_was_sent();
+// True right after an "Ir ao vivo!" jump (kailleraWatchJumpToLive()): the
+// spectator is already as close to live as a new state would get it, so
+// asking the host for another (a multi-MB upload in the middle of its match)
+// is refused until the spectator pauses or rewinds. Must be checked BEFORE
+// requesting a state - once the frontend has loaded one, the jump itself
+// always has to go through. False outside Watch Live.
+bool player_watch_golive_locked();
 
 // "Ir direto para o Ao Vivo!" - call right after the frontend applies a
 // state downloaded via the DLL's kailleraWatchDownloadState() export

@@ -786,7 +786,19 @@ extern "C" {
 	   uploads in response - see common/n02_watch.h's own doc comments for
 	   the exact flow these three are meant to be called in. */
 	int KAILLERA_DLLEXP kailleraWatchRequestState(){
+		// The "Ir ao vivo!" lock is enforced here, before anything is asked
+		// of the host - see player_watch_golive_locked(). An older frontend
+		// that doesn't check kailleraWatchGoLiveLocked() just gets "couldn't
+		// request" instead of a state it would load and then be refused.
+		if (player_watch_golive_locked())
+			return 0;
 		return n02_watch_request_state() ? 1 : 0;
+	}
+	/* Nonzero while "Ir ao vivo!" is locked (right after a jump, until the
+	   spectator pauses or rewinds) - lets the frontend grey the button out
+	   and explain why, instead of calling kailleraWatchRequestState(). */
+	int KAILLERA_DLLEXP kailleraWatchGoLiveLocked(){
+		return player_watch_golive_locked() ? 1 : 0;
 	}
 	int KAILLERA_DLLEXP kailleraWatchStateReady(){
 		return n02_watch_state_ready() ? 1 : 0;
@@ -798,12 +810,10 @@ extern "C" {
 	   above just returned, passing the same outFrameIndex/outByteOffset it
 	   gave back - see player_watch_jump_to_live()'s own comment (player.cpp)
 	   for why this needs to be a distinct call from the rewind-style seek
-	   kailleraPlaybackSeekToFrame() above does. */
+	   kailleraPlaybackSeekToFrame() above does. Never refused: the state is
+	   already loaded, so skipping the jump would leave it reading whatever
+	   input this spectator had reached - a guaranteed desync. */
 	void KAILLERA_DLLEXP kailleraWatchJumpToLive(int frameIndex, int byteOffset){
-		if (player_watch_state_was_sent()) {
-			kaillera_error_callback("Essa funcao esta desabilitada ate que voce aperte Pause ou Rebobinar!");
-			return;
-		}
 		player_watch_jump_to_live(frameIndex, byteOffset);
 	}
 
