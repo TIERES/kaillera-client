@@ -193,8 +193,13 @@ static void PlayBackBuffer_Append(const char* data, int len) {
 		}
 		g_watch_snapshot_count = w;
 	}
-
-	WatchSnapshotRecord();
+	// No WatchSnapshotRecord() here: a refill can happen in the middle of a
+	// record (player_MPV() refills after reading a record's header, to get
+	// its payload), and a snapshot taken there sends a later rewind into
+	// the middle of that record - misparsed from then on until playback
+	// ended on an "unknown record type" (RetroArch closing the game after a
+	// few Rebobinar presses in Watch Live). player_MPV() takes them instead,
+	// always at a record boundary.
 }
 
 // Called from player_MPV() when watch mode's buffer has run dry. Blocks (in
@@ -1115,6 +1120,7 @@ static int player_MPV_records(void*values,int size){
 			player_EndGame();
 			return -1;
 		}
+		WatchSnapshotRecord(); // right at a record boundary - see PlayBackBuffer_Append()
 		if (PlayBackBuffer.ptr + 10 < PlayBackBuffer.end || player_watch_mode) {
 			char b = PlayBackBuffer.load_char();
 			if (b==0x12) {
@@ -1229,6 +1235,46 @@ int player_MPV(void*values,int size){
 // consuming records exactly like player_MPV()'s own watch-mode switch,
 // mirroring krec_reader::seek_to_frame()'s technique. No-op if nothing has
 // been snapshotted yet (e.g. called before the first refill).
+// Bytes PlayBackBufferC::load_str(buf, cap) consumes from p: up to and
+// including the NUL, capped at `cap`; 0 if that doesn't fit in `avail`.
+static int WatchCStrLength(const char* p, int avail, int cap) {
+	const char* nul = (const char*)memchr(p, 0, min(avail, cap));
+	if (nul != NULL)
+		return (int)(nul - p) + 1;
+	return (avail >= cap) ? cap : 0;
+}
+
+// Length of the complete record at PlayBackBuffer.ptr, as player_MPV()'s
+// watch branch consumes it (0x12 input / 20 drop / 8 chat), or 0 if it's cut
+// off by the end of what's buffered or isn't a known record type.
+static int WatchCompleteRecordLength() {
+	const char* p = PlayBackBuffer.ptr;
+	int avail = (int)(PlayBackBuffer.end - p);
+	if (p == NULL || avail < 1)
+		return 0;
+
+	unsigned char type = (unsigned char)p[0];
+	if (type == 0x12) {
+		short l;
+		if (avail < 3)
+			return 0;
+		memcpy(&l, p + 1, 2);
+		return (l >= 0 && avail >= 3 + l) ? 3 + l : 0;
+	}
+	if (type != 20 && type != 8)
+		return 0;
+
+	int pos = 1;
+	int n = WatchCStrLength(p + pos, avail - pos, 100); // nick
+	if (n <= 0)
+		return 0;
+	pos += n;
+	if (type == 20)
+		return (avail - pos >= 4) ? pos + 4 : 0; // player number
+	n = WatchCStrLength(p + pos, avail - pos, 500); // message
+	return (n > 0) ? pos + n : 0;
+}
+
 static void WatchSeekToFrame(int frame) {
 	if (g_watch_snapshot_count == 0)
 		return;
@@ -1244,27 +1290,17 @@ static void WatchSeekToFrame(int frame) {
 	PlayBackBuffer.ptr = PlayBackBuffer.buffer + g_watch_snapshots[best].offset;
 	g_watch_frames_consumed = g_watch_snapshots[best].frame_index;
 
-	char scratch[256];
-	while (g_watch_frames_consumed < frame && PlayBackBuffer.ptr + 10 < PlayBackBuffer.end) {
-		char b = PlayBackBuffer.load_char();
-		if (b == 0x12) {
-			int remaining = PlayBackBuffer.load_short();
-			if (remaining < 0) break;
-			while (remaining > 0) { // always consume the record's full length, even if > sizeof(scratch) - see the truncation-bug notes elsewhere in this file
-				int chunk = min(remaining, (int)sizeof(scratch));
-				PlayBackBuffer.load_bytes(scratch, chunk);
-				remaining -= chunk;
-			}
+	// Whole records only, measured exactly (the old "ptr + 10 < end" gate
+	// stopped a record short whenever the target sat near the end of what
+	// had streamed in - a checkpoint taken at the live edge - leaving the
+	// reader a frame behind the state just loaded).
+	while (g_watch_frames_consumed < frame) {
+		int n = WatchCompleteRecordLength();
+		if (n <= 0)
+			break;
+		if ((unsigned char)*PlayBackBuffer.ptr == 0x12)
 			g_watch_frames_consumed++;
-		} else if (b == 20) {
-			char nick[100];
-			PlayBackBuffer.load_str(nick, 100);
-			PlayBackBuffer.load_int();
-		} else if (b == 8) {
-			char nick[100], msg[500];
-			PlayBackBuffer.load_str(nick, 100);
-			PlayBackBuffer.load_str(msg, 500);
-		} else break;
+		PlayBackBuffer.ptr += n;
 	}
 }
 
