@@ -740,6 +740,21 @@ bool kaillera_retryconnect_pump() {
 		KAILLERAC.connection->resend_message(5);
 	}
 
+	// Keepalive, same as kaillera_step()'s: that one stops running once the
+	// game has started, and the replay phase sends no GAMEDATA either - the
+	// only other thing a server counts as "still here" - so the server's
+	// keepAliveTimeout (EmuLinker-K: 190s) dropped every player with "Ping
+	// timeout" whenever the host took longer than that to go live (seen
+	// 2026-09-28, both players at the same instant ~3.5 min in). Runs paused
+	// too: RetroArch's paused tick polls kailleraRetryConnectPoll(), which
+	// lands here.
+	if (KAILLERAC.USERSTAT > 1 && KAILLERAC.connection && now - KAILLERAC.tmoutrsttime > KAILLERA_TIMEOUT_RESET) {
+		KAILLERAC.tmoutrsttime = now;
+		k_instruction trst;
+		trst.type = TMOUTRST;
+		KAILLERAC.connection->send_instruction(&trst);
+	}
+
 	// Re-check: a RETRYCON_CONTROL(GO_LIVE) or RETRYCON_NAK processed just
 	// above may have cleared it.
 	return kaillera_retryconnect_active();
