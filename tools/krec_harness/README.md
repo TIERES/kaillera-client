@@ -22,7 +22,7 @@ Validado em 2026-09-28: reproduz bit a bit a partida
 - Python 3 64 bits (`py -3`). Não precisa de bibliotecas extras.
 - Uma pasta do RetroArch TIERES com `cores\pcsx_rearmed_libretro.dll`,
   `system\` (BIOS) e `config\PCSX-ReARMed\PCSX-ReARMed.opt`.
-  Padrão: `--ra D:\JOGOS\RetroArch-1.16.0.FFW.TIERES.0.2`.
+  Padrão: `--ra D:\JOGOS\RetroArch-1.16.0.FFW.TIERES.0.3`.
 - O arquivo do jogo, via `--game` (padrão: o `.bin` do Master League em Downloads).
 
 Mantenha `FORCED` em `krec_harness.py` igual a `ksync_forced_options[]`
@@ -79,6 +79,33 @@ Resultados de 2026-09-28:
 - save/load do PCSX é determinístico: o espectador fica idêntico ao host;
 - o salto recusado diverge no primeiro frame;
 - `pcsx_rearmed_gpu_thread_rendering` diferente entre as máquinas diverge.
+
+## Core com espaço de código maior (RetroArch fechando no meio da partida)
+
+O dynarec do PCSX-ReARMed (Lightrec) guarda o código compilado num espaço de
+8 MB. Em algumas máquinas o core avisa "Memory map is sub-par" e gera código
+maior, e numa partida longa esse espaço pode acabar. O log mostra
+"Could not alloc even after removing old blocks!" e depois
+"Unable to compile block!". Daí há dois desfechos possíveis:
+
+- o core termina o processo ("Exiting at cycle ...", o RetroArch fecha sem aviso);
+- ou a emulação diverge (desync).
+
+Casos de 2026-09-28:
+
+- a partida `..._Nicolas_BSB_TIERES_R7_SemMCard.krec` fecha no frame 79 152;
+- a partida `..._Jefferson_Coimbra_new_player.krec` dessincroniza em ~23:30.
+
+O core corrigido está em https://github.com/TIERES/pcsx_rearmed (branch
+`tieres`, build com `tieres/build-win64.sh`). É o mesmo commit `8625c39`, com
+as mesmas strings de versão e `CODE_BUFFER_SIZE` de 32 MB. Validado no harness:
+
+- as duas partidas acima vão até o fim, com a RAM igual à dos jogadores;
+- nas três partidas de teste, as 920 janelas de digest foram todas iguais às dos jogadores;
+- states do core oficial carregam no novo e vice-versa, com emulação idêntica.
+
+Para testar um core com o harness: `--core caminho\pcsx_rearmed_libretro.dll`.
+Para achar onde um core fecha o processo: `--trace-from <frame>`.
 
 ## Limitações
 

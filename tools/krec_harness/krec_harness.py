@@ -23,7 +23,7 @@ import zlib
 
 from krec import Krec
 
-DEFAULT_RA = r"D:\JOGOS\RetroArch-1.16.0.FFW.TIERES.0.2"
+DEFAULT_RA = r"D:\JOGOS\RetroArch-1.16.0.FFW.TIERES.0.3"
 DEFAULT_GAME = r"C:\Users\walti\Downloads\Telegram Desktop\MasterLeague12TemporadaLWS2F.bin"
 
 # Keep in sync with ksync_forced_options[] in retroarch-k3's
@@ -58,6 +58,7 @@ FORCED = {
 
 DIGEST_FRAMES = 300
 MASK64 = (1 << 64) - 1
+TRACE_FROM = 0  # --trace-from: log every frame from here on (to pin down a crash)
 
 
 def fmt_time(frame):
@@ -94,7 +95,7 @@ class Core:
     """One core per process - the DLL keeps global state, so a second
     instance means a second process (see the ref/spectator modes)."""
 
-    def __init__(self, ra, game, overrides=None, verbose=False, workdir="."):
+    def __init__(self, ra, game, overrides=None, verbose=False, workdir=".", core_path=None):
         self.opts = {}
         opt_file = os.path.join(ra, "config", "PCSX-ReARMed", "PCSX-ReARMed.opt")
         if os.path.exists(opt_file):
@@ -112,7 +113,7 @@ class Core:
         self.av = 3
         self.joy = [[0] * 6 for _ in range(8)]
         self._strs = {}
-        self.lib = C.CDLL(os.path.join(ra, "cores", "pcsx_rearmed_libretro.dll"))
+        self.lib = C.CDLL(os.path.abspath(core_path) if core_path else os.path.join(ra, "cores", "pcsx_rearmed_libretro.dll"))
         L = self.lib
         L.retro_serialize_size.restype = C.c_size_t
         L.retro_serialize.argtypes = [C.c_void_p, C.c_size_t]
@@ -284,7 +285,7 @@ def open_core(a, k=None):
         mc = k.memcard_marker()
         if mc is False:
             print("ATENCAO: partida COM memory card - o harness roda sem cartao, pode divergir quando o jogo ler o cartao.", file=sys.stderr)
-    core = Core(a.ra, a.game, overrides, a.verbose, a.workdir)
+    core = Core(a.ra, a.game, overrides, a.verbose, a.workdir, a.core)
     core.av = a.av
     return core
 
@@ -308,6 +309,12 @@ def check_windows(k, core, first_frame, last_frame, valid_from, label, max_misma
     for f in range(first_frame, last_frame + 1):
         core.set_input(k.frames[f - 1])
         core.run()
+        # The core can end the whole process on its own (e.g. Lightrec's
+        # "Exiting at cycle ..." after running out of code space) - this is
+        # the only trace of where that happened.
+        if f % 1000 == 0 or (TRACE_FROM and f >= TRACE_FROM):
+            sys.stderr.write("[frame %d ~%s]\n" % (f, fmt_time(f)))
+            sys.stderr.flush()
         w = dg.after_frame(f)
         if w is None:
             continue
@@ -488,6 +495,7 @@ def main():
     ap.add_argument("--offset", type=int, help="golive: offset do stream do state")
     ap.add_argument("--frames", type=int, default=0, help="audit/golive: limite de frames")
     ap.add_argument("--max-mismatches", type=int, default=3)
+    ap.add_argument("--trace-from", type=int, default=0, help="audit/golive: registra cada frame a partir deste (para achar onde o core fecha o processo)")
     ap.add_argument("--F", type=int, default=30000, help="ref/spectator: frame em cujo inicio o state e tirado")
     ap.add_argument("--K", type=int, default=6000, help="ref/spectator: frames depois de F")
     ap.add_argument("--G", type=int, default=0, help="spectator: frames de historico proprio antes do load")
@@ -501,9 +509,12 @@ def main():
     ap.add_argument("--opt", action="append", default=[], help="chave=valor sobre as opcoes do core")
     ap.add_argument("--ra", default=DEFAULT_RA, help="pasta do RetroArch (core, system, .opt)")
     ap.add_argument("--game", default=DEFAULT_GAME, help="arquivo do jogo")
+    ap.add_argument("--core", help="outro pcsx_rearmed_libretro.dll no lugar do da pasta do RetroArch")
     ap.add_argument("--workdir", default=".")
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args()
+    global TRACE_FROM
+    TRACE_FROM = a.trace_from
 
     if a.mode == "info":
         k = Krec(a.krec)
