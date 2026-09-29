@@ -313,6 +313,15 @@ void kaillera_ProcessGeneralInstruction(k_instruction * ki) {
 			unsigned short id = ki->load_short();
 			int ping = ki->load_int();
 			int conn = ki->load_char();
+			// The server announces our own join right after the login burst's ServerStatus
+			// (LONGSUCC). If that ServerStatus was lost and k_message skipped the hole, this is
+			// the first proof the login went through - without it USERSTAT would stay at 1 and
+			// chat, game creation and the TMOUTRST keepalive would all stay disabled.
+			if (KAILLERAC.USERSTAT == 1 && _stricmp(ki->user, KAILLERAC.USERNAME) == 0) {
+				KAILLERAC.USERSTAT = 2;
+				KAILLERAC.tmoutrsttime = p2p_GetTime();
+				kaillera_core_debug("Login confirmed by own join (server status was lost)");
+			}
 			kaillera_user_join_callback(ki->user, ping, id, conn);
 			break;
 		}

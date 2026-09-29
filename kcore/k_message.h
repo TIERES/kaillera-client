@@ -13,6 +13,14 @@
 
 #define ICACHESIZE 16
 
+// How long a missing message at the head of in_cache may hold up everything queued behind it
+// before we give up on it. The server never resends old messages, so a hole that a late or
+// reordered bundle hasn't filled by then is gone for good. Before this, one hole froze the
+// client: EmuLinker fires the post-login burst (ServerStatus + MOTD + UserJoined, 12 bundles)
+// in well under a millisecond, and on some ISP paths the first bundles - the only ones carrying
+// ServerStatus - never arrive, which left the client on "logging in" forever.
+#define KMSG_HOLE_SKIP_MS 250
+
 #pragma pack(push, 1)
 
 typedef struct {
@@ -39,14 +47,23 @@ public:
 		unsigned short      last_cached_instruction;
 		oslist<k_instruction_ptr, ICACHESIZE> out_cache;
 		oslist<k_instruction_ptr, ICACHESIZE> in_cache;
+		// in_cache always holds a contiguous run of serials ending at last_cached_instruction:
+		// items[i] is serial last_cached_instruction - (size - 1 - i). A slot whose message
+		// hasn't arrived has body == NULL.
+		bool                hole_pending; // items[0] is a hole and hole_since is when we first saw it
+		DWORD               hole_since;
 	public:
 		int                 default_ipm;
+		unsigned int        holes_skipped;
 	    k_message(){
 	        k_socket();
 	        last_sent_instruction = 0;
 	        last_processed_instruction = 0;
 			last_cached_instruction = -1;
 	        default_ipm = 3;
+			hole_pending = false;
+			hole_since = 0;
+			holes_skipped = 0;
 	    }
 
 	    void send_instruction(k_instruction * arg_0){
@@ -160,100 +177,63 @@ public:
 						memcpy(&latest_head, ptr, sizeof(latest_head));
 						unsigned short latest_serial = latest_head.serial;
 
-						int si = in_cache.size();
-						////kprintf("si=%i", si);
-
 						unsigned short tx = latest_serial-last_cached_instruction;
 						//kprintf("latest_serial %i -last_cached_instruction %i == tx=%i", latest_serial,last_cached_instruction,tx);
 
-	                    if (tx > 0 && tx < 10 && tx <= ICACHESIZE) {
-							if (si < 0 || si > ICACHESIZE) {
-								for (int i = 0; i < in_cache.size(); i++) {
-									if (in_cache.items[i].body)
-										free(in_cache.items[i].body);
-									in_cache.items[i].body = NULL;
-								}
-								in_cache.clear();
-								si = 0;
-							}
-							if (si + (int)tx > ICACHESIZE) {
+						if (tx >= 10 && tx < 0x8000) {
+							// The server is 10+ messages past anything we hold, so everything in
+							// between is gone. Resync on this bundle instead of ignoring it - and,
+							// since last_cached_instruction would never move again, every later one.
+							unsigned short k = min((unsigned short)instruction_count, (unsigned short)9);
+							free_in_cache();
+							PACKETLOSSCOUNT += tx - k;
+							last_cached_instruction = latest_serial - k;
+							tx = k;
+						}
+
+	                    if (tx > 0 && tx < 10) {
+							int si = in_cache.size();
+							if (si < 0 || si + (int)tx > ICACHESIZE) {
 								// Too much queued. Drop pending data to avoid out-of-bounds.
-								for (int i = 0; i < in_cache.size(); i++) {
-									if (in_cache.items[i].body)
-										free(in_cache.items[i].body);
-									in_cache.items[i].body = NULL;
-								}
-								in_cache.clear();
+								free_in_cache();
 								si = 0;
 							}
 
 	    					in_cache.set_size(si+tx);
 							for (int i = si; i < si + (int)tx; i++) {
-								in_cache.items[i].head.serial = 0;
+								in_cache.items[i].head.serial = (unsigned short)(last_cached_instruction + 1 + (i - si));
 								in_cache.items[i].head.length = 0;
 								in_cache.items[i].body = NULL;
 							}
-	    					//kprintf("ss=%i", in_cache.size());
-	    
-	                        for (int u=0; u<instruction_count; u++) {
-								if ((size_t)(end - ptr) < sizeof(k_instruction_head))
-									break;
-	    						//kprintf(__FILE__ ":%i", __LINE__);
-	    
-	    						k_instruction_head ih;
-								memcpy(&ih, ptr, sizeof(ih));
-	    						unsigned short serial = ih.serial;
-	                            unsigned short length = ih.length;
-	    
-	    						ptr += sizeof(k_instruction_head);
-	    
-	                            if (serial == last_cached_instruction)
-	                                break;
-
-								// Validate length and bounds before reading.
-								if (length == 0 || length > 0x4E20)
-									break;
-								if ((size_t)(end - ptr) < (size_t)length)
-									break;
-	    
-	    						unsigned short cix = serial - last_cached_instruction;
-
-								if (cix == 0 || cix > tx) {
-									// Unexpected serial delta; skip but keep parsing within bounds.
-									ptr += length;
-									continue;
-								}
-	    
-	    						PACKETLOSSCOUNT += cix - 1;
-	    
-	    						int ind = si + (cix) - 1;
-	    						
-	    						//kprintf("ind=%i", ind);
-								if (ind < 0 || ind >= ICACHESIZE) {
-									ptr += length;
-									continue;
-								}
-	    
-	    						in_cache.items[ind].head.serial = serial;
-	    						in_cache.items[ind].head.length = length;
-								if (in_cache.items[ind].body)
-									free(in_cache.items[ind].body);
-								in_cache.items[ind].body = (char*)malloc(length);
-								if (!in_cache.items[ind].body)
-									break;
-	                            memcpy(in_cache.items[ind].body, ptr, length);
-	    
-	                            ptr += length;
-	                        }
-	    
+							PACKETLOSSCOUNT += tx - 1;
 	    					last_cached_instruction = latest_serial;
+	                    }
 
+						// Newer bundle or not, any message in it may fill a slot we're still
+						// missing: bundles repeat the previous messages, and a reordered older
+						// bundle can carry exactly the one the newer bundles no longer include.
+	                    for (int u=0; u<instruction_count; u++) {
+							if ((size_t)(end - ptr) < sizeof(k_instruction_head))
+								break;
+							k_instruction_head ih;
+							memcpy(&ih, ptr, sizeof(ih));
+							ptr += sizeof(k_instruction_head);
+
+							// Validate length and bounds before reading.
+							if (ih.length == 0 || ih.length > 0x4E20)
+								break;
+							if ((size_t)(end - ptr) < (size_t)ih.length)
+								break;
+
+							fill_slot(ih.serial, ptr, ih.length);
+	                        ptr += ih.length;
 	                    }
 	                }
 	            }
 	        }
 recv_done:
 
+			skip_stale_holes();
 	        if (in_cache.size() > 0) {
 				if (in_cache.items[0].body == NULL || in_cache.items[0].head.length == 0)
 					return false;
@@ -291,12 +271,68 @@ recv_done:
 	        return false;
 	    }
 
+    // True only when an instruction can actually be delivered, or a datagram is waiting to be
+    // read. It used to be true for any non-empty in_cache, so a queue stuck behind a hole made
+    // every "while (has_data()) receive_instruction(...)" loop spin forever without ever
+    // reading the socket again.
     bool has_data(){
-        if (in_cache.length == 0)
-            return has_data_waiting;
-        else
+		skip_stale_holes();
+        if (in_cache.length > 0 && in_cache.items[0].body != NULL)
             return true;
+        return has_data_waiting;
     }
+
+	// Stores a message in its in_cache slot if that slot is still empty. Serials outside the
+	// cached window (already delivered, or older than what we still hold) are ignored.
+	void fill_slot(unsigned short serial, const char* data, unsigned short length) {
+		unsigned short back = (unsigned short)(last_cached_instruction - serial);
+		int n = in_cache.size();
+		if ((int)back >= n)
+			return;
+		k_instruction_ptr& slot = in_cache.items[n - 1 - back];
+		if (slot.body != NULL)
+			return;
+		slot.body = (char*)malloc(length);
+		if (slot.body == NULL)
+			return;
+		memcpy(slot.body, data, length);
+		slot.head.serial = serial;
+		slot.head.length = length;
+	}
+
+	void free_in_cache() {
+		int n = min(in_cache.size(), ICACHESIZE);
+		for (int i = 0; i < n; i++) {
+			if (in_cache.items[i].body)
+				free(in_cache.items[i].body);
+			in_cache.items[i].body = NULL;
+		}
+		in_cache.clear();
+		hole_pending = false;
+	}
+
+	// Gives up on a missing head message once it has held up the queue for
+	// KMSG_HOLE_SKIP_MS (see the define), so whatever is queued behind it gets delivered.
+	void skip_stale_holes() {
+		if (in_cache.size() == 0 || in_cache.items[0].body != NULL) {
+			hole_pending = false;
+			return;
+		}
+		DWORD now = GetTickCount();
+		if (!hole_pending) {
+			hole_pending = true;
+			hole_since = now;
+			return;
+		}
+		if (now - hole_since < KMSG_HOLE_SKIP_MS)
+			return;
+		while (in_cache.size() > 0 && in_cache.items[0].body == NULL) {
+			last_processed_instruction = in_cache.items[0].head.serial;
+			in_cache.removei(0);
+			holes_skipped++;
+		}
+		hole_pending = false;
+	}
 
     void resend_message(int limit){
         SOCK_SEND_RETR++;
