@@ -20,6 +20,9 @@
 #include "common/n02_stream.h"
 #include "common/n02_update.h"
 #include "common/n02_watch.h"
+#include "common/n02_wecamp.h"
+
+void __cdecl kaillera_ui_gdebug(char* arg_0, ...); // kaillera_ui.cpp - room chat line
 
 #include "errr.h"
 #include <limits.h>
@@ -179,8 +182,48 @@ static int CurrentGameNoMemcard() {
 	if (get_active_mode_index() == 2 || player_is_watching())
 		return player_get_no_memcard();
 	if (get_active_mode_index() == 1)
-		return kaillera_NoMemcardEnabled() ? 1 : 0;
+		return (kaillera_NoMemcardEnabled() && !kaillera_McOnlineEnabled()) ? 1 : 0;
 	return p2p_NoMemcardEnabled() ? 1 : 0;
+}
+
+// Memory card setup for the game starting now: 2 = "M. Card online" (WE
+// Camp cards), 1 = each player's own, 0 = none. Same sources as
+// CurrentGameNoMemcard(); a replay/stream/retry-connect is "online" when it
+// carries the online marker (krec_reader.h). P2P has no online cards.
+#define N02_MEMCARD_NONE   0
+#define N02_MEMCARD_OWN    1
+#define N02_MEMCARD_ONLINE 2
+static int CurrentGameMemcardMode() {
+	char sha[2][65];
+	if (kaillera_retryconnect_active()) {
+		if (kaillera_retryconnect_mconline(sha))
+			return N02_MEMCARD_ONLINE;
+		return kaillera_retryconnect_no_memcard() ? N02_MEMCARD_NONE : N02_MEMCARD_OWN;
+	}
+	if (get_active_mode_index() == 2 || player_is_watching()) {
+		if (player_get_mconline(sha))
+			return N02_MEMCARD_ONLINE;
+		return player_get_no_memcard() ? N02_MEMCARD_NONE : N02_MEMCARD_OWN;
+	}
+	if (get_active_mode_index() == 1) {
+		if (kaillera_McOnlineEnabled())
+			return N02_MEMCARD_ONLINE;
+		return kaillera_NoMemcardEnabled() ? N02_MEMCARD_NONE : N02_MEMCARD_OWN;
+	}
+	return p2p_NoMemcardEnabled() ? N02_MEMCARD_NONE : N02_MEMCARD_OWN;
+}
+
+// "MultiTap" for the game starting now (1 = RetroArch may plug a PSX Multitap
+// into PCSX ReARMed when the room has 3+ players, 0 = never) - same sources
+// as CurrentGameNoMemcard() above. P2P is always 2 players, so 0 there.
+static int CurrentGameMultiTap() {
+	if (kaillera_retryconnect_active())
+		return kaillera_retryconnect_multitap();
+	if (get_active_mode_index() == 2 || player_is_watching())
+		return player_get_multitap();
+	if (get_active_mode_index() == 1)
+		return kaillera_MultiTapEnabled() ? 1 : 0;
+	return 0;
 }
 
 int WINAPI _gameCallback(char *game, int player, int numplayers){
@@ -193,6 +236,7 @@ int WINAPI _gameCallback(char *game, int player, int numplayers){
 
 	const int noMemcard = CurrentGameNoMemcard();
 	const char* memcardMarker = noMemcard ? N02_MEMCARD_MARKER_ON : N02_MEMCARD_MARKER_OFF;
+	const char* multitapMarker = CurrentGameMultiTap() ? N02_MULTITAP_MARKER_ON : N02_MULTITAP_MARKER_OFF;
 
 	if (active_mod.RecordingEnabled()) {
 		n02_TRACE();
@@ -241,6 +285,11 @@ int WINAPI _gameCallback(char *game, int player, int numplayers){
 		RecordingBuffer.put_bytes((char*)N02_MEMCARD_MARKER_NICK, (int)strlen(N02_MEMCARD_MARKER_NICK) + 1);
 		RecordingBuffer.put_bytes((char*)memcardMarker, (int)strlen(memcardMarker) + 1);
 		RecordingBuffer.write();
+		// Second record: the "MultiTap" marker.
+		RecordingBuffer.put_char(8);
+		RecordingBuffer.put_bytes((char*)N02_MEMCARD_MARKER_NICK, (int)strlen(N02_MEMCARD_MARKER_NICK) + 1);
+		RecordingBuffer.put_bytes((char*)multitapMarker, (int)strlen(multitapMarker) + 1);
+		RecordingBuffer.write();
 		n02_TRACE();
 	}
 
@@ -251,6 +300,7 @@ int WINAPI _gameCallback(char *game, int player, int numplayers){
 		n02_stream_start_session(infos_copy.appName, GameName, player, numplayers, recording_player_names, ownerName);
 		// Same first record for spectators and the online replay.
 		n02_stream_push_chat(N02_MEMCARD_MARKER_NICK, memcardMarker);
+		n02_stream_push_chat(N02_MEMCARD_MARKER_NICK, multitapMarker);
 	}
 
 	if (infos_copy.gameCallback)
@@ -681,6 +731,249 @@ extern "C" {
 	   player keeps their own cards. */
 	int KAILLERA_DLLEXP kailleraGetNoMemoryCard(){
 		return CurrentGameNoMemcard();
+	}
+
+	/* "MultiTap" for the game starting now (see CurrentGameMultiTap()) - same
+	   optional-export convention; the frontend reads it from its game
+	   callback. 1 = a PSX Multitap may be plugged in when the game has 3+
+	   players (the frontend picks the port(s) from the player count), 0 =
+	   never. */
+	int KAILLERA_DLLEXP kailleraGetMultiTap(){
+		return CurrentGameMultiTap();
+	}
+
+	/* ------------------------------------------------------------------
+	   "M. Card online" - optional exports, same GetProcAddress()-if-present
+	   convention. The frontend (retroarch-k3-ffw's kaillera_sync.c):
+	    1. reads kailleraGetMemcardMode() from its game callback;
+	    2. for an online game, right before loading the core, hashes the
+	       content ("CRC32:SIZE") and calls kailleraMemcardPrepare(), which
+	       writes the match's two cards into `dir` (pcsx-card1.mcd = 1P's,
+	       pcsx-card2.mcd = 2P's) - from WE Camp for a live room, or the exact
+	       versions named by the replay's marker for playback/Watch Live/
+	       retry-connect;
+	    3. after the core is unloaded, calls kailleraMemcardFinish(): in a
+	       live room the final cards are sent back (on a worker thread) - by
+	       the host right away, by the others only if the host didn't (see
+	       McCommitThread); the first send becomes the cards' new version.
+	   ------------------------------------------------------------------ */
+
+	static struct {
+		bool live;              // a live room's cards - send them back at the end
+		char dir[MAX_PATH];
+		char contentId[32];
+		char players[8 * 32 + 8];
+		int slots;
+		char owner[2][32];
+		char base[2][65];
+	} g_mc;
+
+	static bool McWriteCard(const char* dir, int slot, const char* data) {
+		char path[MAX_PATH];
+		_snprintf(path, sizeof(path), "%s\\pcsx-card%d.mcd", dir, slot + 1);
+		path[sizeof(path) - 1] = 0;
+		HANDLE f = CreateFile(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+		if (f == INVALID_HANDLE_VALUE)
+			return false;
+		DWORD written = 0;
+		BOOL ok = WriteFile(f, data, N02_MCD_SIZE, &written, NULL);
+		CloseHandle(f);
+		return ok && written == N02_MCD_SIZE;
+	}
+
+	static bool McReadCard(const char* dir, int slot, char* data) {
+		char path[MAX_PATH];
+		_snprintf(path, sizeof(path), "%s\\pcsx-card%d.mcd", dir, slot + 1);
+		path[sizeof(path) - 1] = 0;
+		HANDLE f = CreateFile(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+		if (f == INVALID_HANDLE_VALUE)
+			return false;
+		DWORD got = 0;
+		BOOL ok = ReadFile(f, data, N02_MCD_SIZE, &got, NULL);
+		CloseHandle(f);
+		return ok && got == N02_MCD_SIZE;
+	}
+
+	// The marker every replay/stream of this match carries (krec_reader.h).
+	static void McWriteMarker(const char* sha1, const char* sha2) {
+		char marker[200];
+		_snprintf(marker, sizeof(marker), "%s%s %s", N02_MCONLINE_MARKER_PREFIX, sha1, sha2 && sha2[0] ? sha2 : "-");
+		marker[sizeof(marker) - 1] = 0;
+#ifdef RECORDER
+		if (out != INVALID_HANDLE_VALUE) {
+			RecordingBuffer.put_char(8);
+			RecordingBuffer.put_bytes((char*)N02_MEMCARD_MARKER_NICK, (int)strlen(N02_MEMCARD_MARKER_NICK) + 1);
+			RecordingBuffer.put_bytes(marker, (int)strlen(marker) + 1);
+			RecordingBuffer.write();
+		}
+#endif
+		if (active_mod.StreamingEnabled() && active_mod.IsHost())
+			n02_stream_push_chat(N02_MEMCARD_MARKER_NICK, marker);
+	}
+
+	// Playback / Watch Live / retry-connect: the versions the match began with.
+	static int McPrepareFromMarker(const char* dir, char sha[2][65]) {
+		static char buf[N02_MCD_SIZE + 1];
+		for (int s = 0; s < 2; s++) {
+			if (strlen(sha[s]) != 64)
+				continue; // empty slot - the core creates a blank card
+			if (!n02_wecamp_get_card(sha[s], buf, true) || !McWriteCard(dir, s, buf))
+				return -1;
+		}
+		return 1;
+	}
+
+	static int McPrepareLive(const char* contentId, const char* gameFile, const char* dir) {
+		static char buf[N02_MCD_SIZE + 1];
+		char err[300];
+
+		if (!n02_wecamp_logged_in()) {
+			kaillera_ui_gdebug("* Memory Card online: voce nao esta conectado a sua conta WE Camp (botao \"M. Card Online\" na tela de servidores).");
+			return -1;
+		}
+		char nick[32];
+		kaillera_get_username(nick, sizeof(nick));
+		if (_stricmp(nick, n02_wecamp_username()) != 0) {
+			kaillera_ui_gdebug("* Memory Card online: seu nick (%s) e diferente da sua conta WE Camp (%s).", nick, n02_wecamp_username());
+			return -1;
+		}
+
+		// 1P, 2P, ... - the room list is in the server's join order. Checked
+		// against our own player number, so a list in a different order
+		// can never hand anybody the wrong card silently.
+		char names[8][32];
+		int count = kaillera_GetGamePlayers(names, 8);
+		if (numplayers < count)
+			count = numplayers;
+		if (playerno < 1 || playerno > count || _stricmp(names[playerno - 1], nick) != 0) {
+			kaillera_ui_gdebug("* Memory Card online: nao consegui confirmar a ordem dos jogadores.");
+			return -1;
+		}
+		g_mc.players[0] = 0;
+		for (int i = 0; i < count; i++) {
+			if (i) strcat(g_mc.players, ",");
+			strcat(g_mc.players, names[i]);
+		}
+
+		n02_wecamp_checkout_result co;
+		if (!n02_wecamp_checkout(contentId, gameFile, g_mc.players, &co, err, sizeof(err))) {
+			kaillera_ui_gdebug("* Memory Card online indisponivel: %s", err);
+			return -1;
+		}
+		for (int s = 0; s < co.slots; s++) {
+			if (!n02_wecamp_get_card(co.sha256[s], buf, false) || !McWriteCard(dir, s, buf)) {
+				kaillera_ui_gdebug("* Memory Card online: falha ao baixar o cartao de %s.", co.player[s]);
+				return -1;
+			}
+		}
+
+		g_mc.live = true;
+		strncpy(g_mc.contentId, contentId, sizeof(g_mc.contentId) - 1);
+		g_mc.slots = co.slots;
+		for (int s = 0; s < co.slots; s++) {
+			strncpy(g_mc.owner[s], co.player[s], 31);
+			strncpy(g_mc.base[s], co.sha256[s], 64);
+		}
+		McWriteMarker(co.sha256[0], co.slots > 1 ? co.sha256[1] : "");
+		if (co.slots > 1)
+			kaillera_ui_gdebug("* Memory Card online: slot 1 = %s (versao %d), slot 2 = %s (versao %d).",
+				co.player[0], co.version[0], co.player[1], co.version[1]);
+		else
+			kaillera_ui_gdebug("* Memory Card online: slot 1 = %s (versao %d).", co.player[0], co.version[0]);
+		return 1;
+	}
+
+	int KAILLERA_DLLEXP kailleraGetMemcardMode(){
+		return CurrentGameMemcardMode();
+	}
+
+	int KAILLERA_DLLEXP kailleraMemcardPrepare(const char* contentId, const char* gameFile, const char* dir){
+		memset(&g_mc, 0, sizeof(g_mc));
+		if (contentId == NULL || dir == NULL || CurrentGameMemcardMode() != N02_MEMCARD_ONLINE)
+			return 0;
+		strncpy(g_mc.dir, dir, sizeof(g_mc.dir) - 1);
+
+		char sha[2][65];
+		if (kaillera_retryconnect_active()) {
+			kaillera_retryconnect_mconline(sha);
+			return McPrepareFromMarker(dir, sha);
+		}
+		if (get_active_mode_index() == 2 || player_is_watching()) {
+			player_get_mconline(sha);
+			return McPrepareFromMarker(dir, sha);
+		}
+		if (get_active_mode_index() == 1)
+			return McPrepareLive(contentId, gameFile ? gameFile : "", dir);
+		return 0;
+	}
+
+	struct McCommitJob {
+		char dir[MAX_PATH];
+		char contentId[32];
+		char players[8 * 32 + 8];
+		int slots;
+		char owner[2][32];
+		char base[2][65];
+		bool host;
+		char data[N02_MCD_SIZE];
+	};
+
+	// Every PC ends the match with the same two cards, so one send is enough:
+	// the host sends right away, everybody else only after a while - by then
+	// the host's send is normally in and theirs is an "already"; if the host
+	// dropped, theirs is the one that saves the cards.
+	#define N02_MC_GUEST_COMMIT_DELAY_MS 15000
+
+	static DWORD WINAPI McCommitThread(LPVOID param) {
+		McCommitJob* job = (McCommitJob*)param;
+		char* data = job->data;
+		if (!job->host)
+			Sleep(N02_MC_GUEST_COMMIT_DELAY_MS);
+		for (int s = 0; s < job->slots; s++) {
+			if (!McReadCard(job->dir, s, data)) {
+				kaillera_ui_gdebug("* Memory Card online: nao encontrei o cartao de %s para salvar.", job->owner[s]);
+				continue;
+			}
+			char status[64];
+			int version = 0;
+			n02_wecamp_commit(job->contentId, job->owner[s], job->base[s], job->players, data, status, sizeof(status), &version);
+			if (strcmp(status, "committed") == 0)
+				kaillera_ui_gdebug("* Memory Card de %s salvo no WE Camp (versao %d).", job->owner[s], version);
+			else if (strcmp(status, "already") == 0)
+				; // the host (or another player) already saved this exact card
+			else if (strcmp(status, "unchanged") == 0) {
+				if (job->host)
+					kaillera_ui_gdebug("* Memory Card de %s sem alteracoes.", job->owner[s]);
+			} else if (strcmp(status, "conflict") == 0)
+				kaillera_ui_gdebug("* Memory Card de %s NAO foi salvo: ele mudou no WE Camp durante a partida "
+					"(envio pelo site ou cartao diferente do salvo pelo host).", job->owner[s]);
+			else
+				kaillera_ui_gdebug("* Memory Card de %s NAO foi salvo (%s).", job->owner[s], status);
+		}
+		delete job;
+		return 0;
+	}
+
+	void KAILLERA_DLLEXP kailleraMemcardFinish(){
+		if (!g_mc.live) {
+			memset(&g_mc, 0, sizeof(g_mc));
+			return;
+		}
+		McCommitJob* job = new McCommitJob;
+		memset(job, 0, sizeof(*job));
+		strncpy(job->dir, g_mc.dir, sizeof(job->dir) - 1);
+		strncpy(job->contentId, g_mc.contentId, sizeof(job->contentId) - 1);
+		strncpy(job->players, g_mc.players, sizeof(job->players) - 1);
+		job->slots = g_mc.slots;
+		memcpy(job->owner, g_mc.owner, sizeof(job->owner));
+		memcpy(job->base, g_mc.base, sizeof(job->base));
+		job->host = active_mod.IsHost();
+		memset(&g_mc, 0, sizeof(g_mc));
+		HANDLE t = CreateThread(NULL, 0, McCommitThread, job, 0, NULL);
+		if (t)
+			CloseHandle(t);
+		else
+			delete job;
 	}
 
 	/* retry-connect (kcore/kaillera_retryconnect.h) - optional exports, same

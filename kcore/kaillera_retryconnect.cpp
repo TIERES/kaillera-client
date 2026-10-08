@@ -308,6 +308,16 @@ int kaillera_retryconnect_no_memcard() {
 	return g_reader.detect_memcard_marker() > 0 ? 1 : 0;
 }
 
+bool kaillera_retryconnect_mconline(char sha[2][65]) {
+	memset(sha, 0, 2 * 65);
+	return g_reader.detect_mconline_marker(sha);
+}
+
+int kaillera_retryconnect_multitap() {
+	// A replay without the marker is from before it existed: multitap off.
+	return g_reader.detect_multitap_marker() > 0 ? 1 : 0;
+}
+
 int kaillera_retryconnect_get_frame_index() {
 	if (!g_active)
 		return -1;

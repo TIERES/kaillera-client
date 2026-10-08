@@ -19,6 +19,8 @@ int kaillera_get_delay();
 bool kaillera_is_connected();
 bool kaillera_is_host();
 void kaillera_get_username(char* out, int cap);
+// Server id of the game room we're in (created or joined).
+unsigned int kaillera_get_game_id();
 bool kaillera_core_initialize(int port, char * appname, char * username, char connection_setting);
 void kaillera_set_spoof_ping(int spoof_ping_ms);  // Call before connect: 0=auto, >0=spoof ping in ms
 bool kaillera_core_connect(char * ip, int port = 27888);

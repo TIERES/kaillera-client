@@ -40,6 +40,13 @@ static DWORD g_watch_mpv_last_return = 0;
 // The replay's own marker decides, then its file name's tag, then "with":
 // what every recording from before the marker existed was played with.
 static int g_playback_no_memcard = 0;
+// "MultiTap" of the replay/stream being played (1 = allowed, 0 = off) - read
+// via kailleraGetMultiTap(). Only the replay's own marker decides; without
+// one it's off, what every recording from before the marker was played with.
+static int g_playback_multitap = 0;
+// "M. Card online" of the replay/stream: the two cards' SHA-256s from its
+// marker, or empty when it wasn't an online-card match.
+static char g_playback_mc_sha[2][65] = {};
 
 // "Replays Online" checkbox state - when checked, the Records list shows
 // N02ReplayEntry entries fetched from the community server instead of local
@@ -322,10 +329,17 @@ bool player_watch_begin(const char* sessionId, const char* roomName) {
 	// RetroArch decides the memory card setup as soon as this game starts.
 	// Every byte pulled here is handed to playback. A stream without it (an
 	// older host) plays with memory card, like every replay without one.
+	// Same for "MultiTap" (second record) and "M. Card online" (third, only
+	// in online-card matches). Walks the leading chat records as they arrive
+	// and stops at the first non-marker record (input) - an older host's
+	// stream has only the memcard one.
+	memset(g_playback_mc_sha, 0, sizeof(g_playback_mc_sha));
 	{
 		char first[600];
 		int got = 0;
+		int pos = 0; // start of the next not-yet-parsed record in `first`
 		int mode = -1;
+		int multitap = -1;
 		DWORD t0 = GetTickCount();
 		while (GetTickCount() - t0 < 1500 && got < (int)sizeof(first)) {
 			int n = n02_watch_pull(first + got, (int)sizeof(first) - got, false);
@@ -333,20 +347,37 @@ bool player_watch_begin(const char* sessionId, const char* roomName) {
 				got += n;
 			else
 				Sleep(20);
-			if (got > 0 && (unsigned char)first[0] != 0x08)
-				break; // first record isn't a chat line: no marker
-			if (got > 1) {
-				char* nick_end = (char*)memchr(first + 1, 0, got - 1);
-				if (nick_end != NULL) {
-					char* msg = nick_end + 1;
-					if (memchr(msg, 0, got - (int)(msg - first)) != NULL) {
-						mode = n02_memcard_from_marker(msg);
-						break;
-					}
+			bool done = false;
+			while (pos < got) {
+				if ((unsigned char)first[pos] != 0x08) {
+					done = true; // not a chat line: no (more) markers
+					break;
+				}
+				char* nick_end = (char*)memchr(first + pos + 1, 0, got - pos - 1);
+				if (nick_end == NULL)
+					break; // record incomplete - pull more
+				char* msg = nick_end + 1;
+				char* msg_end = (char*)memchr(msg, 0, got - (int)(msg - first));
+				if (msg_end == NULL)
+					break;
+				int m = n02_memcard_from_marker(msg);
+				int t = n02_multitap_from_marker(msg);
+				char sha[2][65];
+				bool mc = n02_mconline_from_marker(msg, sha);
+				if (m >= 0) mode = m;
+				if (t >= 0) multitap = t;
+				if (mc) memcpy(g_playback_mc_sha, sha, sizeof(sha));
+				pos = (int)(msg_end + 1 - first);
+				if ((m < 0 && t < 0 && !mc) || mc) {
+					done = true; // ordinary chat, or the last marker there can be
+					break;
 				}
 			}
+			if (done)
+				break;
 		}
 		g_playback_no_memcard = (mode > 0) ? 1 : 0;
+		g_playback_multitap = (multitap > 0) ? 1 : 0;
 		if (got > 0)
 			PlayBackBuffer_Append(first, got);
 	}
@@ -439,6 +470,15 @@ int player_get_no_memcard() {
 	return g_playback_no_memcard;
 }
 
+int player_get_multitap() {
+	return g_playback_multitap;
+}
+
+bool player_get_mconline(char sha[2][65]) {
+	memcpy(sha, g_playback_mc_sha, sizeof(g_playback_mc_sha));
+	return g_playback_mc_sha[0][0] != 0;
+}
+
 // Online replays are named by the server (game + players) - once one is on
 // disk, give it the same "Sem M. Card" tag local recordings carry in their
 // names (see krec_reader.h), from its in-file marker. Updates destPath.
@@ -496,6 +536,9 @@ void player_play(char * fn){
 		if (m < 0)
 			m = n02_memcard_from_name(fn);
 		g_playback_no_memcard = (m > 0) ? 1 : 0;
+		g_playback_multitap = (g_playback_reader.detect_multitap_marker() > 0) ? 1 : 0;
+		memset(g_playback_mc_sha, 0, sizeof(g_playback_mc_sha));
+		g_playback_reader.detect_mconline_marker(g_playback_mc_sha);
 	}
 
 	strcpy(GAME, g_playback_reader.gameName);
@@ -1166,7 +1209,7 @@ static int player_MPV_records(void*values,int size){
 				char msg[500];
 				PlayBackBuffer.load_str(nick, 100);
 				PlayBackBuffer.load_str(msg, 500);
-				if (n02_memcard_from_marker(msg) < 0) // the marker isn't chat
+				if (!n02_is_marker(msg)) // the markers aren't chat
 					infos.chatReceivedCallback(nick, msg);
 				return player_MPV(values, size);
 			}
@@ -1212,7 +1255,7 @@ static int player_MPV_records(void*values,int size){
 		}
 
 		if (type == KREC_CHAT) {
-			if (n02_memcard_from_marker(g_playback_reader.last_chat_msg) < 0) // the marker isn't chat
+			if (!n02_is_marker(g_playback_reader.last_chat_msg)) // the markers aren't chat
 				infos.chatReceivedCallback(g_playback_reader.last_chat_nick, g_playback_reader.last_chat_msg);
 			continue;
 		}
