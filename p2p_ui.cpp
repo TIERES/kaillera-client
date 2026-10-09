@@ -726,10 +726,11 @@ void p2p_ping_callback(int PING){
 
 
 // Mirrors kaillera_ui.cpp's stream-toggle broadcast: P2P has no room-status
-// field either, so the host announces "Stream ao vivo!" toggles over the
-// regular chat channel with this exact prefix, which p2p_chat_callback
+// field either, so the host announces "Enviar replay online!" toggles over
+// the regular chat channel with this exact prefix, which p2p_chat_callback
 // recognizes on both ends to sync the peer's (disabled, for non-hosts)
-// checkbox instead of showing the line as a normal chat message.
+// checkbox instead of showing the line as a normal chat message. The prefix
+// keeps the old "Stream ao vivo" wording so older peers still recognize it.
 #define N02_STREAM_LIVE_CHAT_PREFIX "[Stream ao vivo]"
 // Anti-desync fingerprint line from RetroArch - see kaillera_ui.cpp.
 #define N02_SYNC_CHAT_PREFIX "[SYNC] "
@@ -1018,7 +1019,7 @@ void p2p_chat_callback(char * nick, char * msg){
 		bool live = strstr(msg, "desativado") == NULL;
 		if (!HOST)
 			SendMessage(GetDlgItem(p2p_ui_connection_dlg, CHK_STREAM), BM_SETCHECK, live ? BST_CHECKED : BST_UNCHECKED, 0);
-		outpf("* %s %s o Stream ao vivo!", nick, live ? "ativou" : "desativou");
+		outpf("* %s %s o envio do replay online!", nick, live ? "ativou" : "desativou");
 		return;
 	}
 	if (msg != NULL && strncmp(msg, N02_SYNC_CHAT_PREFIX, strlen(N02_SYNC_CHAT_PREFIX)) == 0) {
@@ -1438,9 +1439,7 @@ void p2p_enlist_game() {
 	}
 }
 
-// Shared by the CHK_ENLIST handler and by turning on "Stream ao vivo!"
-// (which forces the room onto the public list too, since otherwise nobody
-// would know a live stream exists to watch).
+// CHK_ENLIST handler: list/unlist the room and remember the choice.
 static void p2p_SetEnlisted(HWND hDlg, bool enlisted) {
 	SendMessage(GetDlgItem(hDlg, CHK_ENLIST), BM_SETCHECK, enlisted ? BST_CHECKED : BST_UNCHECKED, 0);
 	nSettings::set_int("P2P_ENLIST", enlisted ? 1 : 0);
@@ -1971,13 +1970,6 @@ LRESULT CALLBACK ConnectionDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARA
 					nSettings::set_int("P2P_STREAM_LIVE", checked ? 1 : 0);
 					if (HOST) {
 						p2p_BroadcastStreamState(checked);
-						// A live stream is useless if nobody can find the room,
-						// so turning it on also puts the room on the public
-						// list. Turning it back off leaves the list checkbox
-						// alone - the user may still want the room listed.
-						if (checked && SendMessage(GetDlgItem(hDlg, CHK_ENLIST), BM_GETCHECK, 0, 0) != BST_CHECKED) {
-							p2p_SetEnlisted(hDlg, true);
-						}
 					}
 				}
 				break;
