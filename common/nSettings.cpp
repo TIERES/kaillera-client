@@ -48,3 +48,13 @@ void nSettings::set_int(char * key, int val){
 void nSettings::set_str(char * key, char * val){
 	WritePrivateProfileString(subm, key, val, file);
 }
+int nSettings::get_int_in(char * section, char * key, int def_){
+	return GetPrivateProfileInt(section, key, def_, file);
+}
+char* nSettings::get_str_in(char * section, char * key, char * buf, char * def_){
+	GetPrivateProfileString(section, key, def_, buf, 128, file);
+	return buf;
+}
+void nSettings::set_str_in(char * section, char * key, char * val){
+	WritePrivateProfileString(section, key, val, file);
+}

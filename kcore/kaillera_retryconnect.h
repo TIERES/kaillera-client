@@ -137,6 +137,11 @@ int kaillera_retryconnect_download_state(void* outBuffer, int bufferCap, int* ou
 // also for replays without the marker, see krec_reader.h): every player
 // resumes it the way it was played, whatever the room's checkbox says.
 int kaillera_retryconnect_no_memcard();
+// Same for "MultiTap" (1 = allowed, 0 = off / no marker).
+int kaillera_retryconnect_multitap();
+// Same for "M. Card online": the cards (SHA-256s) the replay started with.
+// The resumed match reuses them read-only - its saves aren't sent back.
+bool kaillera_retryconnect_mconline(char sha[2][65]);
 
 // Current position in the replay - for a caller-side progress bar and to
 // compute rewind targets relative to "right now". -1 if no session active.

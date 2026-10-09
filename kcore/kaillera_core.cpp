@@ -89,6 +89,9 @@ void kaillera_get_username(char* out, int cap){
 	strncpy(out, KAILLERAC.USERNAME, cap - 1);
 	out[cap - 1] = 0;
 }
+unsigned int kaillera_get_game_id(){
+	return KAILLERAC.game_id;
+}
 int kaillera_get_frames_count(){
 	return KAILLERAC.frameno;
 }

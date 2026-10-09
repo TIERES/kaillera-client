@@ -68,6 +68,14 @@ class Krec:
                 self.truncated = start
                 break
 
+    def multitap_marker(self):
+        """True when the room had the "MultiTap" box on (the fork plugs a
+        multitap in only for 3+ players)."""
+        for _, nick, msg, _ in self.chats[:4]:
+            if nick == MEMCARD_MARKER_NICK and msg.startswith("[MultiTap]"):
+                return "desativado" not in msg
+        return False
+
     def memcard_marker(self):
         """True = "Sem M. Card" (no card), False = with card, None = no marker."""
         for _, nick, msg, _ in self.chats[:4]:

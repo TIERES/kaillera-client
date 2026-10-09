@@ -56,6 +56,56 @@ inline int n02_memcard_from_marker(const char* msg) {
 	return strstr(msg, "desativado") ? 0 : 1;
 }
 
+// "MultiTap" (the room's checkbox, kaillera_ui.cpp): whether RetroArch was
+// allowed to plug a PSX Multitap into PCSX ReARMed for a 3+ player room (it
+// decides port 1 / ports 1 and 2 from the player count). Carried only inside
+// the replay, as a second marker chat record right after the "Sem M. Card"
+// one. None present (recordings from before this existed): off - what every
+// such game was played with (RetroArch forced the multitap off).
+#define N02_MULTITAP_MARKER_PREFIX "[MultiTap]"
+#define N02_MULTITAP_MARKER_ON     "[MultiTap] ativado!"
+#define N02_MULTITAP_MARKER_OFF    "[MultiTap] desativado."
+
+// 1 / 0 for a chat text that is one of the markers above, -1 otherwise.
+inline int n02_multitap_from_marker(const char* msg) {
+	if (msg == NULL || strncmp(msg, N02_MULTITAP_MARKER_PREFIX, strlen(N02_MULTITAP_MARKER_PREFIX)) != 0)
+		return -1;
+	return strstr(msg, "desativado") ? 0 : 1;
+}
+
+// "M. Card online" (kaillera_ui.cpp's CHK_MCONLINE): the two WE Camp cards
+// the match started with, by SHA-256 ("-" for an empty slot) - written when
+// the cards are fetched (kailleraclient.cpp's kailleraMemcardPrepare), before
+// the first input record. Replays, Watch Live and retry-connect download
+// exactly those versions.
+#define N02_MCONLINE_MARKER_PREFIX "[M. Card online] "
+
+// Fills sha[0]/sha[1] (65 bytes each) from such a marker; false otherwise.
+inline bool n02_mconline_from_marker(const char* msg, char sha[2][65]) {
+	size_t prefix = strlen(N02_MCONLINE_MARKER_PREFIX);
+	if (msg == NULL || strncmp(msg, N02_MCONLINE_MARKER_PREFIX, prefix) != 0)
+		return false;
+	const char* p = msg + prefix;
+	for (int s = 0; s < 2; s++) {
+		while (*p == ' ')
+			p++;
+		int n = 0;
+		while (p[n] && p[n] != ' ' && n < 64)
+			n++;
+		memcpy(sha[s], p, n);
+		sha[s][n] = 0;
+		p += n;
+	}
+	return strlen(sha[0]) == 64;
+}
+
+// True for any of n02's own in-replay markers - those aren't chat to show.
+inline bool n02_is_marker(const char* msg) {
+	char sha[2][65];
+	return n02_memcard_from_marker(msg) >= 0 || n02_multitap_from_marker(msg) >= 0
+		|| n02_mconline_from_marker(msg, sha);
+}
+
 // 1 / 0 from a replay file name's tag (case-insensitive), -1 if untagged.
 inline int n02_memcard_from_name(const char* path) {
 	if (path == NULL) return -1;
@@ -274,6 +324,39 @@ public:
 	// the marker is written right after the header - and, like
 	// count_total_frames(), restores the read position afterwards.
 	int detect_memcard_marker(int max_records = 8) {
+		return detect_marker(n02_memcard_from_marker, max_records);
+	}
+
+	// Same for the "MultiTap" marker (N02_MULTITAP_MARKER_*).
+	int detect_multitap_marker(int max_records = 8) {
+		return detect_marker(n02_multitap_from_marker, max_records);
+	}
+
+	// The "M. Card online" marker's two SHA-256s - true if present.
+	bool detect_mconline_marker(char sha[2][65], int max_records = 8) {
+		char* saved_ptr = ptr;
+		int saved_frames = frames_consumed;
+		bool found = false;
+
+		ptr = buffer + (is_krc1 ? 400 : 272);
+		frames_consumed = 0;
+		for (int i = 0; i < max_records && !found; i++) {
+			int len = 0;
+			int rt = next_record(NULL, 0, &len);
+			if (rt == KREC_CHAT)
+				found = n02_mconline_from_marker(last_chat_msg, sha);
+			else if (rt != KREC_DROP)
+				break;
+		}
+
+		ptr = saved_ptr;
+		frames_consumed = saved_frames;
+		return found;
+	}
+
+	// Scans the leading chat/drop records for the first one `parse` accepts
+	// (>= 0) - the markers are all written before the first input record.
+	int detect_marker(int (*parse)(const char*), int max_records = 8) {
 		char* saved_ptr = ptr;
 		int saved_frames = frames_consumed;
 		int found = -1;
@@ -284,7 +367,7 @@ public:
 			int len = 0;
 			int rt = next_record(NULL, 0, &len);
 			if (rt == KREC_CHAT)
-				found = n02_memcard_from_marker(last_chat_msg);
+				found = parse(last_chat_msg);
 			else if (rt != KREC_DROP)
 				break; /* input (or the end) comes before any marker */
 		}

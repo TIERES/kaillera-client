@@ -128,14 +128,28 @@
 #define LV_RETRYLIST                    1110
 #define IDC_RETRYCONNECT_HINT           1111
 #define CHK_NOMEMCARD                   1112
+#define CHK_MULTITAP                    1113
+#define BTN_WECAMP                      1115
+#define IDC_WECAMP_STATE                1117
+#define IDC_WECAMP_USER                 1118
+#define IDC_WECAMP_PASS                 1119
+#define BTN_WECAMP_SIGNUP               1120
+#define BTN_WECAMP_LOGIN                1121
+#define BTN_WECAMP_LOGOUT               1122
+#define WECAMP_LOGIN                    116
+#define BTN_WECAMP_FORGOT               1124
+#define IDC_WECAMP_USER_LBL             1125
+#define IDC_WECAMP_PASS_LBL             1126
+#define IDC_WECAMP_HINT                 1127
+#define CMB_MEMCARD                     1128
 
 // Next default values for new objects
 //
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        116
+#define _APS_NEXT_RESOURCE_VALUE        117
 #define _APS_NEXT_COMMAND_VALUE         40001
-#define _APS_NEXT_CONTROL_VALUE         1113
+#define _APS_NEXT_CONTROL_VALUE         1129
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif

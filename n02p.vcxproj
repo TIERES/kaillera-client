@@ -91,7 +91,7 @@
       <SubSystem>Console</SubSystem>
       <OutputFile>$(TargetDir)kailleraclient.dll</OutputFile>
       <ImportLibrary>.\Release\kailleraclient.lib</ImportLibrary>
-      <AdditionalDependencies>odbc32.lib;odbccp32.lib;ws2_32.lib;comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>odbc32.lib;odbccp32.lib;ws2_32.lib;comctl32.lib;winhttp.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -131,7 +131,7 @@
       <SubSystem>Console</SubSystem>
       <OutputFile>$(TargetDir)kailleraclient.dll</OutputFile>
       <ImportLibrary>.\x64\Release\kailleraclient.lib</ImportLibrary>
-      <AdditionalDependencies>odbc32.lib;odbccp32.lib;ws2_32.lib;comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>odbc32.lib;odbccp32.lib;ws2_32.lib;comctl32.lib;winhttp.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -141,6 +141,7 @@
     <ClCompile Include="common\n02_watch.cpp" />
     <ClCompile Include="common\n02_replays.cpp" />
     <ClCompile Include="common\n02_update.cpp" />
+    <ClCompile Include="common\n02_wecamp.cpp" />
     <ClCompile Include="common\nSettings.cpp" />
     <ClCompile Include="common\nThread.cpp" />
     <ClCompile Include="core\p2p_core.cpp" />
@@ -166,6 +167,7 @@
     <ClInclude Include="common\n02_watch.h" />
     <ClInclude Include="common\n02_replays.h" />
     <ClInclude Include="common\n02_update.h" />
+    <ClInclude Include="common\n02_wecamp.h" />
     <ClInclude Include="common\nSettings.h" />
     <ClInclude Include="common\nSTL.h" />
     <ClInclude Include="common\nThread.h" />

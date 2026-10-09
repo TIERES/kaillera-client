@@ -36,6 +36,10 @@ bool player_is_watching();
 // "Sem M. Card" of the replay/stream being played: 1 = no memory card, 0 =
 // with (the default for replays that don't say). See player.cpp.
 int player_get_no_memcard();
+int player_get_multitap();
+// The "M. Card online" cards (SHA-256s) of the replay/stream being played -
+// false when it wasn't an online-card match.
+bool player_get_mconline(char sha[2][65]);
 
 // The up-to-4 player names read from the watched stream's KRC1 header
 // (recording_player_names, see kailleraclient.cpp's recording writer) -

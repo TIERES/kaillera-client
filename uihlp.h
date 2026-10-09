@@ -163,7 +163,7 @@ public:
 
 
 
-	inline void re_append(HWND hwnd, char * line, COLORREF color = 0){
+	inline void re_append(HWND hwnd, char * line, COLORREF color = 0, bool bold = false){
 		// Preserve the user's selection (p2pkaillera behavior). This prevents the output window
 		// from "stealing" selection when the user highlights/copies text.
 		CHARRANGE prev;
@@ -178,9 +178,11 @@ public:
 		memset(&crf, 0, sizeof(crf));
 		crf.cbSize = sizeof(crf);
 		// Important: don't touch CFM_EFFECTS here; auto URL detection uses CFE_LINK and we
-		// don't want to wipe it.
-		crf.dwMask = CFM_COLOR;
+		// don't want to wipe it. CFM_BOLD alone is fine - and always set, so a line
+		// after a bold one doesn't inherit it.
+		crf.dwMask = CFM_COLOR | CFM_BOLD;
 		crf.crTextColor = color;
+		crf.dwEffects = bold ? CFE_BOLD : 0;
 
 		SendMessage(hwnd, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&crf);
 		SendMessage(hwnd, EM_REPLACESEL, FALSE, (LPARAM)line);
