@@ -1,5 +1,7 @@
 #pragma once
 
+#include <windows.h>
+
 // WE Camp account + Memory Card online client (wg-camp's /api/mc/*).
 //
 // Unlike the other community-server helpers (n02_stream/n02_watch/
@@ -28,6 +30,21 @@ void n02_wecamp_load();
 const char* n02_wecamp_username();
 const char* n02_wecamp_email();
 bool n02_wecamp_logged_in();
+
+// Discord linked on the site (cached in n02.ini, refreshed at login and by
+// n02_wecamp_refresh_discord(), which blocks - call it from a worker
+// thread) and the "Chamada de voz no Discord" choice of the M. Card Online
+// dialog (DISCORD_VOICE): off by default, switched on by itself once per
+// account when its Discord first shows up linked; the player can turn it
+// off. n02_wecamp_voice_enabled() = linked and switched on.
+bool n02_wecamp_discord_linked();
+const char* n02_wecamp_discord_name();
+bool n02_wecamp_voice_enabled();
+void n02_wecamp_set_voice_enabled(bool on);
+bool n02_wecamp_refresh_discord();
+// Same, on a worker thread; posts msg to notify (if any) when the site
+// answered.
+void n02_wecamp_refresh_discord_async(HWND notify, UINT msg);
 
 // Logs in with the account's e-mail and password. Returns true and stores
 // token+username+e-mail on success; otherwise false with a message for the

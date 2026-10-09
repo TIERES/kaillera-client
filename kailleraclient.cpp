@@ -237,7 +237,9 @@ static int CurrentGameMultiTap() {
    they're already in one of the server's voice channels; otherwise the
    channel is opened in the Discord app (once per channel - "Entrar" is one
    click). Each player's own DLL asks for itself - nobody can pull anybody
-   else into a call. Off with DISCORD_VOICE=0 in n02.ini ([SC]). */
+   else into a call. Only with "Participar da chamada de voz" checked in the
+   M. Card Online dialog (n02_wecamp_voice_enabled()); unchecked, the room
+   is told in the chat that this player stays out of the call. */
 static void VoiceLog(const char* fmt, ...) {
 	char msg[512];
 	va_list args;
@@ -251,7 +253,6 @@ static void VoiceLog(const char* fmt, ...) {
 }
 
 static char g_voice_opened[160];      // channel link already opened this session
-static bool g_voice_hinted = false;   // "link your Discord" shown this session
 
 static DWORD WINAPI VoiceJoinThread(LPVOID param) {
 	char* players = (char*)param;
@@ -261,9 +262,10 @@ static DWORD WINAPI VoiceJoinThread(LPVOID param) {
 	free(players);
 	if (!ok) {
 		if (strcmp(code, "not_linked") == 0) {
-			if (!g_voice_hinted)
-				VoiceLog("* Discord: vincule seu Discord em %s/conta para ter canal de voz nas partidas.", "https://" N02_WECAMP_HOST);
-			g_voice_hinted = true;
+			// Unlinked on the site since the last check - the dialog's box
+			// follows (greyed out) after this.
+			n02_wecamp_refresh_discord();
+			VoiceLog("* Discord: sua conta WE Camp nao tem mais Discord vinculado - vincule em %s/conta.", "https://" N02_WECAMP_HOST);
 		} else if (strcmp(code, "disabled") != 0) {
 			VoiceLog("* Discord: canal de voz indisponivel (%s).", err[0] ? err : code);
 		}
@@ -289,12 +291,17 @@ static void VoiceJoinStart(int numplayers) {
 	int mode = get_active_mode_index();
 	if (mode != 0 && mode != 1)
 		return;
-	if (nSettings::get_int_in((char*)"SC", (char*)"DISCORD_VOICE", 1) == 0)
-		return;
 	char nick[32];
 	active_mod.GetOwnerName(nick, sizeof(nick));
 	if (_stricmp(nick, n02_wecamp_username()) != 0)
 		return; // playing under another nick - not this account's match
+	if (!n02_wecamp_voice_enabled()) {
+		char line[160];
+		_snprintf(line, sizeof(line) - 1, "* %s nao vai participar da chamada de voz do Discord (desativada em M. Card Online).", nick);
+		line[sizeof(line) - 1] = 0;
+		active_mod.ChatSend(line);
+		return;
+	}
 
 	char names[8][32];
 	int count = mode == 0 ? p2p_GetGamePlayers(names, 8) : kaillera_GetGamePlayers(names, 8);

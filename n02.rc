@@ -123,6 +123,8 @@ BEGIN
     EDITTEXT        IDC_WECAMP_PASS,50,44,173,12,ES_PASSWORD | ES_AUTOHSCROLL
     LTEXT           "Ao entrar, o seu nick passa a ser o usuario da sua conta WE Camp. A conta e necessaria para o Memory Card online.",IDC_WECAMP_HINT,7,62,216,18
     LTEXT           "Criar conta",BTN_WECAMP_SIGNUP,7,85,38,9,SS_NOTIFY
+    CONTROL         "Participar da chamada de voz no Discord nas partidas",CHK_WECAMP_DISCORD,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,7,32,216,10
+    LTEXT           "",IDC_WECAMP_DISCORD_INFO,19,45,204,50
     LTEXT           "Esqueci a senha",BTN_WECAMP_FORGOT,60,85,55,9,SS_NOTIFY
     PUSHBUTTON      "Sair",BTN_WECAMP_LOGOUT,113,102,54,14
     DEFPUSHBUTTON   "Entrar",BTN_WECAMP_LOGIN,113,102,54,14
