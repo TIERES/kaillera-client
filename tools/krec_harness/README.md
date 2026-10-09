@@ -8,6 +8,10 @@ partida Kaillera:
 - 12 bytes por jogador;
 - registro vazio vira input neutro;
 - JOYPAD em todas as portas;
+- com o marcador `[MultiTap]` (3+ jogadores), o mesmo MultiTap e a mesma ordem de
+  controles do fork (`kailleraSyncSlotForPort()`: jogador 2 no controle da porta 2,
+  jogadores 3 a 5 em 1-B a 1-D). Gravações com MultiTap anteriores a 2026-10-09
+  usavam outra ordem e divergem;
 - mesmas opções forçadas do `kaillera_sync.c`.
 
 O digest de RAM é o mesmo do detector de desync. Por isso dá para conferir

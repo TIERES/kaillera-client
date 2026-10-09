@@ -220,13 +220,22 @@ class Core:
             return j[2 + (id_ & 1)] if index == 0 else j[4 + (id_ & 1)]
         return 0
 
+    # Kaillera slot whose input each core port reads with a PSX Multitap -
+    # retroarch-k3's kailleraSyncSlotForPort(): Winning Eleven numbers its
+    # controllers 1A, 2, 1B, 1C, 1D, so player 2 goes to the port-2 pad.
+    MULTITAP_SLOT_OF_PORT = (0, 2, 3, 4, 1, 5, 6, 7)
+    multitap = False
+
     def set_input(self, rec):
         if not rec:  # k_len == 0 in core_run(): neutral input for everyone
             for p in range(8):
                 self.joy[p] = [0] * 6
             return
+        slots = [[0] * 6 for _ in range(8)]
         for p in range(min(len(rec) // 12, 8)):
-            self.joy[p] = list(struct.unpack_from("<6h", rec, p * 12))
+            slots[p] = list(struct.unpack_from("<6h", rec, p * 12))
+        for port in range(8):
+            self.joy[port] = slots[self.MULTITAP_SLOT_OF_PORT[port] if self.multitap else port]
 
     def run(self):
         self.lib.retro_run()
@@ -285,7 +294,17 @@ def open_core(a, k=None):
         mc = k.memcard_marker()
         if mc is False:
             print("ATENCAO: partida COM memory card - o harness roda sem cartao, pode divergir quando o jogo ler o cartao.", file=sys.stderr)
+    multitap = k is not None and k.multitap_marker() and k.numplayers >= 3
+    if multitap:  # what the fork forces (kaillera_sync.c, ksync_forced_value())
+        both = k.numplayers > 4
+        for key, value in (("pcsx_rearmed_multitap", "ports 1 and 2" if both else "port 1"),
+                           ("pcsx_rearmed_multitap1", "enabled"),
+                           ("pcsx_rearmed_multitap2", "enabled" if both else "disabled")):
+            overrides.setdefault(key, value)
+        print("MultiTap: %s, jogador 2 no controle da porta 2 (ordem do kailleraSyncSlotForPort)." % (
+            "portas 1 e 2" if both else "porta 1"), file=sys.stderr)
     core = Core(a.ra, a.game, overrides, a.verbose, a.workdir, a.core)
+    core.multitap = multitap
     core.av = a.av
     return core
 
