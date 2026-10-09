@@ -25,6 +25,9 @@ def main():
     parser.add_argument("--port", type=int, default=5055)
     parser.add_argument("--users", default="Pele,Mtgamess")
     parser.add_argument("--password", default="segredo123")
+    # Discord falso (o mesmo dos testes do wg-camp): o 1º usuário vinculado
+    # e já num canal de voz, o 2º vinculado e fora de voz.
+    parser.add_argument("--fake-discord", action="store_true")
     args = parser.parse_args()
 
     sys.path.insert(0, args.wgcamp)
@@ -53,6 +56,18 @@ def main():
                 (name, f"{name.lower()}@example.com", generate_password_hash(args.password), now(), now(), now()),
             )
         db.commit()
+        if args.fake_discord:
+            from unittest import mock
+            from app import discord
+            from tests.test_discord_voice import FakeDiscord
+            fake = FakeDiscord()
+            mock.patch.object(discord, "http", fake).start()
+            app.config.update(DISCORD_BOT_TOKEN="fake", DISCORD_GUILD_ID="1558204659556950156")
+            users = args.users.split(",")
+            for index, name in enumerate(users[:2]):
+                db.execute("UPDATE players SET discord_id = ? WHERE username = ?", (str(111 * (index + 1)), name))
+            db.commit()
+            fake.voice = {"111": "lobby"}
     print(f"wg-camp local em http://127.0.0.1:{args.port} (dados em {root})", flush=True)
     run_simple("127.0.0.1", args.port, app, threaded=True)
 

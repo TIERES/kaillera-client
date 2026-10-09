@@ -64,3 +64,13 @@ bool n02_wecamp_get_card(const char* sha256, char* buf, bool useApiKey);
 // server's verdict ("committed", "pending", "unchanged", "conflict", ...).
 bool n02_wecamp_commit(const char* contentId, const char* slotPlayer, const char* baseSha256,
 	const char* players, const char* data, char* status, int statusCap, int* version);
+
+// Discord voice channel of a match (wg-camp's /api/voice/join): the server
+// creates (or reuses) a private voice channel for the room's players in the
+// WE Camp Discord and moves THIS player into it when they're already in one
+// of its voice channels. players = the room's nicks, comma separated.
+// status: "moved" or "link" (not in voice - open url/appUrl to join);
+// false with errCode "not_linked" (no Discord linked on the site),
+// "disabled" (off on the server) or another reason in err.
+bool n02_wecamp_voice_join(const char* players, char* status, int statusCap, char* url, int urlCap,
+	char* appUrl, int appUrlCap, char* errCode, int errCodeCap, char* err, int errCap);

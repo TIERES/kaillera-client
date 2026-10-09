@@ -126,8 +126,29 @@ int main(int argc, char** argv) {
 	CHECK(!n02_wecamp_verify_ticket("ingresso-falso", "42", account, sizeof(account), err, sizeof(err)), "ingresso falso e recusado");
 	(void)token1;
 
+	// Discord voice channel (local_wgcamp.py --fake-discord: player 1 is
+	// linked and already in a voice channel, player 2 linked but not).
+	char vstatus[32], vurl[160], vapp[160], vcode[64];
+	CHECK(n02_wecamp_voice_join(players, vstatus, sizeof(vstatus), vurl, sizeof(vurl), vapp, sizeof(vapp),
+		vcode, sizeof(vcode), err, sizeof(err)), "canal de voz: jogador 1");
+	printf("     -> %s %s %s\n", vstatus, vurl, vapp);
+	CHECK(strcmp(vstatus, "moved") == 0, "canal de voz: jogador 1 (ja em voz) foi movido");
+	CHECK(strncmp(vurl, "https://discord.com/channels/1558204659556950156/", 49) == 0, "canal de voz: link https do servidor WE Camp");
+	CHECK(strncmp(vapp, "discord://-/channels/1558204659556950156/", 41) == 0, "canal de voz: link do app");
+	char firstUrl[160];
+	strcpy(firstUrl, vurl);
+	CHECK(!n02_wecamp_voice_join("Outro1,Outro2", vstatus, sizeof(vstatus), vurl, sizeof(vurl), vapp, sizeof(vapp),
+		vcode, sizeof(vcode), err, sizeof(err)) && strcmp(vcode, "not_in_players") == 0, "canal de voz: sala sem o jogador e recusada");
+	CHECK(n02_wecamp_login(mail2, pass, err, sizeof(err)), "login do jogador 2 (canal de voz)");
+	CHECK(n02_wecamp_voice_join(players, vstatus, sizeof(vstatus), vurl, sizeof(vurl), vapp, sizeof(vapp),
+		vcode, sizeof(vcode), err, sizeof(err)), "canal de voz: jogador 2");
+	CHECK(strcmp(vstatus, "link") == 0, "canal de voz: jogador 2 (fora de voz) recebe o link");
+	CHECK(strcmp(vurl, firstUrl) == 0, "canal de voz: os dois no mesmo canal");
+
 	n02_wecamp_logout();
 	CHECK(!n02_wecamp_logged_in(), "logout limpa o token");
+	CHECK(!n02_wecamp_voice_join(players, vstatus, sizeof(vstatus), vurl, sizeof(vurl), vapp, sizeof(vapp),
+		vcode, sizeof(vcode), err, sizeof(err)) && strcmp(vcode, "not_logged_in") == 0, "canal de voz: desconectado nao chama");
 
 	printf(failures ? "\n%d FALHA(S)\n" : "\nTUDO OK\n", failures);
 	return failures ? 1 : 0;

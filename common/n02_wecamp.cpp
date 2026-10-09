@@ -342,3 +342,26 @@ bool n02_wecamp_commit(const char* contentId, const char* slotPlayer, const char
 		*version = atoi(value);
 	return http == 200;
 }
+
+bool n02_wecamp_voice_join(const char* players, char* status, int statusCap, char* url, int urlCap,
+	char* appUrl, int appUrlCap, char* errCode, int errCodeCap, char* err, int errCap) {
+	status[0] = url[0] = appUrl[0] = errCode[0] = err[0] = 0;
+	if (!n02_wecamp_logged_in()) {
+		_snprintf(errCode, errCodeCap, "not_logged_in");
+		errCode[errCodeCap - 1] = 0;
+		return false;
+	}
+	char pl[600], body[700], resp[1024], headers[512];
+	UrlEncode(players, pl, sizeof(pl));
+	int len = _snprintf(body, sizeof(body), "players=%s", pl);
+	AuthHeader(headers, sizeof(headers), "Content-Type: application/x-www-form-urlencoded\r\n");
+	int status_ = HttpsRequest("POST", "/api/voice/join", headers, body, len, resp, sizeof(resp), NULL);
+	if (status_ != 200 || !KvGet(resp, "status", status, statusCap)) {
+		KvGet(resp, "error", errCode, errCodeCap);
+		ErrorFrom(status_, resp, err, errCap);
+		return false;
+	}
+	KvGet(resp, "url", url, urlCap);
+	KvGet(resp, "app_url", appUrl, appUrlCap);
+	return true;
+}
