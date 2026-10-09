@@ -18,4 +18,5 @@ public:
 	static int get_int_in(char * section, char * key, int def_ = -1);
 	static char* get_str_in(char * section, char * key, char * buf, char * def_=0);
 	static void set_str_in(char * section, char * key, char * val);
+	static void set_int_in(char * section, char * key, int val);
 };

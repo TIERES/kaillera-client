@@ -11,6 +11,11 @@
 static char g_token[128];
 static char g_username[32];
 static char g_email[128];
+// Discord linked to the account on the site (cached from login / whoami)
+// and the player's "Chamada de voz no Discord" choice (DISCORD_VOICE).
+static bool g_discord_linked = false;
+static char g_discord_name[128];
+static bool g_voice = false;
 // Server - always the production site, except when n02.ini overrides it for
 // testing against a local wg-camp (WECAMP_HOST / WECAMP_PORT, WECAMP_HTTP=1
 // for plain HTTP; see tools/wecamp_test).
@@ -40,6 +45,10 @@ void n02_wecamp_load() {
 		g_username[0] = 0;
 		g_email[0] = 0;
 	}
+	g_discord_linked = g_token[0] && nSettings::get_int_in(N02_WECAMP_SECTION, (char*)"DISCORD_LINKED", 0) != 0;
+	nSettings::get_str_in(N02_WECAMP_SECTION, (char*)"DISCORD_NAME", g_discord_name, (char*)"");
+	g_discord_name[sizeof(g_discord_name) - 1] = 0;
+	g_voice = nSettings::get_int_in(N02_WECAMP_SECTION, (char*)"DISCORD_VOICE", 0) != 0;
 }
 
 const char* n02_wecamp_username() {
@@ -171,6 +180,64 @@ static void ErrorFrom(int status, const char* resp, char* err, int errCap) {
 	err[errCap - 1] = 0;
 }
 
+// The site's discord_linked / discord_name (login and whoami replies; an
+// older server sends neither - nothing changes then). The voice call is off
+// by default and switched on by itself once per account, the first time its
+// Discord shows up linked - after that it's the player's choice.
+// DISCORD_VOICE_AUTO = the account that choice belongs to.
+static void ApplyDiscord(const char* resp) {
+	char value[16], name[256];
+	if (!KvGet(resp, "discord_linked", value, sizeof(value)))
+		return;
+	g_discord_linked = atoi(value) != 0;
+	KvGet(resp, "discord_name", name, sizeof(name));
+	wchar_t wide[128];
+	if (MultiByteToWideChar(CP_UTF8, 0, name, -1, wide, 128) == 0)
+		wide[0] = 0;
+	if (WideCharToMultiByte(CP_ACP, 0, wide, -1, g_discord_name, sizeof(g_discord_name), "?", NULL) == 0)
+		g_discord_name[0] = 0;
+	nSettings::set_int_in(N02_WECAMP_SECTION, (char*)"DISCORD_LINKED", g_discord_linked ? 1 : 0);
+	nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"DISCORD_NAME", g_discord_name);
+
+	char owner[128];
+	nSettings::get_str_in(N02_WECAMP_SECTION, (char*)"DISCORD_VOICE_AUTO", owner, (char*)"");
+	owner[sizeof(owner) - 1] = 0;
+	if (_stricmp(owner, g_username) != 0) {
+		// Another account's choice (or none yet): start from this one's link.
+		n02_wecamp_set_voice_enabled(g_discord_linked);
+		if (g_discord_linked)
+			nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"DISCORD_VOICE_AUTO", g_username);
+	}
+}
+
+bool n02_wecamp_discord_linked() {
+	return n02_wecamp_logged_in() && g_discord_linked;
+}
+
+const char* n02_wecamp_discord_name() {
+	return g_discord_name;
+}
+
+bool n02_wecamp_voice_enabled() {
+	return n02_wecamp_discord_linked() && g_voice;
+}
+
+void n02_wecamp_set_voice_enabled(bool on) {
+	g_voice = on;
+	nSettings::set_int_in(N02_WECAMP_SECTION, (char*)"DISCORD_VOICE", on ? 1 : 0);
+}
+
+bool n02_wecamp_refresh_discord() {
+	if (!n02_wecamp_logged_in())
+		return false;
+	char headers[256], resp[1024];
+	AuthHeader(headers, sizeof(headers), NULL);
+	if (HttpsRequest("GET", "/api/mc/whoami", headers, NULL, 0, resp, sizeof(resp), NULL) != 200)
+		return false;
+	ApplyDiscord(resp);
+	return true;
+}
+
 bool n02_wecamp_login(const char* email, const char* password, char* err, int errCap) {
 	char u[256], p[512], body[900], resp[1024];
 	if (strchr(email, '@') == NULL) {
@@ -201,6 +268,7 @@ bool n02_wecamp_login(const char* email, const char* password, char* err, int er
 	nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_TOKEN", g_token);
 	nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_USER", g_username);
 	nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_EMAIL", g_email);
+	ApplyDiscord(resp);
 	return true;
 }
 
@@ -213,6 +281,10 @@ void n02_wecamp_logout() {
 	g_token[0] = 0;
 	g_username[0] = 0;
 	g_email[0] = 0;
+	g_discord_linked = false;
+	g_discord_name[0] = 0;
+	nSettings::set_int_in(N02_WECAMP_SECTION, (char*)"DISCORD_LINKED", 0);
+	nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"DISCORD_NAME", (char*)"");
 	nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_TOKEN", (char*)"");
 	nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_USER", (char*)"");
 	nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_EMAIL", (char*)"");
@@ -341,4 +413,53 @@ bool n02_wecamp_commit(const char* contentId, const char* slotPlayer, const char
 	if (version && KvGet(resp, "version", value, sizeof(value)))
 		*version = atoi(value);
 	return http == 200;
+}
+
+bool n02_wecamp_voice_join(const char* players, char* status, int statusCap, char* url, int urlCap,
+	char* appUrl, int appUrlCap, char* errCode, int errCodeCap, char* err, int errCap) {
+	status[0] = url[0] = appUrl[0] = errCode[0] = err[0] = 0;
+	if (!n02_wecamp_logged_in()) {
+		_snprintf(errCode, errCodeCap, "not_logged_in");
+		errCode[errCodeCap - 1] = 0;
+		return false;
+	}
+	char pl[600], body[700], resp[1024], headers[512];
+	UrlEncode(players, pl, sizeof(pl));
+	int len = _snprintf(body, sizeof(body), "players=%s", pl);
+	AuthHeader(headers, sizeof(headers), "Content-Type: application/x-www-form-urlencoded\r\n");
+	int status_ = HttpsRequest("POST", "/api/voice/join", headers, body, len, resp, sizeof(resp), NULL);
+	if (status_ != 200 || !KvGet(resp, "status", status, statusCap)) {
+		KvGet(resp, "error", errCode, errCodeCap);
+		ErrorFrom(status_, resp, err, errCap);
+		return false;
+	}
+	KvGet(resp, "url", url, urlCap);
+	KvGet(resp, "app_url", appUrl, appUrlCap);
+	return true;
+}
+
+struct RefreshJob {
+	HWND notify;
+	UINT msg;
+};
+
+static DWORD WINAPI RefreshDiscordThread(LPVOID param) {
+	RefreshJob* job = (RefreshJob*)param;
+	if (n02_wecamp_refresh_discord() && job->notify && IsWindow(job->notify))
+		PostMessage(job->notify, job->msg, 0, 0);
+	delete job;
+	return 0;
+}
+
+void n02_wecamp_refresh_discord_async(HWND notify, UINT msg) {
+	if (!n02_wecamp_logged_in())
+		return;
+	RefreshJob* job = new RefreshJob;
+	job->notify = notify;
+	job->msg = msg;
+	HANDLE t = CreateThread(NULL, 0, RefreshDiscordThread, job, 0, NULL);
+	if (t)
+		CloseHandle(t);
+	else
+		delete job;
 }

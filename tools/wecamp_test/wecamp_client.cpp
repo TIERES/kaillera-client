@@ -56,6 +56,19 @@ int main(int argc, char** argv) {
 	n02_wecamp_load();
 	CHECK(n02_wecamp_logged_in(), "token salvo no n02.ini e recarregado");
 
+	// Discord voice call flag (local_wgcamp.py --fake-discord links both
+	// players): switched on by itself at the first login of a linked account,
+	// then it's the player's choice.
+	CHECK(n02_wecamp_discord_linked(), "discord: login informa conta vinculada");
+	CHECK(n02_wecamp_voice_enabled(), "discord: chamada de voz ligada sozinha na primeira vez");
+	n02_wecamp_set_voice_enabled(false);
+	CHECK(n02_wecamp_refresh_discord() && !n02_wecamp_voice_enabled(), "discord: whoami nao religa o que o jogador desmarcou");
+	CHECK(n02_wecamp_login(mail1, pass, err, sizeof(err)) && !n02_wecamp_voice_enabled(), "discord: novo login nao religa");
+	n02_wecamp_load();
+	CHECK(n02_wecamp_discord_linked() && !n02_wecamp_voice_enabled(), "discord: estado salvo no n02.ini");
+	n02_wecamp_set_voice_enabled(true);
+	CHECK(n02_wecamp_voice_enabled(), "discord: jogador religa");
+
 	n02_wecamp_checkout_result co;
 	CHECK(n02_wecamp_checkout(content, "WE2002.bin", players, &co, err, sizeof(err)), "checkout do jogador 1");
 	CHECK(co.slots == 2 && _stricmp(co.player[0], p1) == 0 && _stricmp(co.player[1], p2) == 0, "slot 1 = 1P, slot 2 = 2P");
@@ -126,8 +139,30 @@ int main(int argc, char** argv) {
 	CHECK(!n02_wecamp_verify_ticket("ingresso-falso", "42", account, sizeof(account), err, sizeof(err)), "ingresso falso e recusado");
 	(void)token1;
 
+	// Discord voice channel (local_wgcamp.py --fake-discord: player 1 is
+	// linked and already in a voice channel, player 2 linked but not).
+	char vstatus[32], vurl[160], vapp[160], vcode[64];
+	CHECK(n02_wecamp_voice_join(players, vstatus, sizeof(vstatus), vurl, sizeof(vurl), vapp, sizeof(vapp),
+		vcode, sizeof(vcode), err, sizeof(err)), "canal de voz: jogador 1");
+	printf("     -> %s %s %s\n", vstatus, vurl, vapp);
+	CHECK(strcmp(vstatus, "moved") == 0, "canal de voz: jogador 1 (ja em voz) foi movido");
+	CHECK(strncmp(vurl, "https://discord.com/channels/1558204659556950156/", 49) == 0, "canal de voz: link https do servidor WE Camp");
+	CHECK(strncmp(vapp, "discord://-/channels/1558204659556950156/", 41) == 0, "canal de voz: link do app");
+	char firstUrl[160];
+	strcpy(firstUrl, vurl);
+	CHECK(!n02_wecamp_voice_join("Outro1,Outro2", vstatus, sizeof(vstatus), vurl, sizeof(vurl), vapp, sizeof(vapp),
+		vcode, sizeof(vcode), err, sizeof(err)) && strcmp(vcode, "not_in_players") == 0, "canal de voz: sala sem o jogador e recusada");
+	CHECK(n02_wecamp_login(mail2, pass, err, sizeof(err)), "login do jogador 2 (canal de voz)");
+	CHECK(n02_wecamp_voice_join(players, vstatus, sizeof(vstatus), vurl, sizeof(vurl), vapp, sizeof(vapp),
+		vcode, sizeof(vcode), err, sizeof(err)), "canal de voz: jogador 2");
+	CHECK(strcmp(vstatus, "link") == 0, "canal de voz: jogador 2 (fora de voz) recebe o link");
+	CHECK(strcmp(vurl, firstUrl) == 0, "canal de voz: os dois no mesmo canal");
+
 	n02_wecamp_logout();
 	CHECK(!n02_wecamp_logged_in(), "logout limpa o token");
+	CHECK(!n02_wecamp_discord_linked() && !n02_wecamp_voice_enabled(), "discord: logout desliga a chamada");
+	CHECK(!n02_wecamp_voice_join(players, vstatus, sizeof(vstatus), vurl, sizeof(vurl), vapp, sizeof(vapp),
+		vcode, sizeof(vcode), err, sizeof(err)) && strcmp(vcode, "not_logged_in") == 0, "canal de voz: desconectado nao chama");
 
 	printf(failures ? "\n%d FALHA(S)\n" : "\nTUDO OK\n", failures);
 	return failures ? 1 : 0;

@@ -3750,8 +3750,31 @@ static void WeCampApplyNick(HWND ssdlg) {
 	}
 }
 
+// "Chamada de voz no Discord" (logged-in face): enabled only when the
+// account has a Discord linked on the site; checked = DISCORD_VOICE (see
+// n02_wecamp_voice_enabled()). The link state is refreshed from the site
+// when the dialog opens (WM_N02_WECAMP_DISCORD).
+#define WM_N02_WECAMP_DISCORD (WM_APP + 0x51)
+
+static void WeCampDiscordRefresh(HWND hDlg) {
+	HWND chk = GetDlgItem(hDlg, CHK_WECAMP_DISCORD);
+	bool linked = n02_wecamp_discord_linked();
+	EnableWindow(chk, linked);
+	CheckDlgButton(hDlg, CHK_WECAMP_DISCORD, n02_wecamp_voice_enabled() ? BST_CHECKED : BST_UNCHECKED);
+	char text[512];
+	if (!linked)
+		_snprintf(text, sizeof(text) - 1, "Para usar, vincule seu Discord no site WE Camp (Minha conta > Vincular Discord) e abra esta janela de novo.");
+	else if (n02_wecamp_voice_enabled())
+		_snprintf(text, sizeof(text) - 1, "Discord vinculado: %s. No inicio de cada partida voce entra no canal de voz da sala no Discord da WE Camp "
+			"(fique no canal \"Aguardando partida\" para entrar sozinho). Desmarque para ficar fora das chamadas.", n02_wecamp_discord_name());
+	else
+		_snprintf(text, sizeof(text) - 1, "Discord vinculado: %s. Desmarcado: voce fica fora das chamadas de voz, e a sala e avisada no chat.", n02_wecamp_discord_name());
+	text[sizeof(text) - 1] = 0;
+	SetWindowText(GetDlgItem(hDlg, IDC_WECAMP_DISCORD_INFO), text);
+}
+
 // Two faces: logged out (e-mail, password, Entrar, links) and logged in
-// (the account's e-mail and username, Sair).
+// (the account's e-mail and username, the Discord voice call, Sair).
 static void WeCampDialogRefresh(HWND hDlg) {
 	char text[240];
 	bool in = n02_wecamp_logged_in();
@@ -3765,6 +3788,10 @@ static void WeCampDialogRefresh(HWND hDlg) {
 	for (int i = 0; i < (int)(sizeof(loggedOut) / sizeof(loggedOut[0])); i++)
 		ShowWindow(GetDlgItem(hDlg, loggedOut[i]), in ? SW_HIDE : SW_SHOW);
 	ShowWindow(GetDlgItem(hDlg, BTN_WECAMP_LOGOUT), in ? SW_SHOW : SW_HIDE);
+	ShowWindow(GetDlgItem(hDlg, CHK_WECAMP_DISCORD), in ? SW_SHOW : SW_HIDE);
+	ShowWindow(GetDlgItem(hDlg, IDC_WECAMP_DISCORD_INFO), in ? SW_SHOW : SW_HIDE);
+	if (in)
+		WeCampDiscordRefresh(hDlg);
 	SendMessage(hDlg, DM_SETDEFID, in ? IDCANCEL : BTN_WECAMP_LOGIN, 0);
 }
 
@@ -3819,12 +3846,17 @@ LRESULT CALLBACK WeCampDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 			SendMessage(GetDlgItem(hDlg, IDC_WECAMP_USER), EM_LIMITTEXT, 120, 0);
 			SendMessage(GetDlgItem(hDlg, IDC_WECAMP_PASS), EM_LIMITTEXT, 128, 0);
 			WeCampDialogRefresh(hDlg);
+			n02_wecamp_refresh_discord_async(hDlg, WM_N02_WECAMP_DISCORD);
 			if (n02_wecamp_logged_in())
 				SetFocus(GetDlgItem(hDlg, BTN_WECAMP_LOGOUT));
 			else
 				SetFocus(GetDlgItem(hDlg, email[0] ? IDC_WECAMP_PASS : IDC_WECAMP_USER));
 		}
 		return FALSE;
+	case WM_N02_WECAMP_DISCORD:
+		if (n02_wecamp_logged_in())
+			WeCampDiscordRefresh(hDlg);
+		return TRUE;
 	case WM_CLOSE:
 		EndDialog(hDlg, 0);
 		break;
@@ -3832,6 +3864,12 @@ LRESULT CALLBACK WeCampDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 		switch (LOWORD(wParam)) {
 		case IDCANCEL:
 			EndDialog(hDlg, 0);
+			break;
+		case CHK_WECAMP_DISCORD:
+			if (HIWORD(wParam) == BN_CLICKED) {
+				n02_wecamp_set_voice_enabled(IsDlgButtonChecked(hDlg, CHK_WECAMP_DISCORD) == BST_CHECKED);
+				WeCampDiscordRefresh(hDlg);
+			}
 			break;
 		case BTN_WECAMP_SIGNUP:
 			if (HIWORD(wParam) == STN_CLICKED)
@@ -3910,6 +3948,9 @@ LRESULT CALLBACK KailleraServerSelectDialogProc(HWND hDlg, UINT uMsg, WPARAM wPa
 			
 			nSettings::Initialize("SC");
 			n02_wecamp_load();
+			// A Discord linked on the site since the last run switches the
+			// voice call on (once) before the first game.
+			n02_wecamp_refresh_discord_async(NULL, 0);
 
 			/*
 			

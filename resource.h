@@ -142,6 +142,8 @@
 #define IDC_WECAMP_PASS_LBL             1126
 #define IDC_WECAMP_HINT                 1127
 #define CMB_MEMCARD                     1128
+#define CHK_WECAMP_DISCORD              1129
+#define IDC_WECAMP_DISCORD_INFO         1130
 
 // Next default values for new objects
 //
@@ -149,7 +151,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        117
 #define _APS_NEXT_COMMAND_VALUE         40001
-#define _APS_NEXT_CONTROL_VALUE         1129
+#define _APS_NEXT_CONTROL_VALUE         1131
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif

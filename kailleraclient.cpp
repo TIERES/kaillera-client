@@ -230,6 +230,98 @@ static int CurrentGameMultiTap() {
 	return 0;
 }
 
+/* Discord voice channel of the match (wg-camp's /api/voice/join, see
+   common/n02_wecamp.h). At the start of a live game (Server room or P2P,
+   2+ players) a logged-in player's DLL asks wg-camp for the room's voice
+   channel in the WE Camp Discord: wg-camp moves the player into it when
+   they're already in one of the server's voice channels; otherwise the
+   channel is opened in the Discord app (once per channel - "Entrar" is one
+   click). Each player's own DLL asks for itself - nobody can pull anybody
+   else into a call. Only with "Participar da chamada de voz" checked in the
+   M. Card Online dialog (n02_wecamp_voice_enabled()); unchecked, the room
+   is told in the chat that this player stays out of the call. */
+static void VoiceLog(const char* fmt, ...) {
+	char msg[512];
+	va_list args;
+	va_start(args, fmt);
+	vsnprintf_s(msg, sizeof(msg), _TRUNCATE, fmt, args);
+	va_end(args);
+	if (get_active_mode_index() == 0)
+		outpf((char*)"%s", msg);
+	else
+		kaillera_ui_gdebug((char*)"%s", msg);
+}
+
+static char g_voice_opened[160];      // channel link already opened this session
+
+static DWORD WINAPI VoiceJoinThread(LPVOID param) {
+	char* players = (char*)param;
+	char status[32], url[160], appUrl[160], code[64], err[300];
+	bool ok = n02_wecamp_voice_join(players, status, sizeof(status), url, sizeof(url),
+		appUrl, sizeof(appUrl), code, sizeof(code), err, sizeof(err));
+	free(players);
+	if (!ok) {
+		if (strcmp(code, "not_linked") == 0) {
+			// Unlinked on the site since the last check - the dialog's box
+			// follows (greyed out) after this.
+			n02_wecamp_refresh_discord();
+			VoiceLog("* Discord: sua conta WE Camp nao tem mais Discord vinculado - vincule em %s/conta.", "https://" N02_WECAMP_HOST);
+		} else if (strcmp(code, "disabled") != 0) {
+			VoiceLog("* Discord: canal de voz indisponivel (%s).", err[0] ? err : code);
+		}
+		return 0;
+	}
+	if (strcmp(status, "moved") == 0) {
+		VoiceLog("* Discord: voce esta no canal de voz da partida.");
+	} else if (strcmp(g_voice_opened, url) != 0) {
+		strncpy(g_voice_opened, url, sizeof(g_voice_opened) - 1);
+		if ((INT_PTR)ShellExecuteA(NULL, "open", appUrl, NULL, NULL, SW_SHOWNOACTIVATE) <= 32)
+			ShellExecuteA(NULL, "open", url, NULL, NULL, SW_SHOWNOACTIVATE);
+		VoiceLog("* Discord: canal de voz da partida aberto no Discord - clique em \"Entrar\". "
+			"Fique no canal \"Aguardando partida\" do Discord da WE Camp para entrar sozinho nas proximas.");
+	}
+	return 0;
+}
+
+static void VoiceJoinStart(int numplayers) {
+	if (numplayers < 2 || !n02_wecamp_logged_in())
+		return;
+	if (kaillera_retryconnect_active() || player_is_watching())
+		return;
+	int mode = get_active_mode_index();
+	if (mode != 0 && mode != 1)
+		return;
+	char nick[32];
+	active_mod.GetOwnerName(nick, sizeof(nick));
+	if (_stricmp(nick, n02_wecamp_username()) != 0)
+		return; // playing under another nick - not this account's match
+	if (!n02_wecamp_voice_enabled()) {
+		char line[160];
+		_snprintf(line, sizeof(line) - 1, "* %s nao vai participar da chamada de voz do Discord (desativada em M. Card Online).", nick);
+		line[sizeof(line) - 1] = 0;
+		active_mod.ChatSend(line);
+		return;
+	}
+
+	char names[8][32];
+	int count = mode == 0 ? p2p_GetGamePlayers(names, 8) : kaillera_GetGamePlayers(names, 8);
+	if (numplayers < count)
+		count = numplayers;
+	char* players = (char*)malloc(8 * 32 + 8);
+	if (!players)
+		return;
+	players[0] = 0;
+	for (int i = 0; i < count; i++) {
+		if (i) strcat(players, ",");
+		strncat(players, names[i], 31);
+	}
+	HANDLE t = CreateThread(NULL, 0, VoiceJoinThread, players, 0, NULL);
+	if (t)
+		CloseHandle(t);
+	else
+		free(players);
+}
+
 int WINAPI _gameCallback(char *game, int player, int numplayers){
 
 	close_recording();
@@ -308,6 +400,8 @@ int WINAPI _gameCallback(char *game, int player, int numplayers){
 		n02_stream_push_chat(N02_MEMCARD_MARKER_NICK, memcardMarker);
 		n02_stream_push_chat(N02_MEMCARD_MARKER_NICK, multitapMarker);
 	}
+
+	VoiceJoinStart(numplayers);
 
 	if (infos_copy.gameCallback)
 		return infos_copy.gameCallback(game, player, numplayers);

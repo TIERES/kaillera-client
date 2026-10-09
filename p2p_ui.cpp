@@ -2249,6 +2249,7 @@ LRESULT CALLBACK P2PSelectionDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPA
 			
 			nSettings::Initialize();
 			n02_wecamp_load();
+			n02_wecamp_refresh_discord_async(NULL, 0); // see kaillera_ui.cpp
 
 			SetDlgItemInt(hDlg, IDC_PORT, nSettings::get_int("IDC_PORT", 27886), false);
 

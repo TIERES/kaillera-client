@@ -58,3 +58,8 @@ char* nSettings::get_str_in(char * section, char * key, char * buf, char * def_)
 void nSettings::set_str_in(char * section, char * key, char * val){
 	WritePrivateProfileString(section, key, val, file);
 }
+void nSettings::set_int_in(char * section, char * key, int val){
+	char bft [128];
+	wsprintf(bft, "%i", val);
+	WritePrivateProfileString(section, key, bft, file);
+}

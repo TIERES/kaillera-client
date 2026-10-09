@@ -25,7 +25,7 @@ WECAMP_HTTP=1
 
 ```
 build.cmd
-C:\TIERES\wg-camp\.venv\Scripts\python.exe local_wgcamp.py C:\TIERES\wg-camp --port 5055
+C:\TIERES\wg-camp\.venv\Scripts\python.exe local_wgcamp.py C:\TIERES\wg-camp --port 5055 --fake-discord
 wecamp_client.exe Pele Mtgamess segredo123
 ```
 
@@ -37,3 +37,11 @@ jogador, conferido pelo host, recusado em outra sala, de uso único, e falso.
 ## Resultado (2026-10-08)
 
 31 verificações, todas OK.
+
+Canal de voz do Discord (`--fake-discord`, o Discord falso dos testes do
+wg-camp): jogador já em voz é movido, jogador fora de voz recebe o link do
+mesmo canal, sala sem o jogador e cliente desconectado são recusados.
+
+## Resultado (2026-10-09)
+
+48 verificações, todas OK (31 + 10 do canal de voz + 7 da opção "Participar da chamada de voz": ligada sozinha no primeiro login com Discord vinculado, depois só o jogador muda).

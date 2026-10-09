@@ -1,5 +1,7 @@
 #pragma once
 
+#include <windows.h>
+
 // WE Camp account + Memory Card online client (wg-camp's /api/mc/*).
 //
 // Unlike the other community-server helpers (n02_stream/n02_watch/
@@ -28,6 +30,21 @@ void n02_wecamp_load();
 const char* n02_wecamp_username();
 const char* n02_wecamp_email();
 bool n02_wecamp_logged_in();
+
+// Discord linked on the site (cached in n02.ini, refreshed at login and by
+// n02_wecamp_refresh_discord(), which blocks - call it from a worker
+// thread) and the "Chamada de voz no Discord" choice of the M. Card Online
+// dialog (DISCORD_VOICE): off by default, switched on by itself once per
+// account when its Discord first shows up linked; the player can turn it
+// off. n02_wecamp_voice_enabled() = linked and switched on.
+bool n02_wecamp_discord_linked();
+const char* n02_wecamp_discord_name();
+bool n02_wecamp_voice_enabled();
+void n02_wecamp_set_voice_enabled(bool on);
+bool n02_wecamp_refresh_discord();
+// Same, on a worker thread; posts msg to notify (if any) when the site
+// answered.
+void n02_wecamp_refresh_discord_async(HWND notify, UINT msg);
 
 // Logs in with the account's e-mail and password. Returns true and stores
 // token+username+e-mail on success; otherwise false with a message for the
@@ -64,3 +81,13 @@ bool n02_wecamp_get_card(const char* sha256, char* buf, bool useApiKey);
 // server's verdict ("committed", "pending", "unchanged", "conflict", ...).
 bool n02_wecamp_commit(const char* contentId, const char* slotPlayer, const char* baseSha256,
 	const char* players, const char* data, char* status, int statusCap, int* version);
+
+// Discord voice channel of a match (wg-camp's /api/voice/join): the server
+// creates (or reuses) a private voice channel for the room's players in the
+// WE Camp Discord and moves THIS player into it when they're already in one
+// of its voice channels. players = the room's nicks, comma separated.
+// status: "moved" or "link" (not in voice - open url/appUrl to join);
+// false with errCode "not_linked" (no Discord linked on the site),
+// "disabled" (off on the server) or another reason in err.
+bool n02_wecamp_voice_join(const char* players, char* status, int statusCap, char* url, int urlCap,
+	char* appUrl, int appUrlCap, char* errCode, int errCodeCap, char* err, int errCap);
