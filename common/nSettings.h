@@ -13,4 +13,9 @@ public:
 	static char* get_str(char * key, char * buf, char * def_=0);
 	static void set_int(char * key, int val);
 	static void set_str(char * key, char * val);
+	// Same, in an explicit section of n02.ini instead of the mode's own -
+	// for what both modes share (the WE Camp account, common/n02_wecamp.cpp).
+	static int get_int_in(char * section, char * key, int def_ = -1);
+	static char* get_str_in(char * section, char * key, char * buf, char * def_=0);
+	static void set_str_in(char * section, char * key, char * val);
 };

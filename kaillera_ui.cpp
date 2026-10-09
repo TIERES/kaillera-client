@@ -731,17 +731,45 @@ static void kaillera_BroadcastStreamState(bool live){
 	kaillera_game_chat_send(live ? (char*)N02_STREAM_LIVE_CHAT_PREFIX " ativado!" : (char*)N02_STREAM_LIVE_CHAT_PREFIX " desativado.");
 }
 
-// "Sem M. Card": when checked (the default) RetroArch starts the game with no
-// memory card in either slot (retroarch-k3's kaillera_sync.c), so nobody's
-// own card can make the machines boot differently. It must be the same for
-// every player, so - like "Stream ao vivo!" above - only the host sets it and
-// announces it over the room's chat (on every change and to every player who
-// joins), and everyone else's (disabled) checkbox follows. Kept in a plain
-// variable too: RetroArch reads it (kailleraGetNoMemoryCard()) from the game
-// callback's thread, not this dialog's.
+// A host alone in the room plays a solo game, which is never streamed: the
+// box is unchecked and disabled while nobody else is in the room, and goes
+// back to the host's saved choice when someone joins (kailleraclient.cpp
+// also never starts a stream for a 1-player game).
+static int g_stream_players = 0; // room size the box last reacted to
+void __cdecl kaillera_ui_gdebug(char* arg_0, ...);
+static void kaillera_UpdateStreamForPlayers(){
+	HWND chk = GetDlgItem(kaillera_sdlg, CHK_STREAM);
+	if (!hosting) {
+		EnableWindow(chk, FALSE);
+		return;
+	}
+	int players = kaillera_sdlg_LV_GULIST.RowsCount();
+	bool solo = players <= 1;
+	if (solo) {
+		if (kaillera_StreamingEnabled() && g_stream_players > 1) {
+			kaillera_BroadcastStreamState(false);
+			kaillera_ui_gdebug("* Sozinho na sala: Stream ao vivo! desligado (jogo solo nao e transmitido).");
+		}
+		SendMessage(chk, BM_SETCHECK, BST_UNCHECKED, 0);
+	} else if (g_stream_players <= 1) {
+		SendMessage(chk, BM_SETCHECK, nSettings::get_int("KAILLERA_STREAM_LIVE", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+	}
+	EnableWindow(chk, !solo);
+	g_stream_players = players;
+}
+
+// "Sem M. Card": RetroArch starts the game with no memory card in either
+// slot (retroarch-k3's kaillera_sync.c), so nobody's own card can make the
+// machines boot differently. With it off and no "M. Card Online" each player
+// used to play with their own card - an option this DLL no longer offers
+// (Walter, 2026-10-08): a room is either "Sem M. Card" or "M. Card Online".
+// Still announced over the room's chat like "Stream ao vivo!" above (on every
+// change and to every player who joins) and followed by everyone else, which
+// also keeps a room hosted by an older DLL on each player's own card working.
+// Kept in a plain variable too: RetroArch reads it (kailleraGetNoMemoryCard())
+// from the game callback's thread, not this dialog's.
 #define N02_NOMEMCARD_CHAT_PREFIX "[Sem M. Card]"
 static volatile bool g_no_memcard = true;
-static bool g_no_memcard_saved = true; // host's own choice, from n02.ini
 bool kaillera_NoMemcardEnabled(){
 	return g_no_memcard;
 }
@@ -808,12 +836,12 @@ static void kaillera_UpdateMultiTapForPlayers(){
 // own cards kept on WE Camp (wg-camp) - slot 1 = 1P, slot 2 = 2P - fetched at
 // game start and sent back at the end (kailleraclient.cpp's
 // kailleraMemcardPrepare/Finish). Host-only and announced like the boxes
-// above; excludes "Sem M. Card". Off by default; the host and every other
-// player need to be logged in to their WE Camp account (see the "only
-// logged-in players" check below, which an online-card room always does).
+// above; excludes "Sem M. Card". Only possible while the host and every
+// other player are logged in to their WE Camp account (the account check
+// below) - the room picks it by itself then, a host alone included (solo
+// game), and falls back to "Sem M. Card" when someone who isn't joins.
 #define N02_MCONLINE_CHAT_PREFIX "[MC Online]"
 static volatile bool g_mconline = false;
-static bool g_mconline_saved = false; // host's own choice, from n02.ini
 bool kaillera_McOnlineEnabled(){
 	return g_mconline;
 }
@@ -825,63 +853,89 @@ static void kaillera_BroadcastMcOnlineState(bool on){
 	kaillera_game_chat_send(on ? (char*)N02_MCONLINE_CHAT_PREFIX " ativado!" : (char*)N02_MCONLINE_CHAT_PREFIX " desativado.");
 }
 
-// The room's memory card choice is shown either as the "Sem M. Card"
-// checkbox (on = no card, off = each player's own) or - when this player is
-// logged in to WE Camp, or the room is already on online cards - as a list
-// with the three choices, since "Sem M. Card" and "M. Card Online" exclude
-// each other. Only the host's is enabled.
-#define N02_MEMCARD_CHOICE_OWN    0
-#define N02_MEMCARD_CHOICE_NONE   1
-#define N02_MEMCARD_CHOICE_ONLINE 2
+// The room's memory card choice: a list with "Sem M. Card" and "M. Card
+// Online". Only the host's is enabled, and only while online cards are
+// possible - the host logged in to WE Camp and nobody in the room known not
+// to be (LoginChecksAnyFailed()). The old "Sem M. Card" checkbox only shows
+// up - unchecked, disabled - in a room whose host runs an older DLL and kept
+// each player's own card.
+#define N02_MEMCARD_CHOICE_NONE   0
+#define N02_MEMCARD_CHOICE_ONLINE 1
 extern int kaillera_sdlg_MODE;
+static bool LoginChecksAnyFailed();
 static void kaillera_UpdateMemcardControls(){
 	HWND chk = GetDlgItem(kaillera_sdlg, CHK_NOMEMCARD);
 	HWND cmb = GetDlgItem(kaillera_sdlg, CMB_MEMCARD);
 	if (chk == NULL || cmb == NULL)
 		return;
 	bool inRoom = kaillera_sdlg_MODE == 0 && !kaillera_sdlg_toggle; // not the "Swap" game-list view
-	bool useList = n02_wecamp_logged_in() || g_mconline;
-	SendMessage(chk, BM_SETCHECK, g_no_memcard ? BST_CHECKED : BST_UNCHECKED, 0);
-	SendMessage(cmb, CB_SETCURSEL, g_mconline ? N02_MEMCARD_CHOICE_ONLINE
-		: g_no_memcard ? N02_MEMCARD_CHOICE_NONE : N02_MEMCARD_CHOICE_OWN, 0);
-	ShowWindow(chk, inRoom && !useList ? SW_SHOW : SW_HIDE);
-	ShowWindow(cmb, inRoom && useList ? SW_SHOW : SW_HIDE);
-	EnableWindow(chk, hosting);
-	EnableWindow(cmb, hosting);
+	bool ownCards = !g_mconline && !g_no_memcard;
+	SendMessage(chk, BM_SETCHECK, BST_UNCHECKED, 0);
+	SendMessage(cmb, CB_SETCURSEL, g_mconline ? N02_MEMCARD_CHOICE_ONLINE : N02_MEMCARD_CHOICE_NONE, 0);
+	ShowWindow(chk, inRoom && ownCards ? SW_SHOW : SW_HIDE);
+	ShowWindow(cmb, inRoom && !ownCards ? SW_SHOW : SW_HIDE);
+	EnableWindow(chk, FALSE);
+	EnableWindow(cmb, hosting && n02_wecamp_logged_in() && !LoginChecksAnyFailed());
 }
 
-// Rooms on "M. Card Online" only accept players logged in to their WE Camp
+// "M. Card Online" needs every player in the room logged in to their WE Camp
 // account. Kaillera itself has no passwords (anybody can use any nick), so
-// the proof goes through wg-camp: when the host announces online cards,
-// each other player's DLL asks WE Camp for a single-use "ticket" bound to
-// this room (the game id) and posts it in the room chat
-// (N02_TICKET_CHAT_PREFIX); the host's DLL checks it with WE Camp and kicks
-// whoever has no valid ticket, a ticket of another account than its nick,
-// or posts none within N02_LOGIN_CHECK_TIMEOUT_MS - telling them the host
-// has to pick "Sem M. Card" for players without an account. Network calls
-// run on worker threads, which hand their result back to the room dialog
-// (WM_N02_*) - chat sends and kicks happen on the dialog's thread, like the
-// buttons'.
+// the proof goes through wg-camp. A host logged in to WE Camp checks every
+// player as soon as they enter the room: it asks in the room chat
+// (N02_TICKET_REQUEST), the newcomer's DLL answers with a single-use
+// "ticket" bound to this room (the game id) that it gets from WE Camp - or
+// N02_TICKET_NOACCOUNT when it isn't logged in - and the host's DLL checks
+// the ticket with WE Camp and tells the room who confirmed
+// (N02_TICKET_CONFIRMED) or who didn't (N02_TICKET_NOLOGIN: no valid ticket,
+// a ticket of another account than its nick, or no answer within
+// N02_LOGIN_CHECK_TIMEOUT_MS). All of it goes after N02_TICKET_CHAT_PREFIX.
+// Nobody is removed (Walter, 2026-10-08): while someone who didn't confirm
+// is in the room it plays "Sem M. Card", with the choice locked and a
+// highlighted notice on every player's chat; once everybody confirmed -
+// the host alone included - it switches to "M. Card Online" by itself.
+// Network calls run on worker threads, which hand their result back to the
+// room dialog (WM_N02_*) - chat sends happen on the dialog's thread, like
+// the buttons'.
 void __cdecl kaillera_gdebug_color(COLORREF color, char* arg_0, ...);
+void __cdecl kaillera_gdebug_alert(char* arg_0, ...);
 void __cdecl kaillera_gdebug(char* arg_0, ...);
 void __cdecl kaillera_ui_gdebug(char* arg_0, ...);
 #define N02_LOGIN_COLOR_OK  RGB(0, 153, 0)
 #define N02_LOGIN_COLOR_BAD RGB(192, 0, 0)
 #define N02_TICKET_CHAT_PREFIX "[WE Camp] "
+#define N02_TICKET_REQUEST   "conta?"     // host: "show me your account"
+#define N02_TICKET_NOACCOUNT "sem conta"  // player: not logged in to WE Camp
+#define N02_TICKET_CONFIRMED "ok "        // host: "ok <nick>" - that player confirmed
+#define N02_TICKET_NOLOGIN   "sem login " // host: "sem login <nick>" - that one didn't
 #define N02_LOGIN_CHECK_TIMEOUT_MS 25000
-#define N02_TICKET_RESEND_MS 30000
 #define WM_N02_SENDCHAT    (WM_APP + 80)
 #define WM_N02_LOGINRESULT (WM_APP + 81)
-#define N02_LOGIN_REQUIRED_TEXT "esta sala usa M. Card Online e so aceita jogadores logados no WE Camp - " \
-	"para jogar sem conta, o host precisa selecionar \"Sem M. Card\""
 
-// Host side: who still has to show a ticket. Touched by the core thread
-// (joins/parts/chat) and the dialog thread (timeouts, results).
+static bool IsOwnNick(const char* nick){
+	char me[32];
+	kaillera_get_username(me, sizeof(me));
+	return _stricmp(nick, me) == 0;
+}
+// Only the room's owner asks for accounts and confirms them.
+static bool IsRoomOwner(const char* nick){
+	int x = kaillera_sdlg_gameslv.Find(kaillera_get_game_id());
+	if (x < 0)
+		return true; // our room isn't in the list (shouldn't happen) - don't break the check
+	char owner[64];
+	kaillera_sdlg_gameslv.CheckRow(owner, sizeof(owner), 3, x); // "User" column
+	owner[sizeof(owner) - 1] = 0;
+	return _stricmp(owner, nick) == 0;
+}
+
+// Host side: every other player in the room and where their account check
+// is. Touched by the core thread (joins/parts/chat) and the dialog thread
+// (timeouts, results).
 struct LoginCheck {
 	char nick[32];
 	unsigned short uid;
 	DWORD since;
-	int state; // 0 = waiting for a ticket, 1 = checking it, 2 = confirmed
+	int state; // 0 = waiting for an answer, 1 = checking it, 2 = confirmed,
+	           // 3 = not confirmed (the room can't use M. Card Online)
 };
 static LoginCheck g_login_checks[16];
 static int g_login_check_count = 0;
@@ -929,6 +983,16 @@ static void LoginCheckRemove(unsigned short uid){
 	}
 	LoginChecksUnlock();
 }
+// Somebody in the room didn't confirm a WE Camp account.
+static bool LoginChecksAnyFailed(){
+	LoginChecksLock();
+	bool any = false;
+	for (int i = 0; i < g_login_check_count; i++)
+		if (g_login_checks[i].state == 3)
+			any = true;
+	LoginChecksUnlock();
+	return any;
+}
 // Number of players not confirmed yet (the host can't start before 0).
 static int LoginChecksPending(){
 	LoginChecksLock();
@@ -939,6 +1003,13 @@ static int LoginChecksPending(){
 	LoginChecksUnlock();
 	return n;
 }
+static void LoginCheckSetState(unsigned short uid, int state){
+	LoginChecksLock();
+	for (int i = 0; i < g_login_check_count; i++)
+		if (g_login_checks[i].uid == uid)
+			g_login_checks[i].state = state;
+	LoginChecksUnlock();
+}
 
 static void PostRoomChat(const char* text){
 	char* copy = _strdup(text);
@@ -947,8 +1018,8 @@ static void PostRoomChat(const char* text){
 }
 
 // Joiner side: post a fresh ticket for this room (worker thread).
-static DWORD g_ticket_sent_at = 0;
-static unsigned int g_ticket_room = 0xFFFFFFFF;
+static unsigned int g_ticket_room = 0xFFFFFFFF;           // room whose host we answered
+static unsigned int g_ticket_confirmed_room = 0xFFFFFFFF; // room whose host confirmed us
 static DWORD WINAPI SendTicketThread(LPVOID){
 	char room[16], ticket[64], err[300];
 	wsprintf(room, "%u", kaillera_get_game_id());
@@ -961,14 +1032,19 @@ static DWORD WINAPI SendTicketThread(LPVOID){
 	PostRoomChat(line);
 	return 0;
 }
-static void SendTicketIfNeeded(){
-	if (!n02_wecamp_logged_in())
+// Joiner side: answer the host's account check - our ticket, or "sem conta".
+// Once per room (the host asks the whole room on every join); force answers
+// again - the host turned on M. Card Online and re-asks whoever it hasn't
+// confirmed yet.
+static void AnswerAccountCheck(bool force){
+	unsigned int room = kaillera_get_game_id();
+	if (g_ticket_confirmed_room == room || (!force && g_ticket_room == room))
 		return;
-	DWORD now = GetTickCount();
-	if (g_ticket_room == kaillera_get_game_id() && now - g_ticket_sent_at < N02_TICKET_RESEND_MS)
-		return; // the host re-announces to every joiner - one ticket is enough
-	g_ticket_room = kaillera_get_game_id();
-	g_ticket_sent_at = now;
+	g_ticket_room = room;
+	if (!n02_wecamp_logged_in()) {
+		PostRoomChat(N02_TICKET_CHAT_PREFIX N02_TICKET_NOACCOUNT);
+		return;
+	}
 	HANDLE t = CreateThread(NULL, 0, SendTicketThread, NULL, 0, NULL);
 	if (t) CloseHandle(t);
 }
@@ -997,11 +1073,16 @@ static DWORD WINAPI VerifyTicketThread(LPVOID param){
 		delete r;
 	return 0;
 }
-static void StartTicketCheck(const char* nick, const char* ticket){
+// Host side (core thread): a player answered the account check - with its
+// ticket, or N02_TICKET_NOACCOUNT.
+static void StartTicketCheck(const char* nick, const char* answer){
+	bool noAccount = strcmp(answer, N02_TICKET_NOACCOUNT) == 0;
 	LoginChecksLock();
 	bool start = false;
 	for (int i = 0; i < g_login_check_count; i++) {
-		if (_stricmp(g_login_checks[i].nick, nick) == 0 && g_login_checks[i].state == 0) {
+		int state = g_login_checks[i].state;
+		// A ticket that took longer than the timeout (state 3) still counts.
+		if (_stricmp(g_login_checks[i].nick, nick) == 0 && (state == 0 || (state == 3 && !noAccount))) {
 			g_login_checks[i].state = 1;
 			start = true;
 			break;
@@ -1010,44 +1091,60 @@ static void StartTicketCheck(const char* nick, const char* ticket){
 	LoginChecksUnlock();
 	if (!start)
 		return; // already confirmed / being checked, or not someone we wait for
+	if (noAccount) {
+		// Same way to the dialog thread as a checked ticket's verdict.
+		LoginResult* r = new LoginResult;
+		memset(r, 0, sizeof(*r));
+		strncpy(r->nick, nick, 31);
+		strcpy(r->err, "nao esta logado");
+		if (!PostMessage(kaillera_sdlg, WM_N02_LOGINRESULT, 0, (LPARAM)r))
+			delete r;
+		return;
+	}
 	VerifyJob* job = new VerifyJob;
 	memset(job, 0, sizeof(*job));
 	strncpy(job->nick, nick, 31);
-	strncpy(job->ticket, ticket, 63);
+	strncpy(job->ticket, answer, 63);
 	wsprintf(job->room, "%u", kaillera_get_game_id());
 	HANDLE t = CreateThread(NULL, 0, VerifyTicketThread, job, 0, NULL);
 	if (t) CloseHandle(t); else delete job;
 }
 
-// Host: (re)start waiting for every other player in the room's list.
-static void LoginChecksStartForRoom(){
-	LoginChecksClear();
-	char me[32];
-	kaillera_get_username(me, sizeof(me));
-	int rows = kaillera_sdlg_LV_GULIST.RowsCount();
-	for (int i = 0; i < rows; i++) {
-		char nick[32];
-		kaillera_sdlg_LV_GULIST.CheckRow(nick, 31, 0, i);
-		nick[31] = 0;
-		if (_stricmp(nick, me) != 0)
-			LoginCheckAdd(nick, (unsigned short)(UINT_PTR)kaillera_sdlg_LV_GULIST.RowNo(i));
+static void kaillera_HostSetMemcardChoice(int choice, bool byHost = true);
+
+// Every player's chat (red, bold): this one didn't confirm a WE Camp account,
+// so the room can't use M. Card Online while they're in it. why = the host's
+// reason (NULL on the other players' DLLs, which only get the nick).
+static void kaillera_NoLoginNotice(const char* nick, const char* why){
+	if (IsOwnNick(nick)) {
+		kaillera_gdebug_alert("* ATENCAO: voce nao esta logado no WE Camp - o M. Card Online nao pode ser usado nesta sala "
+			"(partida Sem M. Card). Para entrar na sua conta: botao \"M. Card Online\" na tela de servidores.");
+		return;
 	}
+	char reason[160] = "";
+	if (why && strcmp(why, "nao esta logado") != 0)
+		_snprintf(reason, sizeof(reason) - 1, " (%s)", why);
+	kaillera_gdebug_alert("* ATENCAO: %s entrou sem estar logado no WE Camp%s - o M. Card Online nao pode ser usado nesta sala "
+		"(partida Sem M. Card).", nick, reason);
 }
 
-static void KickNotLoggedIn(unsigned short uid, const char* nick, const char* why){
-	kaillera_gdebug_color(N02_LOGIN_COLOR_BAD, "* %s removido da sala (M. Card Online so aceita jogadores logados no WE Camp): %s", nick, why);
-	// Said in the room chat, so even a player on an older DLL learns why.
-	char line[320];
-	_snprintf(line, sizeof(line), "%s removido (%s): " N02_LOGIN_REQUIRED_TEXT ".", nick, why);
-	line[sizeof(line) - 1] = 0;
+// Host: a player didn't prove a WE Camp account. They stay, but the room
+// goes to "Sem M. Card" and the choice stays locked while they're in it
+// (kaillera_UpdateMemcardControls()) - and every player is told why.
+static void LoginCheckFailed(unsigned short uid, const char* nick, const char* why){
+	LoginCheckSetState(uid, 3);
+	char line[64];
+	wsprintf(line, "%s%s%s", N02_TICKET_CHAT_PREFIX, N02_TICKET_NOLOGIN, nick);
 	kaillera_game_chat_send(line);
-	LoginCheckRemove(uid);
-	kaillera_kick_user(uid);
+	kaillera_NoLoginNotice(nick, why);
+	if (g_mconline)
+		kaillera_HostSetMemcardChoice(N02_MEMCARD_CHOICE_NONE, false);
+	kaillera_UpdateMemcardControls();
 }
 
-// Dialog thread, once a second (WM_TIMER): kick whoever never showed a ticket.
+// Dialog thread, once a second (WM_TIMER): whoever never answered the check.
 static void LoginChecksTick(){
-	if (!hosting || !g_mconline)
+	if (!hosting)
 		return;
 	unsigned short late[16];
 	char lateNick[16][32];
@@ -1063,74 +1160,118 @@ static void LoginChecksTick(){
 	}
 	LoginChecksUnlock();
 	for (int i = 0; i < n; i++)
-		KickNotLoggedIn(late[i], lateNick[i], "nao confirmou a conta a tempo");
+		LoginCheckFailed(late[i], lateNick[i], "nao respondeu a tempo");
 }
 
-// Dialog thread: a ticket check finished.
+static void LoginChecksAutoMcOnline();
+
+// Dialog thread: a player's answer to the check was looked at.
 static void LoginCheckResult(LoginResult* r){
+	bool confirmed = r->ok && _stricmp(r->account, r->nick) == 0;
 	unsigned short uid = 0;
 	bool known = false;
 	LoginChecksLock();
 	for (int i = 0; i < g_login_check_count; i++) {
-		if (_stricmp(g_login_checks[i].nick, r->nick) == 0) {
+		if (_stricmp(g_login_checks[i].nick, r->nick) == 0 && g_login_checks[i].state == 1) {
 			uid = g_login_checks[i].uid;
 			known = true;
-			if (r->ok && _stricmp(r->account, r->nick) == 0)
+			if (confirmed)
 				g_login_checks[i].state = 2;
 			break;
 		}
 	}
 	LoginChecksUnlock();
-	if (!known || !hosting || !g_mconline)
+	if (!known || !hosting)
 		return;
-	if (r->ok && _stricmp(r->account, r->nick) == 0) {
+	if (confirmed) {
 		kaillera_gdebug_color(N02_LOGIN_COLOR_OK, "* %s confirmou a conta WE Camp.", r->nick);
+		// Everybody else sees it too (and that player stops answering).
+		char line[64];
+		wsprintf(line, "%s%s%s", N02_TICKET_CHAT_PREFIX, N02_TICKET_CONFIRMED, r->nick);
+		kaillera_game_chat_send(line);
+		kaillera_UpdateMemcardControls(); // a late ticket may unlock the choice
+		LoginChecksAutoMcOnline();
 	} else if (r->ok) {
 		char why[96];
 		wsprintf(why, "o login e da conta %s", r->account);
-		KickNotLoggedIn(uid, r->nick, why);
+		LoginCheckFailed(uid, r->nick, why);
 	} else {
-		KickNotLoggedIn(uid, r->nick, r->err[0] ? r->err : "login invalido");
+		LoginCheckFailed(uid, r->nick, r->err[0] ? r->err : "login invalido");
 	}
 }
 
-// Host: the room's memory card choice changed (checkbox or list). Online
-// cards need the host logged in and turn on the account check of everybody
-// else in the room. "[MC Online]" goes out before "[Sem M. Card]" so the
-// other players' notices read right (kaillera_game_chat_callback()).
-static void kaillera_HostSetMemcardChoice(int choice){
-	if (choice == N02_MEMCARD_CHOICE_ONLINE && !n02_wecamp_logged_in()) {
+// Host: the room's memory card choice changed - picked in the list (byHost)
+// or switched by the account check (LoginChecksAutoMcOnline() /
+// LoginCheckFailed(), which tell the room themselves). "[MC Online]" goes
+// out before "[Sem M. Card]" so the other players' notices read right
+// (kaillera_game_chat_callback()). Not saved for the next rooms: each room
+// starts on "Sem M. Card" and goes online by itself when it can.
+static bool g_memcard_host_none = false; // the host picked "Sem M. Card" itself in this room
+static void kaillera_HostSetMemcardChoice(int choice, bool byHost){
+	bool online = choice == N02_MEMCARD_CHOICE_ONLINE;
+	if (online && !n02_wecamp_logged_in()) {
 		kaillera_gdebug_color(N02_LOGIN_COLOR_BAD, "* Para usar o M. Card Online, entre na sua conta WE Camp "
 			"(botao \"M. Card Online\" na tela de servidores).");
 		kaillera_UpdateMemcardControls(); // back to the previous choice
 		return;
 	}
-	bool online = choice == N02_MEMCARD_CHOICE_ONLINE;
-	bool none = choice == N02_MEMCARD_CHOICE_NONE;
-	bool wasOnline = g_mconline;
+	if (online && LoginChecksAnyFailed()) {
+		kaillera_gdebug_color(N02_LOGIN_COLOR_BAD, "* O M. Card Online nao pode ser usado: ha jogador(es) na sala sem login no WE Camp.");
+		kaillera_UpdateMemcardControls();
+		return;
+	}
+	if (byHost)
+		g_memcard_host_none = !online;
 	g_mconline = online;
-	g_no_memcard = none;
-	g_mconline_saved = online;
-	g_no_memcard_saved = none;
-	nSettings::set_int("KAILLERA_MC_ONLINE", online ? 1 : 0);
-	nSettings::set_int("KAILLERA_NO_MEMCARD", none ? 1 : 0);
+	g_no_memcard = !online;
 	kaillera_UpdateMemcardControls();
-
-	if (online && !wasOnline)
-		LoginChecksStartForRoom();
-	else if (!online)
-		LoginChecksClear();
 	kaillera_BroadcastMcOnlineState(online);
-	kaillera_BroadcastMemcardState(none);
-
-	if (online)
-		kaillera_gdebug("* M. Card Online: o cartao do 1P vai no slot 1 e o do 2P no slot 2, vindos do WE Camp. So jogadores "
-			"logados no WE Camp podem ficar na sala - quem nao confirmar a conta em %d s sera removido.",
-			N02_LOGIN_CHECK_TIMEOUT_MS / 1000);
-	else if (none)
+	kaillera_BroadcastMemcardState(!online);
+	if (!byHost)
+		return;
+	if (online) {
+		kaillera_gdebug("* M. Card Online: o cartao do 1P vai no slot 1 e o do 2P no slot 2, vindos do WE Camp.");
+		int pending = LoginChecksPending();
+		if (pending > 0)
+			kaillera_gdebug("* %d jogador(es) ainda confirmando a conta WE Camp: se algum nao estiver logado, a sala volta para Sem M. Card.",
+				pending);
+	} else {
 		kaillera_gdebug("* Sem M. Card: a partida vai iniciar sem memory card.");
+	}
+}
+
+// Host: everybody in the room has confirmed their WE Camp account - the host
+// alone included, for a solo game - so the room switches to M. Card Online
+// by itself, unless the host picked "Sem M. Card" in this room. Also after a
+// player who blocked it leaves. PS1 rooms only - the fork applies online
+// cards to PCSX ReARMed alone (retroarch-k3's kaillera_sync.c,
+// ksync_core_path_is_pcsx()).
+static void LoginChecksAutoMcOnline(){
+	if (!hosting || g_mconline || g_memcard_host_none || !n02_wecamp_logged_in() || kaillera_is_game_running())
+		return;
+	char room[sizeof(GAME)];
+	strncpy(room, GAME, sizeof(room) - 1);
+	room[sizeof(room) - 1] = 0;
+	_strlwr(room);
+	if (strstr(room, "pcsx") == NULL)
+		return;
+	int others = kaillera_sdlg_LV_GULIST.RowsCount() - 1;
+	if (others < 0)
+		return; // our own row isn't in the list yet
+	int confirmed = 0;
+	LoginChecksLock();
+	for (int i = 0; i < g_login_check_count; i++)
+		if (g_login_checks[i].state == 2)
+			confirmed++;
+	LoginChecksUnlock();
+	if (confirmed < others)
+		return;
+	if (others == 0)
+		kaillera_gdebug_color(N02_LOGIN_COLOR_OK, "* M. Card Online selecionado: voce esta logado no WE Camp - no jogo solo o seu cartao "
+			"vai no slot 1 e volta para o WE Camp no fim da partida.");
 	else
-		kaillera_gdebug("* Com M. Card: cada jogador vai usar o proprio memory card.");
+		kaillera_gdebug_color(N02_LOGIN_COLOR_OK, "* Todos os jogadores confirmaram a conta WE Camp: M. Card Online selecionado automaticamente.");
+	kaillera_HostSetMemcardChoice(N02_MEMCARD_CHOICE_ONLINE, false);
 }
 
 // Players of the game that just started, in the room list's order - which is
@@ -1159,17 +1300,25 @@ void kaillera_sdlgGameMode(bool toggle = false){
 	{
 		HWND chkStream = GetDlgItem(kaillera_sdlg, CHK_STREAM);
 		ShowWindow(chkStream, SW_SHOW);
-		EnableWindow(chkStream, hosting);
-		if (!hosting)
+		if (!toggle) {
+			// Entering the room: off until the room's list shows somebody
+			// else (kaillera_UpdateStreamForPlayers()) - a non-host follows the
+			// host's announcement.
+			g_stream_players = 0;
 			SendMessage(chkStream, BM_SETCHECK, BST_UNCHECKED, 0);
+			EnableWindow(chkStream, FALSE);
+		} else {
+			kaillera_UpdateStreamForPlayers();
+		}
 	}
 	{
 		// Only when entering the room, not on the "Swap" view toggle - that
 		// would wipe a non-host's copy of the host's announcement. Everyone
-		// but the host starts from "on": the safe default, and what an older
-		// host that never announces it plays with.
+		// starts from "Sem M. Card": the safe default, and what an older host
+		// that never announces it plays with. The host's room goes online by
+		// itself when it can (LoginChecksAutoMcOnline()).
 		if (!toggle)
-			g_no_memcard = hosting ? g_no_memcard_saved : true;
+			g_no_memcard = true;
 	}
 	{
 		ShowWindow(GetDlgItem(kaillera_sdlg, CHK_MULTITAP), SW_SHOW);
@@ -1184,13 +1333,9 @@ void kaillera_sdlgGameMode(bool toggle = false){
 	if (!toggle) {
 		LoginChecksClear();
 		g_ticket_room = 0xFFFFFFFF;
-		// The host's saved "online" choice wins over its saved "Sem M. Card"
-		// one (they exclude each other) - if it's still logged in to WE Camp.
-		g_mconline = hosting && g_mconline_saved && n02_wecamp_logged_in();
-		if (g_mconline)
-			g_no_memcard = false;
-		else if (hosting && g_mconline_saved)
-			kaillera_gdebug("* M. Card Online desligado: voce nao esta conectado a sua conta WE Camp (botao \"M. Card Online\" na tela de servidores).");
+		g_ticket_confirmed_room = 0xFFFFFFFF;
+		g_memcard_host_none = false;
+		g_mconline = false;
 	}
 	kaillera_UpdateMemcardControls();
 	ShowWindow(kaillera_sdlg_RE_GCHAT,SW_SHOW);
@@ -1390,7 +1535,7 @@ static const COLORREF KAILLERA_COLOR_GREEN = 0x00009900; // matches kaillera_ui_
 static const COLORREF KAILLERA_COLOR_DARK_BLUE = RGB(0, 0, 102); // join/leave in lobby chat
 static const COLORREF KAILLERA_COLOR_RED = RGB(192, 0, 0); // something to fix before starting
 
-static void AppendFormattedLine(HWND hwnd, COLORREF color, char* fmt, va_list args) {
+static void AppendFormattedLine(HWND hwnd, COLORREF color, char* fmt, va_list args, bool bold = false) {
 	char msg[2048];
 	msg[0] = 0;
 	vsnprintf_s(msg, sizeof(msg), _TRUNCATE, fmt, args);
@@ -1400,7 +1545,7 @@ static void AppendFormattedLine(HWND hwnd, COLORREF color, char* fmt, va_list ar
 
 	char line[4096];
 	_snprintf_s(line, sizeof(line), _TRUNCATE, "%s%s\r\n", ts, msg);
-	re_append(hwnd, line, color);
+	re_append(hwnd, line, color, bold);
 }
 
 
@@ -1415,6 +1560,13 @@ void __cdecl kaillera_gdebug_color(COLORREF color, char* arg_0, ...) {
 	va_list args;
 	va_start(args, arg_0);
 	AppendFormattedLine(kaillera_sdlg_RE_GCHAT, color, arg_0, args);
+	va_end(args);
+}
+// Room chat, red and bold - for what every player must notice.
+void __cdecl kaillera_gdebug_alert(char* arg_0, ...) {
+	va_list args;
+	va_start(args, arg_0);
+	AppendFormattedLine(kaillera_sdlg_RE_GCHAT, RGB(192, 0, 0), arg_0, args, true);
 	va_end(args);
 }
 void __cdecl kaillera_ui_gdebug(char* arg_0, ...) {
@@ -1531,33 +1683,45 @@ void kaillera_game_chat_callback(char*name, char * msg){
 		return;
 	}
 	if (msg != NULL && strncmp(msg, N02_TICKET_CHAT_PREFIX, strlen(N02_TICKET_CHAT_PREFIX)) == 0) {
-		// A joiner's WE Camp ticket - only the host checks it; nobody shows it.
-		if (hosting && g_mconline)
-			StartTicketCheck(name, msg + strlen(N02_TICKET_CHAT_PREFIX));
+		// The WE Camp account check (see LoginCheck) - nobody shows its lines.
+		const char* arg = msg + strlen(N02_TICKET_CHAT_PREFIX);
+		if (hosting) {
+			// Another player's answer: its ticket or "sem conta" (our own
+			// request/confirmations come back to us too).
+			if (n02_wecamp_logged_in() && !IsOwnNick(name))
+				StartTicketCheck(name, arg);
+		} else if (IsRoomOwner(name)) {
+			if (strcmp(arg, N02_TICKET_REQUEST) == 0) {
+				AnswerAccountCheck(false);
+			} else if (strncmp(arg, N02_TICKET_CONFIRMED, strlen(N02_TICKET_CONFIRMED)) == 0) {
+				const char* who = arg + strlen(N02_TICKET_CONFIRMED);
+				if (IsOwnNick(who)) {
+					g_ticket_confirmed_room = kaillera_get_game_id();
+					kaillera_gdebug_color(N02_LOGIN_COLOR_OK, "* Sua conta WE Camp (%s) foi confirmada pelo host.", who);
+				} else {
+					kaillera_gdebug_color(N02_LOGIN_COLOR_OK, "* %s confirmou a conta WE Camp.", who);
+				}
+			} else if (strncmp(arg, N02_TICKET_NOLOGIN, strlen(N02_TICKET_NOLOGIN)) == 0) {
+				kaillera_NoLoginNotice(arg + strlen(N02_TICKET_NOLOGIN), NULL);
+			}
+		}
 		return;
 	}
 	if (msg != NULL && strncmp(msg, N02_MCONLINE_CHAT_PREFIX, strlen(N02_MCONLINE_CHAT_PREFIX)) == 0) {
 		// Same "desativado" contains "ativado" gotcha as above.
 		bool on = strstr(msg, "desativado") == NULL;
-		if (!hosting) {
-			if (on != kaillera_McOnlineEnabled()) {
-				kaillera_SetMcOnlineCheck(on);
-				g_ticket_room = 0xFFFFFFFF; // the host (re)started checking - send a fresh ticket
-				if (on)
-					kaillera_gdebug("* %s selecionou M. Card Online: cada jogador usa o seu cartao do WE Camp "
-						"(1P no slot 1, 2P no slot 2) e so jogadores logados no WE Camp podem ficar na sala.", name);
-				else
-					kaillera_gdebug("* %s desativou o M. Card Online.", name);
-			}
-			// The host re-announces it to every joiner: prove our account (or
-			// learn why we're about to be removed).
-			if (on) {
-				if (n02_wecamp_logged_in())
-					SendTicketIfNeeded();
-				else
-					kaillera_gdebug_color(N02_LOGIN_COLOR_BAD, "* Voce nao esta logado no WE Camp e sera removido: "
-						N02_LOGIN_REQUIRED_TEXT ". (Para entrar na sua conta: botao \"M. Card Online\" na tela de servidores.)");
-			}
+		// The host re-announces it to every joiner - only act when it changes here.
+		if (!hosting && on != kaillera_McOnlineEnabled()) {
+			kaillera_SetMcOnlineCheck(on);
+			if (on)
+				kaillera_gdebug("* %s selecionou M. Card Online: cada jogador usa o seu cartao do WE Camp "
+					"(1P no slot 1, 2P no slot 2).", name);
+			else
+				kaillera_gdebug("* %s desativou o M. Card Online.", name);
+			// Now it counts: prove our account (or say we have none) - unless
+			// the host already confirmed it when we entered.
+			if (on)
+				AnswerAccountCheck(true);
 		}
 		return;
 	}
@@ -1685,6 +1849,7 @@ void kaillera_player_add_callback(char *name, int ping, unsigned short id, char 
 	wsprintf(bfx, "%i frames", thrp * conn - 1);
 	kaillera_sdlg_LV_GULIST.FillRow(bfx, 3, x);
 	kaillera_UpdateMultiTapForPlayers();
+	kaillera_UpdateStreamForPlayers();
 }
 void kaillera_player_joined_callback(char * username, int ping, unsigned short uid, char connset){
 	kaillera_ui_gdebug_color(KAILLERA_COLOR_DARK_BLUE, "* Joins: %s", username);
@@ -1706,11 +1871,19 @@ void kaillera_player_joined_callback(char * username, int ping, unsigned short u
 		// Always, on or off - a joiner starts from "on" and must learn an
 		// "off" too, or its RetroArch would boot with a different card setup.
 		// "[MC Online]" first: the "[Sem M. Card]" line after it reads right.
-		if (kaillera_McOnlineEnabled())
-			LoginCheckAdd(username, uid); // the newcomer's DLL answers with its ticket
 		kaillera_BroadcastMcOnlineState(kaillera_McOnlineEnabled());
 		kaillera_BroadcastMemcardState(kaillera_NoMemcardEnabled());
 		kaillera_BroadcastMultiTapState(kaillera_MultiTapEnabled());
+		// Check the newcomer's WE Camp account right away, whatever the card
+		// choice (M. Card Online needs everybody's). Our own join, which the
+		// server also reports right after we create the room, is the solo
+		// case instead: a logged-in host alone can play with its online card.
+		if (IsOwnNick(username))
+			LoginChecksAutoMcOnline();
+		else if (n02_wecamp_logged_in() && !kaillera_is_game_running()) {
+			LoginCheckAdd(username, uid);
+			kaillera_game_chat_send((char*)N02_TICKET_CHAT_PREFIX N02_TICKET_REQUEST);
+		}
 	}
 	if (g_beep_on_user_join)
 		MessageBeep(MB_OK);
@@ -1723,6 +1896,11 @@ void kaillera_player_left_callback(char * user, unsigned short id){
 	kaillera_sdlg_LV_GULIST.DeleteRow (kaillera_sdlg_LV_GULIST.Find(id));
 	LoginCheckRemove(id);
 	kaillera_UpdateMultiTapForPlayers();
+	kaillera_UpdateStreamForPlayers();
+	// The one who hadn't confirmed may be the one who left: the choice unlocks
+	// and the room may go online again.
+	kaillera_UpdateMemcardControls();
+	LoginChecksAutoMcOnline();
 }
 void kaillera_user_kicked_callback(){
 	inGame = false;
@@ -2631,13 +2809,10 @@ LRESULT CALLBACK KailleraServerDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 			{
 				int streamChecked = nSettings::get_int("KAILLERA_STREAM_LIVE", 0);
 				SendMessage(GetDlgItem(hDlg, CHK_STREAM), BM_SETCHECK, streamChecked ? BST_CHECKED : BST_UNCHECKED, 0);
-				g_no_memcard_saved = nSettings::get_int("KAILLERA_NO_MEMCARD", 1) != 0;
-				kaillera_SetNoMemcardCheck(g_no_memcard_saved);
+				kaillera_SetNoMemcardCheck(true);
 				kaillera_SetMultiTapCheck(false);
-				g_mconline_saved = nSettings::get_int("KAILLERA_MC_ONLINE", 0) != 0;
 				{
 					HWND cmb = GetDlgItem(hDlg, CMB_MEMCARD);
-					SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)"Com M. Card");    // N02_MEMCARD_CHOICE_OWN
 					SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)"Sem M. Card");    // N02_MEMCARD_CHOICE_NONE
 					SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)"M. Card Online"); // N02_MEMCARD_CHOICE_ONLINE
 				}
@@ -2959,16 +3134,8 @@ LRESULT CALLBACK KailleraServerDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 							kaillera_BroadcastStreamState(checked);
 					}
 					break;
-				case CHK_NOMEMCARD:
-					// Same BN_CLICKED-only reasoning as CHK_STREAM above. Only the
-					// host's is enabled - see kaillera_UpdateMemcardControls().
-					if (HIWORD(wParam) == BN_CLICKED && hosting)
-					{
-						bool none = SendMessage(GetDlgItem(hDlg, CHK_NOMEMCARD), BM_GETCHECK, 0, 0)==BST_CHECKED;
-						kaillera_HostSetMemcardChoice(none ? N02_MEMCARD_CHOICE_NONE : N02_MEMCARD_CHOICE_OWN);
-					}
-					break;
 				case CMB_MEMCARD:
+					// Only the host's is enabled - see kaillera_UpdateMemcardControls().
 					if (HIWORD(wParam) == CBN_SELCHANGE && hosting)
 					{
 						int choice = (int)SendMessage(GetDlgItem(hDlg, CMB_MEMCARD), CB_GETCURSEL, 0, 0);
@@ -2977,7 +3144,7 @@ LRESULT CALLBACK KailleraServerDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 					}
 					break;
 				case CHK_MULTITAP:
-					// Same BN_CLICKED-only / host-only reasoning as CHK_NOMEMCARD.
+					// Same BN_CLICKED-only reasoning as CHK_STREAM; host-only.
 					if (HIWORD(wParam) == BN_CLICKED && hosting)
 					{
 						bool on = SendMessage(GetDlgItem(hDlg, CHK_MULTITAP), BM_GETCHECK, 0, 0)==BST_CHECKED;
@@ -3646,7 +3813,7 @@ LRESULT CALLBACK WeCampDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 		{
 			// Last e-mail used on this PC, for convenience.
 			char email[130];
-			nSettings::get_str((char*)"WECAMP_LAST_EMAIL", email, (char*)"");
+			nSettings::get_str_in((char*)"SC", (char*)"WECAMP_LAST_EMAIL", email, (char*)"");
 			email[sizeof(email) - 1] = 0;
 			SetWindowText(GetDlgItem(hDlg, IDC_WECAMP_USER), email);
 			SendMessage(GetDlgItem(hDlg, IDC_WECAMP_USER), EM_LIMITTEXT, 120, 0);
@@ -3699,7 +3866,7 @@ LRESULT CALLBACK WeCampDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 					WeCampDialogRefresh(hDlg);
 					break;
 				}
-				nSettings::set_str((char*)"WECAMP_LAST_EMAIL", (char*)n02_wecamp_email());
+				nSettings::set_str_in((char*)"SC", (char*)"WECAMP_LAST_EMAIL", (char*)n02_wecamp_email());
 				WeCampApplyNick(kaillera_ssdlg); // nick = account username, locked
 				EndDialog(hDlg, 1);
 			}

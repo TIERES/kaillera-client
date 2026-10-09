@@ -11,6 +11,8 @@ bool p2p_RecordingEnabled();
 bool p2p_IsHost();
 bool p2p_StreamingEnabled();
 bool p2p_NoMemcardEnabled();
+bool p2p_McOnlineEnabled();
+int p2p_GetGamePlayers(char out[][32], int max);
 void p2p_ConfigureStream();
 void p2p_GetOwnerName(char* out, int cap);
 void p2p_ShowWaitingGamesList();

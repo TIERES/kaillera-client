@@ -18,17 +18,21 @@ static wchar_t g_host[128] = L"" N02_WECAMP_HOST;
 static int g_port = N02_WECAMP_PORT;
 static bool g_secure = true;
 
+// The account lives in the Server mode's section of n02.ini ("SC", where it
+// always was) whichever mode reads it - P2P uses the same login.
+#define N02_WECAMP_SECTION ((char*)"SC")
+
 void n02_wecamp_load() {
 	char host[128];
-	nSettings::get_str((char*)"WECAMP_HOST", host, (char*)N02_WECAMP_HOST);
+	nSettings::get_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_HOST", host, (char*)N02_WECAMP_HOST);
 	host[sizeof(host) - 1] = 0;
 	MultiByteToWideChar(CP_UTF8, 0, host, -1, g_host, 128);
-	g_port = nSettings::get_int((char*)"WECAMP_PORT", N02_WECAMP_PORT);
-	g_secure = nSettings::get_int((char*)"WECAMP_HTTP", 0) == 0;
+	g_port = nSettings::get_int_in(N02_WECAMP_SECTION, (char*)"WECAMP_PORT", N02_WECAMP_PORT);
+	g_secure = nSettings::get_int_in(N02_WECAMP_SECTION, (char*)"WECAMP_HTTP", 0) == 0;
 
-	nSettings::get_str((char*)"WECAMP_TOKEN", g_token, (char*)"");
-	nSettings::get_str((char*)"WECAMP_USER", g_username, (char*)"");
-	nSettings::get_str((char*)"WECAMP_EMAIL", g_email, (char*)"");
+	nSettings::get_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_TOKEN", g_token, (char*)"");
+	nSettings::get_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_USER", g_username, (char*)"");
+	nSettings::get_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_EMAIL", g_email, (char*)"");
 	g_token[sizeof(g_token) - 1] = 0;
 	g_username[sizeof(g_username) - 1] = 0;
 	g_email[sizeof(g_email) - 1] = 0;
@@ -194,9 +198,9 @@ bool n02_wecamp_login(const char* email, const char* password, char* err, int er
 	if (!KvGet(resp, "email", g_email, sizeof(g_email)) || g_email[0] == 0)
 		strncpy(g_email, email, sizeof(g_email) - 1);
 	g_email[sizeof(g_email) - 1] = 0;
-	nSettings::set_str((char*)"WECAMP_TOKEN", g_token);
-	nSettings::set_str((char*)"WECAMP_USER", g_username);
-	nSettings::set_str((char*)"WECAMP_EMAIL", g_email);
+	nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_TOKEN", g_token);
+	nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_USER", g_username);
+	nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_EMAIL", g_email);
 	return true;
 }
 
@@ -209,9 +213,9 @@ void n02_wecamp_logout() {
 	g_token[0] = 0;
 	g_username[0] = 0;
 	g_email[0] = 0;
-	nSettings::set_str((char*)"WECAMP_TOKEN", (char*)"");
-	nSettings::set_str((char*)"WECAMP_USER", (char*)"");
-	nSettings::set_str((char*)"WECAMP_EMAIL", (char*)"");
+	nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_TOKEN", (char*)"");
+	nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_USER", (char*)"");
+	nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_EMAIL", (char*)"");
 }
 
 bool n02_wecamp_get_ticket(const char* room, char* ticket, int ticketCap, char* err, int errCap) {

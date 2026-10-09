@@ -23,6 +23,7 @@
 #include "common/n02_wecamp.h"
 
 void __cdecl kaillera_ui_gdebug(char* arg_0, ...); // kaillera_ui.cpp - room chat line
+void __cdecl outpf(char * arg_0, ...); // p2p_ui.cpp - P2P connection window line
 
 #include "errr.h"
 #include <limits.h>
@@ -173,7 +174,7 @@ static void close_recording() {
 // player's own) - shared by the recording below and kailleraGetNoMemoryCard(),
 // so what RetroArch plays with and what the replay says always agree:
 //  - retry-connect: whatever the replay being resumed was played with;
-//  - Server-mode room / P2P connection: that dialog's checkbox
+//  - Server-mode room / P2P connection: that dialog's memory card choice
 //    (kaillera_ui.cpp / p2p_ui.cpp);
 //  - Playback / Watch Live: what the replay/stream says (player.cpp).
 static int CurrentGameNoMemcard() {
@@ -183,13 +184,14 @@ static int CurrentGameNoMemcard() {
 		return player_get_no_memcard();
 	if (get_active_mode_index() == 1)
 		return (kaillera_NoMemcardEnabled() && !kaillera_McOnlineEnabled()) ? 1 : 0;
-	return p2p_NoMemcardEnabled() ? 1 : 0;
+	return (p2p_NoMemcardEnabled() && !p2p_McOnlineEnabled()) ? 1 : 0;
 }
 
 // Memory card setup for the game starting now: 2 = "M. Card online" (WE
 // Camp cards), 1 = each player's own, 0 = none. Same sources as
 // CurrentGameNoMemcard(); a replay/stream/retry-connect is "online" when it
-// carries the online marker (krec_reader.h). P2P has no online cards.
+// carries the online marker (krec_reader.h). "Each player's own" is only
+// what an older host (or an old replay) may still say.
 #define N02_MEMCARD_NONE   0
 #define N02_MEMCARD_OWN    1
 #define N02_MEMCARD_ONLINE 2
@@ -210,6 +212,8 @@ static int CurrentGameMemcardMode() {
 			return N02_MEMCARD_ONLINE;
 		return kaillera_NoMemcardEnabled() ? N02_MEMCARD_NONE : N02_MEMCARD_OWN;
 	}
+	if (p2p_McOnlineEnabled())
+		return N02_MEMCARD_ONLINE;
 	return p2p_NoMemcardEnabled() ? N02_MEMCARD_NONE : N02_MEMCARD_OWN;
 }
 
@@ -293,7 +297,9 @@ int WINAPI _gameCallback(char *game, int player, int numplayers){
 		n02_TRACE();
 	}
 
-	if (active_mod.StreamingEnabled() && active_mod.IsHost()) {
+	// A solo game (the host alone) is never streamed - the room's box is off
+	// then too (kaillera_UpdateStreamForPlayers()).
+	if (active_mod.StreamingEnabled() && active_mod.IsHost() && numplayers > 1) {
 		active_mod.ConfigureStream();
 		char ownerName[64];
 		active_mod.GetOwnerName(ownerName, sizeof(ownerName));
@@ -756,7 +762,21 @@ extern "C" {
 	       live room the final cards are sent back (on a worker thread) - by
 	       the host right away, by the others only if the host didn't (see
 	       McCommitThread); the first send becomes the cards' new version.
+	   "Live room" = a Server-mode room or a P2P connection; the notices go to
+	   that mode's chat (McLog).
 	   ------------------------------------------------------------------ */
+
+	static void McLog(const char* fmt, ...) {
+		char msg[1024];
+		va_list args;
+		va_start(args, fmt);
+		vsnprintf_s(msg, sizeof(msg), _TRUNCATE, fmt, args);
+		va_end(args);
+		if (get_active_mode_index() == 0)
+			outpf((char*)"%s", msg);
+		else
+			kaillera_ui_gdebug((char*)"%s", msg);
+	}
 
 	static struct {
 		bool live;              // a live room's cards - send them back at the end
@@ -828,25 +848,26 @@ extern "C" {
 		char err[300];
 
 		if (!n02_wecamp_logged_in()) {
-			kaillera_ui_gdebug("* Memory Card online: voce nao esta conectado a sua conta WE Camp (botao \"M. Card Online\" na tela de servidores).");
+			McLog("* Memory Card online: voce nao esta conectado a sua conta WE Camp (botao \"M. Card Online\" na tela de servidores).");
 			return -1;
 		}
 		char nick[32];
-		kaillera_get_username(nick, sizeof(nick));
+		active_mod.GetOwnerName(nick, sizeof(nick));
 		if (_stricmp(nick, n02_wecamp_username()) != 0) {
-			kaillera_ui_gdebug("* Memory Card online: seu nick (%s) e diferente da sua conta WE Camp (%s).", nick, n02_wecamp_username());
+			McLog("* Memory Card online: seu nick (%s) e diferente da sua conta WE Camp (%s).", nick, n02_wecamp_username());
 			return -1;
 		}
 
-		// 1P, 2P, ... - the room list is in the server's join order. Checked
-		// against our own player number, so a list in a different order
-		// can never hand anybody the wrong card silently.
+		// 1P, 2P, ... - the room list is in the server's join order (P2P: the
+		// host, then the peer). Checked against our own player number, so a
+		// list in a different order can never hand anybody the wrong card
+		// silently.
 		char names[8][32];
-		int count = kaillera_GetGamePlayers(names, 8);
+		int count = get_active_mode_index() == 0 ? p2p_GetGamePlayers(names, 8) : kaillera_GetGamePlayers(names, 8);
 		if (numplayers < count)
 			count = numplayers;
 		if (playerno < 1 || playerno > count || _stricmp(names[playerno - 1], nick) != 0) {
-			kaillera_ui_gdebug("* Memory Card online: nao consegui confirmar a ordem dos jogadores.");
+			McLog("* Memory Card online: nao consegui confirmar a ordem dos jogadores.");
 			return -1;
 		}
 		g_mc.players[0] = 0;
@@ -857,12 +878,12 @@ extern "C" {
 
 		n02_wecamp_checkout_result co;
 		if (!n02_wecamp_checkout(contentId, gameFile, g_mc.players, &co, err, sizeof(err))) {
-			kaillera_ui_gdebug("* Memory Card online indisponivel: %s", err);
+			McLog("* Memory Card online indisponivel: %s", err);
 			return -1;
 		}
 		for (int s = 0; s < co.slots; s++) {
 			if (!n02_wecamp_get_card(co.sha256[s], buf, false) || !McWriteCard(dir, s, buf)) {
-				kaillera_ui_gdebug("* Memory Card online: falha ao baixar o cartao de %s.", co.player[s]);
+				McLog("* Memory Card online: falha ao baixar o cartao de %s.", co.player[s]);
 				return -1;
 			}
 		}
@@ -876,10 +897,10 @@ extern "C" {
 		}
 		McWriteMarker(co.sha256[0], co.slots > 1 ? co.sha256[1] : "");
 		if (co.slots > 1)
-			kaillera_ui_gdebug("* Memory Card online: slot 1 = %s (versao %d), slot 2 = %s (versao %d).",
+			McLog("* Memory Card online: slot 1 = %s (versao %d), slot 2 = %s (versao %d).",
 				co.player[0], co.version[0], co.player[1], co.version[1]);
 		else
-			kaillera_ui_gdebug("* Memory Card online: slot 1 = %s (versao %d).", co.player[0], co.version[0]);
+			McLog("* Memory Card online: slot 1 = %s (versao %d).", co.player[0], co.version[0]);
 		return 1;
 	}
 
@@ -902,7 +923,7 @@ extern "C" {
 			player_get_mconline(sha);
 			return McPrepareFromMarker(dir, sha);
 		}
-		if (get_active_mode_index() == 1)
+		if (get_active_mode_index() == 1 || get_active_mode_index() == 0)
 			return McPrepareLive(contentId, gameFile ? gameFile : "", dir);
 		return 0;
 	}
@@ -931,24 +952,24 @@ extern "C" {
 			Sleep(N02_MC_GUEST_COMMIT_DELAY_MS);
 		for (int s = 0; s < job->slots; s++) {
 			if (!McReadCard(job->dir, s, data)) {
-				kaillera_ui_gdebug("* Memory Card online: nao encontrei o cartao de %s para salvar.", job->owner[s]);
+				McLog("* Memory Card online: nao encontrei o cartao de %s para salvar.", job->owner[s]);
 				continue;
 			}
 			char status[64];
 			int version = 0;
 			n02_wecamp_commit(job->contentId, job->owner[s], job->base[s], job->players, data, status, sizeof(status), &version);
 			if (strcmp(status, "committed") == 0)
-				kaillera_ui_gdebug("* Memory Card de %s salvo no WE Camp (versao %d).", job->owner[s], version);
+				McLog("* Memory Card de %s salvo no WE Camp (versao %d).", job->owner[s], version);
 			else if (strcmp(status, "already") == 0)
 				; // the host (or another player) already saved this exact card
 			else if (strcmp(status, "unchanged") == 0) {
 				if (job->host)
-					kaillera_ui_gdebug("* Memory Card de %s sem alteracoes.", job->owner[s]);
+					McLog("* Memory Card de %s sem alteracoes.", job->owner[s]);
 			} else if (strcmp(status, "conflict") == 0)
-				kaillera_ui_gdebug("* Memory Card de %s NAO foi salvo: ele mudou no WE Camp durante a partida "
+				McLog("* Memory Card de %s NAO foi salvo: ele mudou no WE Camp durante a partida "
 					"(envio pelo site ou cartao diferente do salvo pelo host).", job->owner[s]);
 			else
-				kaillera_ui_gdebug("* Memory Card de %s NAO foi salvo (%s).", job->owner[s], status);
+				McLog("* Memory Card de %s NAO foi salvo (%s).", job->owner[s], status);
 		}
 		delete job;
 		return 0;
