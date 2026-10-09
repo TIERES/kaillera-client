@@ -1117,8 +1117,8 @@ static void kaillera_HostSetMemcardChoice(int choice, bool byHost = true);
 // reason (NULL on the other players' DLLs, which only get the nick).
 static void kaillera_NoLoginNotice(const char* nick, const char* why){
 	if (IsOwnNick(nick)) {
-		kaillera_gdebug_alert("* ATENCAO: voce nao esta logado no WE Camp - o M. Card Online nao pode ser usado nesta sala "
-			"(partida Sem M. Card). Para entrar na sua conta: botao \"M. Card Online\" na tela de servidores.");
+		kaillera_gdebug_alert("* ATENCAO: voce nao esta logado no WE Camp - o M. Card Online nao pode ser usado nesta sala. "
+			"Entre na sua conta clicando no botao \"M. Card Online\" da tela inicial do Kaillera.");
 		return;
 	}
 	char reason[160] = "";
@@ -1211,7 +1211,7 @@ static void kaillera_HostSetMemcardChoice(int choice, bool byHost){
 	bool online = choice == N02_MEMCARD_CHOICE_ONLINE;
 	if (online && !n02_wecamp_logged_in()) {
 		kaillera_gdebug_color(N02_LOGIN_COLOR_BAD, "* Para usar o M. Card Online, entre na sua conta WE Camp "
-			"(botao \"M. Card Online\" na tela de servidores).");
+			"(botao \"M. Card Online\" da tela inicial do Kaillera).");
 		kaillera_UpdateMemcardControls(); // back to the previous choice
 		return;
 	}

@@ -854,8 +854,8 @@ static void p2p_AutoMcOnline(){
 // connection can't use online cards. why = the host's reason, NULL on the peer.
 static void p2p_NoLoginNotice(const char* nick, const char* why){
 	if (_stricmp(nick, USERNAME) == 0) {
-		p2p_alert("* ATENCAO: voce nao esta logado no WE Camp - o M. Card Online nao pode ser usado nesta conexao "
-			"(partida Sem M. Card). Para entrar na sua conta: botao \"M. Card Online\" na tela de servidores do modo Server.");
+		p2p_alert("* ATENCAO: voce nao esta logado no WE Camp - o M. Card Online nao pode ser usado nesta conexao. "
+			"Entre na sua conta clicando no botao \"M. Card Online\" da tela inicial do Kaillera (modo Server).");
 		return;
 	}
 	char reason[160] = "";

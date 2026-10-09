@@ -848,7 +848,7 @@ extern "C" {
 		char err[300];
 
 		if (!n02_wecamp_logged_in()) {
-			McLog("* Memory Card online: voce nao esta conectado a sua conta WE Camp (botao \"M. Card Online\" na tela de servidores).");
+			McLog("* Memory Card online: voce nao esta conectado a sua conta WE Camp (botao \"M. Card Online\" da tela inicial do Kaillera).");
 			return -1;
 		}
 		char nick[32];
