@@ -44,4 +44,4 @@ mesmo canal, sala sem o jogador e cliente desconectado são recusados.
 
 ## Resultado (2026-10-09)
 
-48 verificações, todas OK (31 + 10 do canal de voz + 7 da opção "Participar da chamada de voz": ligada sozinha no primeiro login com Discord vinculado, depois só o jogador muda).
+53 verificações, todas OK (31 + 7 da opção "Participar da chamada de voz" + o canal de voz: o primeiro pedido espera, o segundo cria o canal).

@@ -239,7 +239,10 @@ static int CurrentGameMultiTap() {
    click). Each player's own DLL asks for itself - nobody can pull anybody
    else into a call. Only with "Participar da chamada de voz" checked in the
    M. Card Online dialog (n02_wecamp_voice_enabled()); unchecked, the room
-   is told in the chat that this player stays out of the call. */
+   is told in the chat that this player stays out of the call.
+   The channel only exists once 2 players of the room asked for it: until
+   then wg-camp answers "waiting" and this DLL asks again every few seconds
+   (the second request moves both). */
 static void VoiceLog(const char* fmt, ...) {
 	char msg[512];
 	va_list args;
@@ -253,13 +256,37 @@ static void VoiceLog(const char* fmt, ...) {
 }
 
 static char g_voice_opened[160];      // channel link already opened this session
+static volatile LONG g_voice_game = 0; // bumped at every game start - stops an older wait
+
+#define N02_VOICE_RETRY_MS 10000
+#define N02_VOICE_RETRIES 12       // ~2 minutes waiting for a second player
+
+struct VoiceJoinJob {
+	char players[8 * 32 + 8];
+	LONG game;
+};
 
 static DWORD WINAPI VoiceJoinThread(LPVOID param) {
-	char* players = (char*)param;
+	VoiceJoinJob* job = (VoiceJoinJob*)param;
 	char status[32], url[160], appUrl[160], code[64], err[300];
-	bool ok = n02_wecamp_voice_join(players, status, sizeof(status), url, sizeof(url),
-		appUrl, sizeof(appUrl), code, sizeof(code), err, sizeof(err));
-	free(players);
+	bool ok;
+	for (int attempt = 0; ; attempt++) {
+		ok = n02_wecamp_voice_join(job->players, status, sizeof(status), url, sizeof(url),
+			appUrl, sizeof(appUrl), code, sizeof(code), err, sizeof(err));
+		if (!ok || strcmp(status, "waiting") != 0)
+			break;
+		if (attempt >= N02_VOICE_RETRIES) {
+			VoiceLog("* Discord: ninguem mais da sala esta na chamada de voz.");
+			delete job;
+			return 0;
+		}
+		Sleep(N02_VOICE_RETRY_MS);
+		if (g_voice_game != job->game) {
+			delete job; // another game started - its own request takes over
+			return 0;
+		}
+	}
+	delete job;
 	if (!ok) {
 		if (strcmp(code, "not_linked") == 0) {
 			// Unlinked on the site since the last check - the dialog's box
@@ -307,19 +334,18 @@ static void VoiceJoinStart(int numplayers) {
 	int count = mode == 0 ? p2p_GetGamePlayers(names, 8) : kaillera_GetGamePlayers(names, 8);
 	if (numplayers < count)
 		count = numplayers;
-	char* players = (char*)malloc(8 * 32 + 8);
-	if (!players)
-		return;
-	players[0] = 0;
+	VoiceJoinJob* job = new VoiceJoinJob;
+	job->players[0] = 0;
 	for (int i = 0; i < count; i++) {
-		if (i) strcat(players, ",");
-		strncat(players, names[i], 31);
+		if (i) strcat(job->players, ",");
+		strncat(job->players, names[i], 31);
 	}
-	HANDLE t = CreateThread(NULL, 0, VoiceJoinThread, players, 0, NULL);
+	job->game = InterlockedIncrement(&g_voice_game);
+	HANDLE t = CreateThread(NULL, 0, VoiceJoinThread, job, 0, NULL);
 	if (t)
 		CloseHandle(t);
 	else
-		free(players);
+		delete job;
 }
 
 int WINAPI _gameCallback(char *game, int player, int numplayers){
