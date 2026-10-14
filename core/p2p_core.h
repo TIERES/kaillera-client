@@ -44,4 +44,7 @@ void p2p_send_ssrv_packet(char * cmd, int len, void * sadr);
 
 void p2p_peer_left_callback();
 void p2p_peer_joined_callback();
+// Host: a peer just connected while we're marked ready - true = don't send
+// it yet (the UI marks us ready itself after the peer's account check).
+bool p2p_hold_ready_callback();
 void p2p_peer_info_callback(char* p33rname, char* app);

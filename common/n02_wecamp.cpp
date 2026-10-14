@@ -309,13 +309,24 @@ bool n02_wecamp_get_ticket(const char* room, char* ticket, int ticketCap, char* 
 	return true;
 }
 
+// Our token, or - without a login, where allowed - the DLL's shared key.
+static void AuthOrKeyHeader(char* out, int cap, bool allowKey, const char* more) {
+	if (allowKey && !n02_wecamp_logged_in()) {
+		_snprintf(out, cap, "X-Api-Key: %s\r\n%s", N02_STREAM_DEFAULT_API_KEY, more ? more : "");
+		out[cap - 1] = 0;
+	} else {
+		AuthHeader(out, cap, more);
+	}
+}
+
 bool n02_wecamp_verify_ticket(const char* ticket, const char* room, char* username, int usernameCap, char* err, int errCap) {
 	if (username && usernameCap > 0) username[0] = 0;
 	char t[200], r[160], body[400], resp[512], headers[512];
 	UrlEncode(ticket, t, sizeof(t));
 	UrlEncode(room, r, sizeof(r));
 	int len = _snprintf(body, sizeof(body), "ticket=%s&room=%s", t, r);
-	AuthHeader(headers, sizeof(headers), "Content-Type: application/x-www-form-urlencoded\r\n");
+	// A host without an account checks it too (with the DLL's key).
+	AuthOrKeyHeader(headers, sizeof(headers), true, "Content-Type: application/x-www-form-urlencoded\r\n");
 	int status = HttpsRequest("POST", "/api/mc/verify-ticket", headers, body, len, resp, sizeof(resp), NULL);
 	if (status != 200 || !KvGet(resp, "username", username, usernameCap) || username[0] == 0) {
 		ErrorFrom(status, resp, err, errCap);
@@ -324,20 +335,22 @@ bool n02_wecamp_verify_ticket(const char* ticket, const char* room, char* userna
 	return true;
 }
 
-bool n02_wecamp_checkout(const char* contentId, const char* gameName, const char* players,
-	n02_wecamp_checkout_result* out, char* err, int errCap) {
+bool n02_wecamp_checkout(const char* contentId, const char* gameName, const char* players, bool iso,
+	const char* accounts, n02_wecamp_checkout_result* out, char* err, int errCap) {
 	memset(out, 0, sizeof(*out));
-	if (!n02_wecamp_logged_in()) {
+	if (!iso && !accounts && !n02_wecamp_logged_in()) {
 		_snprintf(err, errCap, "Voce nao esta conectado a sua conta WE Camp.");
 		err[errCap - 1] = 0;
 		return false;
 	}
-	char c[64], g[400], pl[600], body[1200], resp[2048], headers[512];
+	char c[64], g[400], pl[600], ac[600], body[1900], resp[2048], headers[512];
 	UrlEncode(contentId, c, sizeof(c));
 	UrlEncode(gameName ? gameName : "", g, sizeof(g));
 	UrlEncode(players, pl, sizeof(pl));
-	int len = _snprintf(body, sizeof(body), "content_id=%s&game_name=%s&players=%s", c, g, pl);
-	AuthHeader(headers, sizeof(headers), "Content-Type: application/x-www-form-urlencoded\r\n");
+	UrlEncode(accounts ? accounts : "", ac, sizeof(ac));
+	int len = _snprintf(body, sizeof(body), "content_id=%s&game_name=%s&players=%s%s%s%s", c, g, pl,
+		iso ? "&mode=iso" : "", accounts ? "&accounts=" : "", accounts ? ac : "");
+	AuthOrKeyHeader(headers, sizeof(headers), iso || accounts, "Content-Type: application/x-www-form-urlencoded\r\n");
 	int status = HttpsRequest("POST", "/api/mc/checkout", headers, body, len, resp, sizeof(resp), NULL);
 	char value[128];
 	if (status != 200 || !KvGet(resp, "slots", value, sizeof(value))) {
@@ -353,11 +366,28 @@ bool n02_wecamp_checkout(const char* contentId, const char* gameName, const char
 		return false;
 	}
 	out->slots = atoi(value);
+	char mode[16];
+	KvGet(resp, "mode", mode, sizeof(mode));
+	if (iso && (strcmp(mode, "iso") != 0 || out->slots != 1)) {
+		// An older server ignores mode=iso and would hand out the players' own cards.
+		_snprintf(err, errCap, "o WE Camp ainda nao tem o M. Card da ISO.");
+		err[errCap - 1] = 0;
+		return false;
+	}
+	char rule[16];
+	KvGet(resp, "rule", rule, sizeof(rule));
+	if (!iso && accounts && strcmp(rule, "accounts") != 0) {
+		// An older server ignores `accounts` - what it hands out may differ per PC.
+		_snprintf(err, errCap, "o WE Camp ainda nao aceita jogador sem conta no M. Card Online.");
+		err[errCap - 1] = 0;
+		return false;
+	}
 	if (out->slots < 1 || out->slots > 2) {
 		_snprintf(err, errCap, "Resposta invalida do WE Camp.");
 		err[errCap - 1] = 0;
 		return false;
 	}
+	int cards = 0;
 	for (int s = 0; s < out->slots; s++) {
 		char key[32];
 		_snprintf(key, sizeof(key), "slot%d_player", s + 1);
@@ -367,11 +397,19 @@ bool n02_wecamp_checkout(const char* contentId, const char* gameName, const char
 		_snprintf(key, sizeof(key), "slot%d_version", s + 1);
 		KvGet(resp, key, value, sizeof(value));
 		out->version[s] = atoi(value);
+		if (out->sha256[s][0] == 0 && out->player[s][0] == 0 && accounts && !iso)
+			continue; // a player without a confirmed account: empty slot
 		if (strlen(out->sha256[s]) != 64 || out->player[s][0] == 0) {
 			_snprintf(err, errCap, "Resposta invalida do WE Camp.");
 			err[errCap - 1] = 0;
 			return false;
 		}
+		cards++;
+	}
+	if (cards == 0) {
+		_snprintf(err, errCap, "Resposta invalida do WE Camp.");
+		err[errCap - 1] = 0;
+		return false;
 	}
 	return true;
 }
@@ -391,17 +429,18 @@ bool n02_wecamp_get_card(const char* sha256, char* buf, bool useApiKey) {
 }
 
 bool n02_wecamp_commit(const char* contentId, const char* slotPlayer, const char* baseSha256,
-	const char* players, const char* data, char* status, int statusCap, int* version) {
+	const char* players, bool iso, const char* reporter, const char* data, char* status, int statusCap, int* version) {
 	if (status && statusCap > 0) status[0] = 0;
 	if (version) *version = 0;
-	char c[64], sp[128], pl[600], path[1100], headers[512], resp[1024];
+	char c[64], sp[128], pl[600], rp[128], path[1300], headers[512], resp[1024];
 	UrlEncode(contentId, c, sizeof(c));
 	UrlEncode(slotPlayer, sp, sizeof(sp));
 	UrlEncode(players, pl, sizeof(pl));
-	_snprintf(path, sizeof(path), "/api/mc/commit?content_id=%s&slot_player=%s&base_sha256=%s&players=%s",
-		c, sp, baseSha256, pl);
+	UrlEncode(reporter ? reporter : "", rp, sizeof(rp));
+	_snprintf(path, sizeof(path), "/api/mc/commit?content_id=%s&slot_player=%s&base_sha256=%s&players=%s%s&reporter=%s",
+		c, sp, baseSha256, pl, iso ? "&mode=iso" : "", rp);
 	path[sizeof(path) - 1] = 0;
-	AuthHeader(headers, sizeof(headers), "Content-Type: application/octet-stream\r\n");
+	AuthOrKeyHeader(headers, sizeof(headers), iso, "Content-Type: application/octet-stream\r\n");
 	int http = HttpsRequest("POST", path, headers, data, N02_MCD_SIZE, resp, sizeof(resp), NULL);
 	char value[64];
 	if (status) {

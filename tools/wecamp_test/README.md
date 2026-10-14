@@ -45,3 +45,20 @@ mesmo canal, sala sem o jogador e cliente desconectado são recusados.
 ## Resultado (2026-10-09)
 
 53 verificações, todas OK (31 + 7 da opção "Participar da chamada de voz" + o canal de voz: o primeiro pedido espera, o segundo cria o canal).
+
+## Resultado (2026-10-14)
+
+66 verificações, todas OK. As novas são do "M. Card da ISO" (um cartão só do
+jogo, igual para todos):
+- o host logado e um convidado sem login (com a chave do DLL) recebem o mesmo
+  cartão, num slot só;
+- sem login, o M. Card Online continua recusado;
+- o host salva no fim da partida, e o envio igual do convidado não muda nada;
+- uma outra partida ao mesmo tempo vira conflito, e quem não está na partida
+  é recusado;
+- a próxima partida começa da versão salva.
+
+Depois, mais 9 do M. Card Online com uma conta só: o host sem login confere o
+ingresso do convidado com a chave do DLL; o host sem login e o convidado
+logado recebem os mesmos slots (slot 1 vazio, slot 2 = cartão do convidado);
+sala sem nenhuma conta é recusada. Total: 75 verificações, todas OK.

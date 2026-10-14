@@ -183,14 +183,25 @@ static int CurrentGameNoMemcard() {
 	if (get_active_mode_index() == 2 || player_is_watching())
 		return player_get_no_memcard();
 	if (get_active_mode_index() == 1)
-		return (kaillera_NoMemcardEnabled() && !kaillera_McOnlineEnabled()) ? 1 : 0;
-	return (p2p_NoMemcardEnabled() && !p2p_McOnlineEnabled()) ? 1 : 0;
+		return (kaillera_NoMemcardEnabled() && !kaillera_McOnlineEnabled() && !kaillera_McIsoEnabled()) ? 1 : 0;
+	return (p2p_NoMemcardEnabled() && !p2p_McOnlineEnabled() && !p2p_McIsoEnabled()) ? 1 : 0;
 }
 
-// Memory card setup for the game starting now: 2 = "M. Card online" (WE
-// Camp cards), 1 = each player's own, 0 = none. Same sources as
-// CurrentGameNoMemcard(); a replay/stream/retry-connect is "online" when it
-// carries the online marker (krec_reader.h). "Each player's own" is only
+// "M. Card da ISO" in the live room / P2P connection: the game's own WE Camp
+// card (no owner) in slot 1 for everyone, instead of the 1P's and 2P's.
+static bool CurrentGameMcIso() {
+	if (get_active_mode_index() == 1)
+		return kaillera_McIsoEnabled();
+	if (get_active_mode_index() == 0)
+		return p2p_McIsoEnabled();
+	return false;
+}
+
+// Memory card setup for the game starting now: 2 = WE Camp cards ("M. Card
+// online" or "M. Card da ISO" - the fork only needs to know they come from
+// kailleraMemcardPrepare()), 1 = each player's own, 0 = none. Same sources
+// as CurrentGameNoMemcard(); a replay/stream/retry-connect is "online" when
+// it carries the online marker (krec_reader.h). "Each player's own" is only
 // what an older host (or an old replay) may still say.
 #define N02_MEMCARD_NONE   0
 #define N02_MEMCARD_OWN    1
@@ -208,11 +219,11 @@ static int CurrentGameMemcardMode() {
 		return player_get_no_memcard() ? N02_MEMCARD_NONE : N02_MEMCARD_OWN;
 	}
 	if (get_active_mode_index() == 1) {
-		if (kaillera_McOnlineEnabled())
+		if (kaillera_McOnlineEnabled() || kaillera_McIsoEnabled())
 			return N02_MEMCARD_ONLINE;
 		return kaillera_NoMemcardEnabled() ? N02_MEMCARD_NONE : N02_MEMCARD_OWN;
 	}
-	if (p2p_McOnlineEnabled())
+	if (p2p_McOnlineEnabled() || p2p_McIsoEnabled())
 		return N02_MEMCARD_ONLINE;
 	return p2p_NoMemcardEnabled() ? N02_MEMCARD_NONE : N02_MEMCARD_OWN;
 }
@@ -884,6 +895,11 @@ extern "C" {
 	       McCommitThread); the first send becomes the cards' new version.
 	   "Live room" = a Server-mode room or a P2P connection; the notices go to
 	   that mode's chat (McLog).
+	   "M. Card da ISO" goes the same way with a single card - the game's own,
+	   shared by everyone who plays it in that mode (e.g. a championship's
+	   Master League, one match at a time) - in slot 1, slot 2 empty. Only the
+	   host needs a WE Camp login; the others fetch and send it with the DLL's
+	   shared key. A replay of it carries the same marker ("sha -").
 	   ------------------------------------------------------------------ */
 
 	static void McLog(const char* fmt, ...) {
@@ -900,6 +916,8 @@ extern "C" {
 
 	static struct {
 		bool live;              // a live room's cards - send them back at the end
+		bool iso;               // "M. Card da ISO": the game's card, slot 1 only
+		bool firstAccount;      // M. Card Online: we're the room's first confirmed account - we send first
 		char dir[MAX_PATH];
 		char contentId[32];
 		char players[8 * 32 + 8];
@@ -937,7 +955,7 @@ extern "C" {
 	// The marker every replay/stream of this match carries (krec_reader.h).
 	static void McWriteMarker(const char* sha1, const char* sha2) {
 		char marker[200];
-		_snprintf(marker, sizeof(marker), "%s%s %s", N02_MCONLINE_MARKER_PREFIX, sha1, sha2 && sha2[0] ? sha2 : "-");
+		_snprintf(marker, sizeof(marker), "%s%s %s", N02_MCONLINE_MARKER_PREFIX, sha1 && sha1[0] ? sha1 : "-", sha2 && sha2[0] ? sha2 : "-");
 		marker[sizeof(marker) - 1] = 0;
 #ifdef RECORDER
 		if (out != INVALID_HANDLE_VALUE) {
@@ -966,14 +984,24 @@ extern "C" {
 	static int McPrepareLive(const char* contentId, const char* gameFile, const char* dir) {
 		static char buf[N02_MCD_SIZE + 1];
 		char err[300];
-
-		if (!n02_wecamp_logged_in()) {
-			McLog("* Memory Card online: voce nao esta conectado a sua conta WE Camp (botao \"M. Card Online\" da tela inicial do Kaillera).");
-			return -1;
+		// "M. Card da ISO": nobody but the host needs a login (and the host's
+		// is checked when it picks the option). "M. Card Online": the cards of
+		// the room's confirmed accounts - the others' slots stay empty. Either
+		// way a PC without a login asks with the DLL's key, so every PC loads
+		// the same slots.
+		bool iso = CurrentGameMcIso();
+		bool loggedIn = n02_wecamp_logged_in();
+		char accounts[16 * 32 + 16] = "";
+		bool accountsKnown = false; // false: an older host - both players need an account, as before
+		if (!iso) {
+			int n = get_active_mode_index() == 0 ? p2p_GetMcAccounts(accounts, sizeof(accounts))
+				: kaillera_GetMcAccounts(accounts, sizeof(accounts));
+			accountsKnown = n >= 0;
 		}
+
 		char nick[32];
 		active_mod.GetOwnerName(nick, sizeof(nick));
-		if (_stricmp(nick, n02_wecamp_username()) != 0) {
+		if (loggedIn && _stricmp(nick, n02_wecamp_username()) != 0) {
 			McLog("* Memory Card online: seu nick (%s) e diferente da sua conta WE Camp (%s).", nick, n02_wecamp_username());
 			return -1;
 		}
@@ -997,18 +1025,37 @@ extern "C" {
 		}
 
 		n02_wecamp_checkout_result co;
-		if (!n02_wecamp_checkout(contentId, gameFile, g_mc.players, &co, err, sizeof(err))) {
-			McLog("* Memory Card online indisponivel: %s", err);
+		if (!n02_wecamp_checkout(contentId, gameFile, g_mc.players, iso, accountsKnown ? accounts : NULL, &co, err, sizeof(err))) {
+			McLog(iso ? "* M. Card da ISO indisponivel: %s" : "* Memory Card online indisponivel: %s", err);
 			return -1;
 		}
 		for (int s = 0; s < co.slots; s++) {
-			if (!n02_wecamp_get_card(co.sha256[s], buf, false) || !McWriteCard(dir, s, buf)) {
-				McLog("* Memory Card online: falha ao baixar o cartao de %s.", co.player[s]);
+			if (co.sha256[s][0] == 0)
+				continue; // no confirmed account: the core makes a blank card, nothing is saved
+			if (!n02_wecamp_get_card(co.sha256[s], buf, !loggedIn) || !McWriteCard(dir, s, buf)) {
+				if (iso)
+					McLog("* M. Card da ISO: falha ao baixar o cartao do jogo.");
+				else
+					McLog("* Memory Card online: falha ao baixar o cartao de %s.", co.player[s]);
 				return -1;
 			}
 		}
 
-		g_mc.live = true;
+		// Sending online cards back takes a login (M. Card da ISO goes with
+		// the key too). The first confirmed account - the host's, when it has
+		// one - sends right away; see McCommitThread.
+		g_mc.live = loggedIn || iso;
+		g_mc.iso = iso;
+		{
+			char first[32] = "";
+			const char* comma = strchr(accounts, ',');
+			size_t n = comma ? (size_t)(comma - accounts) : strlen(accounts);
+			if (n < sizeof(first)) {
+				memcpy(first, accounts, n);
+				first[n] = 0;
+			}
+			g_mc.firstAccount = !iso && _stricmp(first, nick) == 0;
+		}
 		strncpy(g_mc.contentId, contentId, sizeof(g_mc.contentId) - 1);
 		g_mc.slots = co.slots;
 		for (int s = 0; s < co.slots; s++) {
@@ -1016,11 +1063,25 @@ extern "C" {
 			strncpy(g_mc.base[s], co.sha256[s], 64);
 		}
 		McWriteMarker(co.sha256[0], co.slots > 1 ? co.sha256[1] : "");
-		if (co.slots > 1)
-			McLog("* Memory Card online: slot 1 = %s (versao %d), slot 2 = %s (versao %d).",
-				co.player[0], co.version[0], co.player[1], co.version[1]);
-		else
-			McLog("* Memory Card online: slot 1 = %s (versao %d).", co.player[0], co.version[0]);
+		if (iso) {
+			McLog("* M. Card da ISO: slot 1 = cartao do jogo (versao %d) - o host salva no WE Camp no fim da partida.",
+				co.version[0]);
+		} else {
+			char line[300] = "* Memory Card online:";
+			for (int s = 0; s < co.slots; s++) {
+				size_t len = strlen(line);
+				if (co.sha256[s][0])
+					_snprintf(line + len, sizeof(line) - len, "%s slot %d = %s (versao %d)", s ? "," : "", s + 1,
+						co.player[s], co.version[s]);
+				else
+					_snprintf(line + len, sizeof(line) - len, "%s slot %d = sem memory card (%s sem conta WE Camp confirmada)",
+						s ? "," : "", s + 1, s < count ? names[s] : "?");
+				line[sizeof(line) - 1] = 0;
+			}
+			McLog("%s.", line);
+			if (!loggedIn)
+				McLog("* Voce nao esta logado no WE Camp: quem tem conta salva os cartoes no fim da partida.");
+		}
 		return 1;
 	}
 
@@ -1056,6 +1117,8 @@ extern "C" {
 		char owner[2][32];
 		char base[2][65];
 		bool host;
+		bool iso;
+		char nick[32];
 		char data[N02_MCD_SIZE];
 	};
 
@@ -1071,25 +1134,37 @@ extern "C" {
 		if (!job->host)
 			Sleep(N02_MC_GUEST_COMMIT_DELAY_MS);
 		for (int s = 0; s < job->slots; s++) {
+			if (job->base[s][0] == 0)
+				continue; // empty slot (no confirmed account) - nothing to save
+			char card[64];
+			if (job->iso)
+				strcpy(card, "M. Card da ISO");
+			else
+				_snprintf(card, sizeof(card), "Memory Card de %s", job->owner[s]);
+			card[sizeof(card) - 1] = 0;
 			if (!McReadCard(job->dir, s, data)) {
-				McLog("* Memory Card online: nao encontrei o cartao de %s para salvar.", job->owner[s]);
+				McLog("* %s: nao encontrei o cartao para salvar.", card);
 				continue;
 			}
 			char status[64];
 			int version = 0;
-			n02_wecamp_commit(job->contentId, job->owner[s], job->base[s], job->players, data, status, sizeof(status), &version);
+			n02_wecamp_commit(job->contentId, job->owner[s], job->base[s], job->players, job->iso, job->nick,
+				data, status, sizeof(status), &version);
 			if (strcmp(status, "committed") == 0)
-				McLog("* Memory Card de %s salvo no WE Camp (versao %d).", job->owner[s], version);
+				McLog("* %s salvo no WE Camp (versao %d).", card, version);
 			else if (strcmp(status, "already") == 0)
 				; // the host (or another player) already saved this exact card
 			else if (strcmp(status, "unchanged") == 0) {
 				if (job->host)
-					McLog("* Memory Card de %s sem alteracoes.", job->owner[s]);
+					McLog("* %s sem alteracoes.", card);
 			} else if (strcmp(status, "conflict") == 0)
-				McLog("* Memory Card de %s NAO foi salvo: ele mudou no WE Camp durante a partida "
-					"(envio pelo site ou cartao diferente do salvo pelo host).", job->owner[s]);
+				McLog(job->iso
+					? "* %s NAO foi salvo: ele mudou no WE Camp durante a partida "
+					  "(outra partida com o mesmo cartao, envio pelo site ou cartao diferente do salvo pelo host)."
+					: "* %s NAO foi salvo: ele mudou no WE Camp durante a partida "
+					  "(envio pelo site ou cartao diferente do salvo pelo host).", card);
 			else
-				McLog("* Memory Card de %s NAO foi salvo (%s).", job->owner[s], status);
+				McLog("* %s NAO foi salvo (%s).", card, status);
 		}
 		delete job;
 		return 0;
@@ -1108,7 +1183,11 @@ extern "C" {
 		job->slots = g_mc.slots;
 		memcpy(job->owner, g_mc.owner, sizeof(job->owner));
 		memcpy(job->base, g_mc.base, sizeof(job->base));
-		job->host = active_mod.IsHost();
+		// Who sends right away: the host in "M. Card da ISO"; in M. Card
+		// Online the room's first confirmed account (the host's, when it has one).
+		job->host = g_mc.iso ? active_mod.IsHost() : g_mc.firstAccount;
+		job->iso = g_mc.iso;
+		active_mod.GetOwnerName(job->nick, sizeof(job->nick));
 		memset(&g_mc, 0, sizeof(g_mc));
 		HANDLE t = CreateThread(NULL, 0, McCommitThread, job, 0, NULL);
 		if (t)

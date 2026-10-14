@@ -96,7 +96,9 @@ inline bool n02_mconline_from_marker(const char* msg, char sha[2][65]) {
 		sha[s][n] = 0;
 		p += n;
 	}
-	return strlen(sha[0]) == 64;
+	// Either slot may be empty: in M. Card Online a player without a
+	// confirmed account plays without a card (slot 1 too, when that's the 1P).
+	return strlen(sha[0]) == 64 || strlen(sha[1]) == 64;
 }
 
 // True for any of n02's own in-replay markers - those aren't chat to show.
