@@ -735,37 +735,45 @@ void p2p_ping_callback(int PING){
 // Anti-desync fingerprint line from RetroArch - see kaillera_ui.cpp.
 #define N02_SYNC_CHAT_PREFIX "[SYNC] "
 // Memory card - the same choices and rules as the Server-mode room
-// (kaillera_ui.cpp): "Sem M. Card" or "M. Card Online" (each player's own
-// card isn't offered anymore), only the host sets it and announces it to the
-// peer over chat (on every change and when the peer connects), cached in
-// plain variables for RetroArch's thread (kailleraGetNoMemoryCard() /
-// kailleraGetMemcardMode()). "M. Card Online" needs both players logged in
-// to WE Camp, so a logged-in host checks the peer's account when it
-// connects - the room's "[WE Camp]" chat lines and single-use tickets, bound
-// to a room id the host makes up for this connection (P2P has no game id)
-// and sends along: "[WE Camp] conta? <room>". Confirmed: the connection
-// switches to "M. Card Online" by itself (PCSX games, unless the host picked
-// "Sem M. Card" for this peer). Not: it stays "Sem M. Card", locked, with a
-// highlighted notice on both ends. Until then it's always "Sem M. Card" - a
-// P2P game starts as soon as both are ready, there's no Start button to hold
-// back while the check runs.
+// (kaillera_ui.cpp): "Sem M. Card", "M. Card Online" or "M. Card da ISO"
+// (each player's own card isn't offered anymore), only the host sets it and
+// announces it to the peer over chat (on every change and when the peer
+// connects), cached in plain variables for RetroArch's thread
+// (kailleraGetNoMemoryCard() / kailleraGetMemcardMode()). "M. Card Online"
+// gives the card to whoever is logged in to WE Camp - one of the two is
+// enough, the other plays with an empty slot - so the host (logged in or
+// not) checks the peer's account when it connects: the room's "[WE Camp]"
+// chat lines and single-use tickets, bound to a room id the host makes up for
+// this connection (P2P has no game id) and sends along: "[WE Camp] conta?
+// <room>". The host then announces the confirmed accounts ("contas: ...");
+// with one, the connection switches to "M. Card Online" by itself (PCSX
+// games, unless the host picked another choice for this peer). A P2P game
+// starts as soon as both are ready, so the host's "Ready" waits for the
+// check to end ("Sincronizando M. Cards Online...", p2p_RequestReady()).
+// "M. Card da ISO" (the game's own WE Camp cards for everyone, slots 1 and 2
+// - see kaillera_ui.cpp) only needs the host logged in, so the host can pick
+// it whatever the peer's check says.
 #define N02_NOMEMCARD_CHAT_PREFIX "[Sem M. Card]"
 #define N02_MCONLINE_CHAT_PREFIX  "[MC Online]"
+#define N02_MCISO_CHAT_PREFIX     "[MC ISO]"
 #define N02_TICKET_CHAT_PREFIX    "[WE Camp] "
 #define N02_TICKET_REQUEST        "conta? "    // host: "conta? <room>"
 #define N02_TICKET_NOACCOUNT      "sem conta"  // peer: not logged in to WE Camp
 #define N02_TICKET_CONFIRMED      "ok "        // host: "ok <nick>" - the peer confirmed
 #define N02_TICKET_NOLOGIN        "sem login " // host: "sem login <nick>" - it didn't
+#define N02_TICKET_ACCOUNTS       "contas: "   // host: "contas: <nick>,<nick>" ("-" = none)
 #define N02_LOGIN_CHECK_TIMEOUT_MS 25000
 #define N02_MEMCARD_CHOICE_NONE   0
 #define N02_MEMCARD_CHOICE_ONLINE 1
+#define N02_MEMCARD_CHOICE_ISO    2
 #define WM_N02_P2P_SENDCHAT    (WM_APP + 90)
 #define WM_N02_P2P_LOGINRESULT (WM_APP + 91)
 #define P2P_COLOR_OK RGB(0, 153, 0)
 extern char peername[32];
 static volatile bool g_p2p_no_memcard = true;
 static volatile bool g_p2p_mconline = false;
-static bool g_p2p_memcard_host_none = false; // the host picked "Sem M. Card" for this peer
+static volatile bool g_p2p_mciso = false;
+static bool g_p2p_memcard_host_none = false; // the host picked "Sem M. Card" / "M. Card da ISO" for this peer
 // Host: the peer's account check - -1 = none (no peer, or the host isn't
 // logged in), 0 = waiting for an answer, 1 = checking it, 2 = confirmed,
 // 3 = not confirmed. Touched by the core's thread (chat, joins) and the
@@ -775,12 +783,18 @@ static DWORD g_p2p_peer_check_since = 0;
 static char g_p2p_check_room[32] = "";
 // Peer: the host's room id we already answered.
 static char g_p2p_answered_room[32] = "";
+// Host: "Ready" was checked while the peer's account check was running - it
+// goes out once the check is over (p2p_ReadyAfterCheck()).
+static bool g_p2p_ready_wanted = false;
 
 bool p2p_NoMemcardEnabled(){
 	return g_p2p_no_memcard;
 }
 bool p2p_McOnlineEnabled(){
 	return g_p2p_mconline;
+}
+bool p2p_McIsoEnabled(){
+	return g_p2p_mciso;
 }
 // 1P (the host), 2P - like the recording's player names.
 int p2p_GetGamePlayers(char out[][32], int max){
@@ -793,53 +807,108 @@ int p2p_GetGamePlayers(char out[][32], int max){
 	return 2;
 }
 
-// The list ("Sem M. Card" / "M. Card Online"); the old checkbox only shows
-// up - unchecked, disabled - when an older host announced each player's own
-// card. Only the host's list is enabled, and only with the peer confirmed.
+// The connection's confirmed WE Camp accounts, comma separated: the host's
+// own (when logged in) and the peer's once confirmed. The host announces it
+// (N02_TICKET_ACCOUNTS) on every change; the peer keeps the last one. At
+// game start both ask WE Camp for exactly these players' cards - whoever
+// isn't in it plays "M. Card Online" with an empty slot.
+static char g_p2p_accounts[80] = ""; // peer: the host's last list
+static bool g_p2p_accounts_known = false; // an older host never announces it
+static void p2p_HostAccounts(char* out, int cap){
+	out[0] = 0;
+	if (n02_wecamp_logged_in())
+		_snprintf(out, cap, "%s", USERNAME);
+	if (g_p2p_peer_check == 2)
+		_snprintf(out + strlen(out), cap - strlen(out), "%s%s", out[0] ? "," : "", peername);
+	out[cap - 1] = 0;
+}
+int p2p_GetMcAccounts(char* out, int cap){
+	if (HOST)
+		p2p_HostAccounts(out, cap);
+	else if (!g_p2p_accounts_known) {
+		out[0] = 0;
+		return -1;
+	} else {
+		strncpy(out, g_p2p_accounts, cap - 1);
+		out[cap - 1] = 0;
+	}
+	return (int)strlen(out);
+}
+static bool p2p_HasAccount(){
+	char list[80];
+	return p2p_GetMcAccounts(list, sizeof(list)) > 0;
+}
+static void p2p_BroadcastAccounts(){
+	if (!HOST)
+		return;
+	char list[80], line[128];
+	p2p_HostAccounts(list, sizeof(list));
+	_snprintf(line, sizeof(line), "%s%s%s", N02_TICKET_CHAT_PREFIX, N02_TICKET_ACCOUNTS, list[0] ? list : "-");
+	line[sizeof(line) - 1] = 0;
+	p2p_send_chat(line);
+}
+
+// The list ("Sem M. Card" / "M. Card Online" / "M. Card da ISO"); the old
+// checkbox only shows up - unchecked, disabled - when an older host announced
+// each player's own card. Only the host's list is enabled, with a peer
+// connected and a WE Camp account on either end (p2p_HasAccount()); "M. Card
+// da ISO" also needs the host's own login.
 static void p2p_UpdateMemcardControls(){
 	if (p2p_ui_connection_dlg == NULL)
 		return;
 	HWND chk = GetDlgItem(p2p_ui_connection_dlg, CHK_NOMEMCARD);
 	HWND cmb = GetDlgItem(p2p_ui_connection_dlg, CMB_MEMCARD);
-	bool ownCards = !g_p2p_mconline && !g_p2p_no_memcard;
+	bool ownCards = !g_p2p_mconline && !g_p2p_mciso && !g_p2p_no_memcard;
 	SendMessage(chk, BM_SETCHECK, BST_UNCHECKED, 0);
-	SendMessage(cmb, CB_SETCURSEL, g_p2p_mconline ? N02_MEMCARD_CHOICE_ONLINE : N02_MEMCARD_CHOICE_NONE, 0);
+	SendMessage(cmb, CB_SETCURSEL, g_p2p_mciso ? N02_MEMCARD_CHOICE_ISO
+		: g_p2p_mconline ? N02_MEMCARD_CHOICE_ONLINE : N02_MEMCARD_CHOICE_NONE, 0);
 	ShowWindow(chk, ownCards ? SW_SHOW : SW_HIDE);
 	ShowWindow(cmb, ownCards ? SW_HIDE : SW_SHOW);
 	EnableWindow(chk, FALSE);
-	EnableWindow(cmb, HOST && n02_wecamp_logged_in() && g_p2p_peer_check == 2);
+	EnableWindow(cmb, HOST && g_p2p_peer_check >= 0 && p2p_HasAccount());
 }
 static void p2p_BroadcastMemcardState(bool none);
 static void p2p_BroadcastMcOnlineState(bool on);
+static void p2p_BroadcastMcIsoState(bool on);
 
 // Host: the memory card choice changed - picked in the list (byHost) or
 // switched by the account check (which tells the peer itself).
-// "[MC Online]" goes out before "[Sem M. Card]" so the peer's notices read
-// right. Not saved: every connection starts on "Sem M. Card".
+// "[MC ISO]" and "[MC Online]" go out before "[Sem M. Card]" so the peer's
+// notices read right. Not saved: every connection starts on "Sem M. Card".
 static void p2p_HostSetMemcardChoice(int choice, bool byHost){
 	bool online = choice == N02_MEMCARD_CHOICE_ONLINE;
-	if (online && !(n02_wecamp_logged_in() && g_p2p_peer_check == 2)) {
-		p2p_alert("* O M. Card Online precisa do host e do convidado logados no WE Camp, com a conta confirmada.");
+	bool iso = choice == N02_MEMCARD_CHOICE_ISO;
+	if (iso && !n02_wecamp_logged_in()) {
+		p2p_alert("* Para usar o M. Card da ISO, entre na sua conta WE Camp (botao \"M. Card Online\" da tela inicial do Kaillera, modo Server).");
+		p2p_UpdateMemcardControls();
+		return;
+	}
+	if (online && !p2p_HasAccount()) {
+		p2p_alert("* O M. Card Online precisa de pelo menos um dos dois logado no WE Camp, com a conta confirmada.");
 		p2p_UpdateMemcardControls();
 		return;
 	}
 	if (byHost)
 		g_p2p_memcard_host_none = !online;
+	g_p2p_mciso = iso;
 	g_p2p_mconline = online;
-	g_p2p_no_memcard = !online;
+	g_p2p_no_memcard = !online && !iso;
 	p2p_UpdateMemcardControls();
+	p2p_BroadcastMcIsoState(iso);
 	p2p_BroadcastMcOnlineState(online);
-	p2p_BroadcastMemcardState(!online);
+	p2p_BroadcastMemcardState(!online && !iso);
 	if (byHost)
-		outpf(online ? "* M. Card Online: o cartao do 1P (host) vai no slot 1 e o do 2P no slot 2, vindos do WE Camp."
+		outpf(iso ? "* M. Card da ISO: os dois jogam com os cartoes do jogo nos slots 1 e 2, vindos do WE Camp; no fim da partida voce (host) salva de volta o cartao que mudou."
+			: online ? "* M. Card Online: o cartao do 1P (host) vai no slot 1 e o do 2P no slot 2, vindos do WE Camp (quem nao estiver logado joga sem memory card)."
 			: "* Sem M. Card: a partida vai iniciar sem memory card.");
 }
 
-// Host: the peer confirmed - go online by itself (PS1 games only: the fork
-// applies online cards to PCSX ReARMed alone).
+// Host: the peer's check is over and one of the two has an account - go
+// online by itself (PS1 games only: the fork applies online cards to PCSX
+// ReARMed alone).
 static void p2p_AutoMcOnline(){
-	if (!HOST || g_p2p_mconline || g_p2p_memcard_host_none || !n02_wecamp_logged_in()
-		|| g_p2p_peer_check != 2 || KSSDFA.state != 0)
+	if (!HOST || g_p2p_mconline || g_p2p_mciso || g_p2p_memcard_host_none || !p2p_HasAccount()
+		|| (g_p2p_peer_check != 2 && g_p2p_peer_check != 3) || KSSDFA.state != 0)
 		return;
 	char game[sizeof(GAME)];
 	strncpy(game, GAME, sizeof(game) - 1);
@@ -847,23 +916,34 @@ static void p2p_AutoMcOnline(){
 	_strlwr(game);
 	if (strstr(game, "pcsx") == NULL)
 		return;
-	p2p_debug_color(P2P_COLOR_OK, "* Os dois jogadores estao logados no WE Camp: M. Card Online selecionado automaticamente.");
+	p2p_debug_color(P2P_COLOR_OK, g_p2p_peer_check == 2 && n02_wecamp_logged_in()
+		? "* Os dois jogadores estao logados no WE Camp: M. Card Online selecionado automaticamente."
+		: "* Um dos jogadores esta logado no WE Camp: M. Card Online selecionado automaticamente (o outro joga sem memory card).");
 	p2p_HostSetMemcardChoice(N02_MEMCARD_CHOICE_ONLINE, false);
 }
 
-// Both ends (red, bold): this player isn't logged in to WE Camp, so the
-// connection can't use online cards. why = the host's reason, NULL on the peer.
+// Both ends: this player isn't logged in to WE Camp, so in "M. Card Online"
+// their slot goes without a card. why = the host's reason, NULL on the peer.
 static void p2p_NoLoginNotice(const char* nick, const char* why){
+	if (g_p2p_mciso) {
+		// Nothing lost: "M. Card da ISO" only needs the host's login.
+		if (_stricmp(nick, USERNAME) == 0)
+			outpf("* Voce nao esta logado no WE Camp - no M. Card da ISO tudo bem, so o host precisa estar.");
+		else
+			outpf("* %s entrou sem estar logado no WE Camp - no M. Card da ISO tudo bem, so o host precisa estar.", nick);
+		return;
+	}
 	if (_stricmp(nick, USERNAME) == 0) {
-		p2p_alert("* ATENCAO: voce nao esta logado no WE Camp - o M. Card Online nao pode ser usado nesta conexao. "
-			"Entre na sua conta clicando no botao \"M. Card Online\" da tela inicial do Kaillera (modo Server).");
+		p2p_debug_color(RGB(192, 0, 0), "* Voce nao esta logado no WE Camp: no M. Card Online o seu slot vai sem memory card "
+			"(o cartao do outro, se tiver conta, funciona normalmente). Para usar o seu, entre na sua conta pelo botao "
+			"\"M. Card Online\" da tela inicial do Kaillera (modo Server).");
 		return;
 	}
 	char reason[160] = "";
 	if (why && strcmp(why, "nao esta logado") != 0)
 		_snprintf(reason, sizeof(reason) - 1, " (%s)", why);
-	p2p_alert("* ATENCAO: %s entrou sem estar logado no WE Camp%s - o M. Card Online nao pode ser usado nesta conexao "
-		"(partida Sem M. Card).", nick, reason);
+	p2p_debug_color(RGB(192, 0, 0), "* %s entrou sem estar logado no WE Camp%s: no M. Card Online o slot dele vai sem memory card.",
+		nick, reason);
 }
 
 // Chat sent from a worker thread goes through the dialog's.
@@ -903,7 +983,8 @@ static void p2p_AnswerAccountCheck(const char* room){
 
 // Host: the peer just connected - ask for its account.
 static void p2p_StartAccountCheck(){
-	if (!HOST || !n02_wecamp_logged_in()) {
+	// Logged in or not: a host without an account checks with the DLL's key.
+	if (!HOST) {
 		InterlockedExchange(&g_p2p_peer_check, -1);
 		return;
 	}
@@ -941,12 +1022,20 @@ static DWORD WINAPI P2PVerifyTicketThread(LPVOID param){
 		delete r;
 	return 0;
 }
+static void p2p_SyncingNotice();
 static void p2p_HandleAccountAnswer(const char* nick, const char* answer){
 	bool noAccount = strcmp(answer, N02_TICKET_NOACCOUNT) == 0;
 	// A ticket that took longer than the timeout (3) still counts.
 	bool start = InterlockedCompareExchange(&g_p2p_peer_check, 1, 0) == 0;
-	if (!start && !noAccount)
+	if (!start && !noAccount && KSSDFA.state == 0) {
 		start = InterlockedCompareExchange(&g_p2p_peer_check, 1, 3) == 3;
+		if (start && p2p_ui_connection_dlg != NULL
+			&& SendMessage(GetDlgItem(p2p_ui_connection_dlg, IDC_READY), BM_GETCHECK, 0, 0) == BST_CHECKED) {
+			p2p_set_ready(false); // back to waiting until it's checked
+			g_p2p_ready_wanted = true;
+			p2p_SyncingNotice();
+		}
+	}
 	if (!start)
 		return;
 	if (noAccount) {
@@ -968,15 +1057,60 @@ static void p2p_HandleAccountAnswer(const char* nick, const char* answer){
 }
 
 // Host (dialog thread): the peer didn't prove a WE Camp account.
+// Host: a P2P game starts the moment both are ready, so the host's "Ready"
+// waits for the peer's account check (states 0/1). When it's over, the
+// accounts and the card choice are already on the peer's side (chat goes
+// before the ready, in order), so both PCs load the same M. Cards.
+static bool p2p_PeerCheckPending(){
+	return HOST && (g_p2p_peer_check == 0 || g_p2p_peer_check == 1);
+}
+static void p2p_SyncingNotice(){
+	outpf("* Sincronizando M. Cards Online... (conferindo a conta WE Camp de %s - a partida comeca logo em seguida)", peername);
+	p2p_send_chat("Sincronizando M. Cards Online...");
+}
+// p2p_core: the peer connected while we're marked ready (the check starts
+// right after, in p2p_peer_joined_callback()).
+bool p2p_hold_ready_callback(){
+	if (!HOST)
+		return false;
+	g_p2p_ready_wanted = true;
+	p2p_SyncingNotice();
+	return true;
+}
+// The "Ready" box.
+static void p2p_RequestReady(bool on){
+	if (on && p2p_PeerCheckPending()) {
+		g_p2p_ready_wanted = true;
+		p2p_SyncingNotice();
+		return;
+	}
+	g_p2p_ready_wanted = false;
+	p2p_set_ready(on);
+}
+// The peer's check is over: send the "Ready" that was held back.
+static void p2p_ReadyAfterCheck(){
+	if (!g_p2p_ready_wanted || p2p_PeerCheckPending())
+		return;
+	g_p2p_ready_wanted = false;
+	if (p2p_ui_connection_dlg != NULL
+		&& SendMessage(GetDlgItem(p2p_ui_connection_dlg, IDC_READY), BM_GETCHECK, 0, 0) == BST_CHECKED) {
+		outpf("* M. Cards Online sincronizados.");
+		p2p_set_ready(true);
+	}
+}
+
 static void p2p_AccountCheckFailed(const char* nick, const char* why){
 	InterlockedExchange(&g_p2p_peer_check, 3);
 	char line[64];
 	wsprintf(line, "%s%s%s", N02_TICKET_CHAT_PREFIX, N02_TICKET_NOLOGIN, nick);
 	p2p_send_chat(line);
 	p2p_NoLoginNotice(nick, why);
-	if (g_p2p_mconline)
+	p2p_BroadcastAccounts();
+	if (g_p2p_mconline && !p2p_HasAccount())
 		p2p_HostSetMemcardChoice(N02_MEMCARD_CHOICE_NONE, false);
 	p2p_UpdateMemcardControls();
+	p2p_AutoMcOnline();
+	p2p_ReadyAfterCheck();
 }
 static void p2p_AccountCheckResult(P2PLoginResult* r){
 	if (!HOST || g_p2p_peer_check != 1 || _stricmp(r->nick, peername) != 0)
@@ -987,8 +1121,10 @@ static void p2p_AccountCheckResult(P2PLoginResult* r){
 		char line[64];
 		wsprintf(line, "%s%s%s", N02_TICKET_CHAT_PREFIX, N02_TICKET_CONFIRMED, r->nick);
 		p2p_send_chat(line);
+		p2p_BroadcastAccounts();
 		p2p_UpdateMemcardControls();
 		p2p_AutoMcOnline();
+		p2p_ReadyAfterCheck();
 	} else if (r->ok) {
 		char why[96];
 		wsprintf(why, "o login e da conta %s", r->account);
@@ -1008,8 +1144,11 @@ static void p2p_ResetMemcardForPeer(){
 	InterlockedExchange(&g_p2p_peer_check, -1);
 	g_p2p_memcard_host_none = false;
 	g_p2p_mconline = false;
+	g_p2p_mciso = false;
 	g_p2p_no_memcard = true;
 	g_p2p_answered_room[0] = 0;
+	g_p2p_accounts[0] = 0;
+	g_p2p_accounts_known = false;
 	p2p_UpdateMemcardControls();
 }
 void p2p_chat_callback(char * nick, char * msg){
@@ -1035,8 +1174,22 @@ void p2p_chat_callback(char * nick, char * msg){
 			p2p_UpdateMemcardControls();
 			if (on)
 				outpf("* %s selecionou M. Card Online: o cartao do 1P (host) vai no slot 1 e o do 2P no slot 2, vindos do WE Camp.", nick);
-			else
+			else if (!p2p_McIsoEnabled()) // switching to "M. Card da ISO" already said so
 				outpf("* %s desativou o M. Card Online.", nick);
+		}
+		return;
+	}
+	if (msg != NULL && strncmp(msg, N02_MCISO_CHAT_PREFIX, strlen(N02_MCISO_CHAT_PREFIX)) == 0) {
+		// Same "desativado" contains "ativado" gotcha as above.
+		bool on = strstr(msg, "desativado") == NULL;
+		if (!HOST && on != p2p_McIsoEnabled()) {
+			g_p2p_mciso = on;
+			p2p_UpdateMemcardControls();
+			if (on)
+				outpf("* %s selecionou M. Card da ISO: os dois usam o cartao do jogo no WE Camp (slot 1), "
+					"salvo pelo host no fim da partida - nao precisa estar logado.", nick);
+			else
+				outpf("* %s desativou o M. Card da ISO.", nick);
 		}
 		return;
 	}
@@ -1044,14 +1197,14 @@ void p2p_chat_callback(char * nick, char * msg){
 		// "desativado" contains "ativado" - check the negative first. The
 		// host re-announces it when the peer connects - only say something
 		// when it actually changes here (the host announces its own clicks).
-		// "[MC Online]" comes first, so its notice already covers online cards.
+		// "[MC ISO]" / "[MC Online]" come first, so their notice already covers WE Camp cards.
 		bool none = strstr(msg, "desativado") == NULL;
 		if (!HOST && none != p2p_NoMemcardEnabled()) {
 			g_p2p_no_memcard = none;
 			p2p_UpdateMemcardControls();
 			if (none)
 				outpf("* %s selecionou Sem M. Card (partida sem memory card).", nick);
-			else if (!p2p_McOnlineEnabled())
+			else if (!p2p_McOnlineEnabled() && !p2p_McIsoEnabled())
 				outpf("* %s selecionou Com M. Card - cada jogador usa o proprio memory card.", nick);
 		}
 		return;
@@ -1063,6 +1216,11 @@ void p2p_chat_callback(char * nick, char * msg){
 			return; // our own line, echoed back
 		if (HOST) {
 			p2p_HandleAccountAnswer(nick, arg);
+		} else if (strncmp(arg, N02_TICKET_ACCOUNTS, strlen(N02_TICKET_ACCOUNTS)) == 0) {
+			const char* list = arg + strlen(N02_TICKET_ACCOUNTS);
+			strncpy(g_p2p_accounts, strcmp(list, "-") == 0 ? "" : list, sizeof(g_p2p_accounts) - 1);
+			g_p2p_accounts[sizeof(g_p2p_accounts) - 1] = 0;
+			g_p2p_accounts_known = true;
 		} else if (strncmp(arg, N02_TICKET_REQUEST, strlen(N02_TICKET_REQUEST)) == 0) {
 			p2p_AnswerAccountCheck(arg + strlen(N02_TICKET_REQUEST));
 		} else if (strncmp(arg, N02_TICKET_CONFIRMED, strlen(N02_TICKET_CONFIRMED)) == 0) {
@@ -1187,6 +1345,9 @@ static void p2p_BroadcastMemcardState(bool none){
 }
 static void p2p_BroadcastMcOnlineState(bool on){
 	p2p_send_chat(on ? (char*)N02_MCONLINE_CHAT_PREFIX " ativado!" : (char*)N02_MCONLINE_CHAT_PREFIX " desativado.");
+}
+static void p2p_BroadcastMcIsoState(bool on){
+	p2p_send_chat(on ? (char*)N02_MCISO_CHAT_PREFIX " ativado!" : (char*)N02_MCISO_CHAT_PREFIX " desativado.");
 }
 void p2p_GetOwnerName(char* out, int cap){
 	if (cap <= 0) return;
@@ -1486,12 +1647,15 @@ void p2p_peer_joined_callback(){
 	}
 	// A new connection starts on "Sem M. Card"; the host tells the peer (an
 	// older peer starts from it too, but must learn it explicitly) and
-	// checks its WE Camp account - "[MC Online]" first, like every change.
+	// checks its WE Camp account - "[MC ISO]" / "[MC Online]" first, like
+	// every change.
 	p2p_ResetMemcardForPeer();
 	if (HOST) {
+		p2p_BroadcastMcIsoState(false);
 		p2p_BroadcastMcOnlineState(false);
 		p2p_BroadcastMemcardState(true);
 		p2p_StartAccountCheck();
+		p2p_BroadcastAccounts();
 	}
 	p2p_cdlg_peer_joined = 1;
 }
@@ -1499,6 +1663,7 @@ void p2p_peer_joined_callback(){
 void p2p_peer_left_callback(){
 	MessageBeep(MB_OK);
 	p2p_core_debug("Peer left");
+	g_p2p_ready_wanted = false;
 	p2p_ResetMemcardForPeer();
 	// If we suspended registration while connected, resume and mint a fresh code.
 	if (HOST && g_p2p_trav_host_enabled) {
@@ -1673,6 +1838,7 @@ LRESULT CALLBACK ConnectionDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARA
 					HWND cmb = GetDlgItem(hDlg, CMB_MEMCARD);
 					SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)"Sem M. Card");    // N02_MEMCARD_CHOICE_NONE
 					SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)"M. Card Online"); // N02_MEMCARD_CHOICE_ONLINE
+					SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)"M. Card da ISO"); // N02_MEMCARD_CHOICE_ISO
 				}
 				p2p_ResetMemcardForPeer();
 				g_p2p_advanced_visible = false;
@@ -1941,7 +2107,7 @@ LRESULT CALLBACK ConnectionDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARA
 			break;
 			case IDC_READY:
 				{
-					p2p_set_ready(SendMessage(GetDlgItem(hDlg, IDC_READY), BM_GETCHECK, 0, 0)==BST_CHECKED);
+					p2p_RequestReady(SendMessage(GetDlgItem(hDlg, IDC_READY), BM_GETCHECK, 0, 0)==BST_CHECKED);
 				}
 				break;
 				case CHK_ENLIST:

@@ -648,10 +648,16 @@ void p2p_step(){
 							p2p_send_chat("Using version: " P2P_VERSION " - Things may behave in an unexpected manner if different versions are used");
 							
 							if (P2PCORE.USERREADY) {
-								p2p_instruction kxx;
-								kxx.inst.type = PREADY;
-								kxx.inst.flags = PREADY_READY;
-								P2PCORE.connection->send_instruction(&kxx);
+								if (p2p_hold_ready_callback()) {
+									// The UI re-sends it once the peer's WE Camp account
+									// check is over (M. Cards Online in sync).
+									P2PCORE.USERREADY = false;
+								} else {
+									p2p_instruction kxx;
+									kxx.inst.type = PREADY;
+									kxx.inst.flags = PREADY_READY;
+									P2PCORE.connection->send_instruction(&kxx);
+								}
 							}
 
 							p2p_peer_joined_callback();

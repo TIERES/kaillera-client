@@ -183,14 +183,25 @@ static int CurrentGameNoMemcard() {
 	if (get_active_mode_index() == 2 || player_is_watching())
 		return player_get_no_memcard();
 	if (get_active_mode_index() == 1)
-		return (kaillera_NoMemcardEnabled() && !kaillera_McOnlineEnabled()) ? 1 : 0;
-	return (p2p_NoMemcardEnabled() && !p2p_McOnlineEnabled()) ? 1 : 0;
+		return (kaillera_NoMemcardEnabled() && !kaillera_McOnlineEnabled() && !kaillera_McIsoEnabled()) ? 1 : 0;
+	return (p2p_NoMemcardEnabled() && !p2p_McOnlineEnabled() && !p2p_McIsoEnabled()) ? 1 : 0;
 }
 
-// Memory card setup for the game starting now: 2 = "M. Card online" (WE
-// Camp cards), 1 = each player's own, 0 = none. Same sources as
-// CurrentGameNoMemcard(); a replay/stream/retry-connect is "online" when it
-// carries the online marker (krec_reader.h). "Each player's own" is only
+// "M. Card da ISO" in the live room / P2P connection: the game's own WE Camp
+// card (no owner) in slot 1 for everyone, instead of the 1P's and 2P's.
+static bool CurrentGameMcIso() {
+	if (get_active_mode_index() == 1)
+		return kaillera_McIsoEnabled();
+	if (get_active_mode_index() == 0)
+		return p2p_McIsoEnabled();
+	return false;
+}
+
+// Memory card setup for the game starting now: 2 = WE Camp cards ("M. Card
+// online" or "M. Card da ISO" - the fork only needs to know they come from
+// kailleraMemcardPrepare()), 1 = each player's own, 0 = none. Same sources
+// as CurrentGameNoMemcard(); a replay/stream/retry-connect is "online" when
+// it carries the online marker (krec_reader.h). "Each player's own" is only
 // what an older host (or an old replay) may still say.
 #define N02_MEMCARD_NONE   0
 #define N02_MEMCARD_OWN    1
@@ -208,11 +219,11 @@ static int CurrentGameMemcardMode() {
 		return player_get_no_memcard() ? N02_MEMCARD_NONE : N02_MEMCARD_OWN;
 	}
 	if (get_active_mode_index() == 1) {
-		if (kaillera_McOnlineEnabled())
+		if (kaillera_McOnlineEnabled() || kaillera_McIsoEnabled())
 			return N02_MEMCARD_ONLINE;
 		return kaillera_NoMemcardEnabled() ? N02_MEMCARD_NONE : N02_MEMCARD_OWN;
 	}
-	if (p2p_McOnlineEnabled())
+	if (p2p_McOnlineEnabled() || p2p_McIsoEnabled())
 		return N02_MEMCARD_ONLINE;
 	return p2p_NoMemcardEnabled() ? N02_MEMCARD_NONE : N02_MEMCARD_OWN;
 }
@@ -582,6 +593,8 @@ public:
 
 
 extern "C" {
+
+	static void McFlushChat(); // M. Card online: chat lines queued by the send threads
 	kailleraInfos infos;
 
 	void KAILLERA_DLLEXP kailleraGetVersion(char *version){
@@ -757,6 +770,7 @@ extern "C" {
 								TranslateMessage(&message);
 								DispatchMessage(&message);
 							}
+							McFlushChat();
 #ifndef KAILLERA
 							if (p2p_SelectServerDlgStep()) {
 #else
@@ -781,6 +795,7 @@ extern "C" {
 	int  KAILLERA_DLLEXP kailleraModifyPlayValues(void *values, int size){
 		//kaillera_core_debug("x");
 		if (KSSDFA.state==2) {
+			McFlushChat();
 #ifdef KAILLERA
 
 #ifdef RECORDER
@@ -879,11 +894,20 @@ extern "C" {
 	       versions named by the replay's marker for playback/Watch Live/
 	       retry-connect;
 	    3. after the core is unloaded, calls kailleraMemcardFinish(): in a
-	       live room the final cards are sent back (on a worker thread) - by
-	       the host right away, by the others only if the host didn't (see
-	       McCommitThread); the first send becomes the cards' new version.
+	       live room the cards that changed since the last send go back (on
+	       a worker thread) - by the sender right away, by the others only
+	       if the sender didn't (see McFinishThread); the first send becomes
+	       the cards' new version. With a server that takes a list of bases
+	       each save also goes out during the match (McWatchThread).
 	   "Live room" = a Server-mode room or a P2P connection; the notices go to
 	   that mode's chat (McLog).
+	   "M. Card da ISO" goes the same way with the game's own cards, shared by
+	   everyone who plays it in that mode (e.g. a championship's Master League,
+	   one match at a time) - one in slot 1 and one in slot 2 (slot 2 stays
+	   empty with a server from before it existed). Only the host needs a WE
+	   Camp login; the others fetch and send them with the DLL's shared key. A
+	   card is sent back only when the match changed it. A replay of it carries
+	   the same marker.
 	   ------------------------------------------------------------------ */
 
 	static void McLog(const char* fmt, ...) {
@@ -898,15 +922,47 @@ extern "C" {
 			kaillera_ui_gdebug((char*)"%s", msg);
 	}
 
-	static struct {
-		bool live;              // a live room's cards - send them back at the end
+	// One live match's online cards, from kailleraMemcardPrepare() until the
+	// last one went to WE Camp - on the heap, because that last send (a
+	// guest's comes 15 s after the match) can still be going when the next
+	// match starts.
+	//
+	// The core writes a card file as the game saves (pcsx_rearmed's SaveMcd,
+	// 128 bytes at a time), so each save can go out during the match: when
+	// the server takes a list of bases (multi_base), McWatchThread checks the
+	// cards every second and, once a changed card stayed the same for a few
+	// seconds (the game finished writing), the PC that sends first (the host
+	// in M. Card da ISO, the room's first confirmed account in M. Card
+	// Online) sends it. The others only note it as a version they saw, so
+	// their send at the end still goes in if the host dropped after a save.
+	#define N02_MC_KNOWN_MAX 16        // card versions a send can name as its base
+	#define N02_MC_WATCH_MS 1000       // how often the cards are checked during the match
+	#define N02_MC_SAVE_SETTLE_MS 3000 // a save is over once its card stayed this long unchanged
+
+	struct McSession {
+		bool iso;                  // "M. Card da ISO": the game's cards, slots 1 and 2
+		bool sender;               // sends first: the host (M. Card da ISO) / the room's first confirmed account
+		bool midMatch;             // WE Camp takes a list of bases - saves go out during the match
 		char dir[MAX_PATH];
 		char contentId[32];
 		char players[8 * 32 + 8];
+		char nick[32];
 		int slots;
+		bool hasCard[2];           // false: empty slot (no confirmed account) - nothing to send
 		char owner[2][32];
-		char base[2][65];
-	} g_mc;
+		// The card versions this PC saw, oldest first: [0] the one the match
+		// began with, then each finished save. A send names them all as its
+		// base (see api_commit in wg-camp's memcards.py).
+		char known[2][N02_MC_KNOWN_MAX][65];
+		int knownCount[2];
+		bool saved[2];                    // this PC got a save of it into WE Camp during the match
+		char onServer[2][N02_MCD_SIZE];   // what WE Camp has, as far as this PC knows
+		char final[2][N02_MCD_SIZE];      // the cards as the match ended
+		bool finalOk[2];
+		HANDLE stop;                      // signalled when the match ends
+		HANDLE watcher;                   // McWatchThread (midMatch only)
+	};
+	static McSession* g_mcs; // the current match's - set and cleared by the thread that runs the game
 
 	static bool McWriteCard(const char* dir, int slot, const char* data) {
 		char path[MAX_PATH];
@@ -937,7 +993,7 @@ extern "C" {
 	// The marker every replay/stream of this match carries (krec_reader.h).
 	static void McWriteMarker(const char* sha1, const char* sha2) {
 		char marker[200];
-		_snprintf(marker, sizeof(marker), "%s%s %s", N02_MCONLINE_MARKER_PREFIX, sha1, sha2 && sha2[0] ? sha2 : "-");
+		_snprintf(marker, sizeof(marker), "%s%s %s", N02_MCONLINE_MARKER_PREFIX, sha1 && sha1[0] ? sha1 : "-", sha2 && sha2[0] ? sha2 : "-");
 		marker[sizeof(marker) - 1] = 0;
 #ifdef RECORDER
 		if (out != INVALID_HANDLE_VALUE) {
@@ -963,17 +1019,156 @@ extern "C" {
 		return 1;
 	}
 
+	static void McKnownAdd(McSession* m, int s, const char* sha) {
+		for (int i = 0; i < m->knownCount[s]; i++)
+			if (strcmp(m->known[s][i], sha) == 0)
+				return;
+		if (m->knownCount[s] == N02_MC_KNOWN_MAX) {
+			// Keep the version the match began with, drop the oldest save after it.
+			memmove(m->known[s][1], m->known[s][2], (N02_MC_KNOWN_MAX - 2) * sizeof(m->known[s][0]));
+			m->knownCount[s]--;
+		}
+		strcpy(m->known[s][m->knownCount[s]++], sha);
+	}
+
+	static void McCardName(const McSession* m, int s, char* buf, int cap) {
+		if (m->iso)
+			_snprintf(buf, cap, "M. Card da ISO (slot %d)", s + 1);
+		else
+			_snprintf(buf, cap, "Memory Card de %s", m->owner[s]);
+		buf[cap - 1] = 0;
+	}
+
+	// Room chat lines from the send threads. The chat goes out on the thread
+	// that already talks to the network - the emulator's during the game
+	// (kailleraModifyPlayValues), the main loop's outside it (McFlushChat) -
+	// as the Kaillera/P2P message queues aren't safe from any other thread.
+	static SRWLOCK g_mcChatLock = SRWLOCK_INIT;
+	static char g_mcChat[4][128];
+	static volatile LONG g_mcChatCount;
+
+	static void McQueueChat(const char* text) {
+		AcquireSRWLockExclusive(&g_mcChatLock);
+		if (g_mcChatCount < 4) {
+			strncpy(g_mcChat[g_mcChatCount], text, sizeof(g_mcChat[0]) - 1);
+			g_mcChat[g_mcChatCount][sizeof(g_mcChat[0]) - 1] = 0;
+			g_mcChatCount++;
+		}
+		ReleaseSRWLockExclusive(&g_mcChatLock);
+	}
+
+	static void McFlushChat() {
+		if (g_mcChatCount == 0)
+			return;
+		char lines[4][128];
+		int n;
+		AcquireSRWLockExclusive(&g_mcChatLock);
+		n = g_mcChatCount;
+		memcpy(lines, g_mcChat, sizeof(lines));
+		g_mcChatCount = 0;
+		ReleaseSRWLockExclusive(&g_mcChatLock);
+		for (int i = 0; i < n; i++)
+			kailleraChatSend(lines[i]);
+	}
+
+	// Sends card s and says how it went - true when WE Camp has `data`.
+	static bool McSend(McSession* m, int s, const char* data) {
+		char card[64];
+		McCardName(m, s, card, sizeof(card));
+		char bases[N02_MC_KNOWN_MAX * 65 + 1] = "";
+		for (int i = 0; i < m->knownCount[s]; i++) {
+			if (i)
+				strcat(bases, ",");
+			strcat(bases, m->known[s][i]);
+		}
+		char status[64];
+		int version = 0;
+		n02_wecamp_commit(m->contentId, m->owner[s], bases, m->players, m->iso, s + 1, m->nick,
+			data, status, sizeof(status), &version);
+		if (strcmp(status, "committed") == 0) {
+			McLog("* %s salvo no WE Camp (versao %d).", card, version);
+			char line[64];
+			_snprintf(line, sizeof(line), "Memory Card Online Slot %d foi salvo.", s + 1);
+			line[sizeof(line) - 1] = 0;
+			McQueueChat(line);
+			return true;
+		}
+		if (strcmp(status, "already") == 0)
+			return true; // the host (or another player) already saved this exact card
+		if (strcmp(status, "unchanged") == 0)
+			return true;
+		if (strcmp(status, "conflict") == 0)
+			McLog(m->iso
+				? "* %s NAO foi salvo: ele mudou no WE Camp durante a partida "
+				  "(outra partida com o mesmo cartao, envio pelo site ou cartao diferente do salvo pelo host)."
+				: "* %s NAO foi salvo: ele mudou no WE Camp durante a partida "
+				  "(envio pelo site ou cartao diferente do salvo pelo host).", card);
+		else
+			McLog("* %s NAO foi salvo (%s).", card, status);
+		return false;
+	}
+
+	static DWORD WINAPI McWatchThread(LPVOID param) {
+		McSession* m = (McSession*)param;
+		char* now = (char*)malloc(5 * N02_MCD_SIZE);
+		if (now == NULL)
+			return 0;
+		char* pending[2] = { now + N02_MCD_SIZE, now + 2 * N02_MCD_SIZE };   // last read
+		char* settled[2] = { now + 3 * N02_MCD_SIZE, now + 4 * N02_MCD_SIZE }; // last finished save
+		DWORD changedAt[2] = { 0, 0 };
+		for (int s = 0; s < 2; s++) {
+			memcpy(pending[s], m->onServer[s], N02_MCD_SIZE);
+			memcpy(settled[s], m->onServer[s], N02_MCD_SIZE);
+		}
+		while (WaitForSingleObject(m->stop, N02_MC_WATCH_MS) == WAIT_TIMEOUT) {
+			for (int s = 0; s < m->slots; s++) {
+				if (!m->hasCard[s] || !McReadCard(m->dir, s, now))
+					continue;
+				if (memcmp(now, pending[s], N02_MCD_SIZE) != 0) {
+					memcpy(pending[s], now, N02_MCD_SIZE); // the game is (still) writing it
+					changedAt[s] = GetTickCount();
+					continue;
+				}
+				if (memcmp(pending[s], settled[s], N02_MCD_SIZE) == 0
+					|| GetTickCount() - changedAt[s] < N02_MC_SAVE_SETTLE_MS)
+					continue;
+				// A finished save.
+				memcpy(settled[s], pending[s], N02_MCD_SIZE);
+				char sha[65];
+				if (!n02_wecamp_sha256(settled[s], N02_MCD_SIZE, sha))
+					continue;
+				if (m->sender && McSend(m, s, settled[s])) {
+					memcpy(m->onServer[s], settled[s], N02_MCD_SIZE);
+					m->saved[s] = true;
+				}
+				McKnownAdd(m, s, sha);
+			}
+		}
+		free(now);
+		return 0;
+	}
+
 	static int McPrepareLive(const char* contentId, const char* gameFile, const char* dir) {
 		static char buf[N02_MCD_SIZE + 1];
 		char err[300];
-
-		if (!n02_wecamp_logged_in()) {
-			McLog("* Memory Card online: voce nao esta conectado a sua conta WE Camp (botao \"M. Card Online\" da tela inicial do Kaillera).");
-			return -1;
+		// "M. Card da ISO": nobody but the host needs a login (and the host's
+		// is checked when it picks the option). "M. Card Online": the cards of
+		// the room's confirmed accounts - the others' slots stay empty. Either
+		// way a PC without a login asks with the DLL's key, so every PC loads
+		// the same slots.
+		bool iso = CurrentGameMcIso();
+		bool loggedIn = n02_wecamp_logged_in();
+		char accounts[16 * 32 + 16] = "";
+		bool accountsKnown = false; // false: an older host - both players need an account, as before
+		if (!iso) {
+			int n = get_active_mode_index() == 0 ? p2p_GetMcAccounts(accounts, sizeof(accounts))
+				: kaillera_GetMcAccounts(accounts, sizeof(accounts));
+			accountsKnown = n >= 0;
 		}
+
 		char nick[32];
 		active_mod.GetOwnerName(nick, sizeof(nick));
-		if (_stricmp(nick, n02_wecamp_username()) != 0) {
+		if (loggedIn && _stricmp(nick, n02_wecamp_username()) != 0) {
 			McLog("* Memory Card online: seu nick (%s) e diferente da sua conta WE Camp (%s).", nick, n02_wecamp_username());
 			return -1;
 		}
@@ -990,37 +1185,89 @@ extern "C" {
 			McLog("* Memory Card online: nao consegui confirmar a ordem dos jogadores.");
 			return -1;
 		}
-		g_mc.players[0] = 0;
+		McSession* m = new McSession();
 		for (int i = 0; i < count; i++) {
-			if (i) strcat(g_mc.players, ",");
-			strcat(g_mc.players, names[i]);
+			if (i) strcat(m->players, ",");
+			strcat(m->players, names[i]);
 		}
 
 		n02_wecamp_checkout_result co;
-		if (!n02_wecamp_checkout(contentId, gameFile, g_mc.players, &co, err, sizeof(err))) {
-			McLog("* Memory Card online indisponivel: %s", err);
+		if (!n02_wecamp_checkout(contentId, gameFile, m->players, iso, accountsKnown ? accounts : NULL, &co, err, sizeof(err))) {
+			McLog(iso ? "* M. Card da ISO indisponivel: %s" : "* Memory Card online indisponivel: %s", err);
+			delete m;
 			return -1;
 		}
 		for (int s = 0; s < co.slots; s++) {
-			if (!n02_wecamp_get_card(co.sha256[s], buf, false) || !McWriteCard(dir, s, buf)) {
-				McLog("* Memory Card online: falha ao baixar o cartao de %s.", co.player[s]);
+			if (co.sha256[s][0] == 0)
+				continue; // no confirmed account: the core makes a blank card, nothing is saved
+			if (!n02_wecamp_get_card(co.sha256[s], buf, !loggedIn) || !McWriteCard(dir, s, buf)) {
+				if (iso)
+					McLog("* M. Card da ISO: falha ao baixar o cartao do slot %d.", s + 1);
+				else
+					McLog("* Memory Card online: falha ao baixar o cartao de %s.", co.player[s]);
+				delete m;
 				return -1;
 			}
+			m->hasCard[s] = true;
+			memcpy(m->onServer[s], buf, N02_MCD_SIZE);
+			McKnownAdd(m, s, co.sha256[s]);
+			strncpy(m->owner[s], co.player[s], sizeof(m->owner[s]) - 1);
+		}
+		m->slots = co.slots;
+		m->iso = iso;
+		m->midMatch = co.multiBase;
+		strncpy(m->dir, dir, sizeof(m->dir) - 1);
+		strncpy(m->contentId, contentId, sizeof(m->contentId) - 1);
+		strncpy(m->nick, nick, sizeof(m->nick) - 1);
+		// Who sends first: the host in "M. Card da ISO"; in M. Card Online
+		// the room's first confirmed account (the host's, when it has one).
+		{
+			char first[32] = "";
+			const char* comma = strchr(accounts, ',');
+			size_t n = comma ? (size_t)(comma - accounts) : strlen(accounts);
+			if (n < sizeof(first)) {
+				memcpy(first, accounts, n);
+				first[n] = 0;
+			}
+			m->sender = iso ? active_mod.IsHost() : _stricmp(first, nick) == 0;
 		}
 
-		g_mc.live = true;
-		strncpy(g_mc.contentId, contentId, sizeof(g_mc.contentId) - 1);
-		g_mc.slots = co.slots;
-		for (int s = 0; s < co.slots; s++) {
-			strncpy(g_mc.owner[s], co.player[s], 31);
-			strncpy(g_mc.base[s], co.sha256[s], 64);
-		}
 		McWriteMarker(co.sha256[0], co.slots > 1 ? co.sha256[1] : "");
-		if (co.slots > 1)
-			McLog("* Memory Card online: slot 1 = %s (versao %d), slot 2 = %s (versao %d).",
-				co.player[0], co.version[0], co.player[1], co.version[1]);
-		else
-			McLog("* Memory Card online: slot 1 = %s (versao %d).", co.player[0], co.version[0]);
+		if (iso) {
+			if (co.slots > 1)
+				McLog("* M. Card da ISO: slot 1 = cartao 1 do jogo (versao %d), slot 2 = cartao 2 do jogo (versao %d).",
+					co.version[0], co.version[1]);
+			else
+				McLog("* M. Card da ISO: slot 1 = cartao do jogo (versao %d).", co.version[0]);
+		} else {
+			char line[300] = "* Memory Card online:";
+			for (int s = 0; s < co.slots; s++) {
+				size_t len = strlen(line);
+				if (co.sha256[s][0])
+					_snprintf(line + len, sizeof(line) - len, "%s slot %d = %s (versao %d)", s ? "," : "", s + 1,
+						co.player[s], co.version[s]);
+				else
+					_snprintf(line + len, sizeof(line) - len, "%s slot %d = sem memory card (%s sem conta WE Camp confirmada)",
+						s ? "," : "", s + 1, s < count ? names[s] : "?");
+				line[sizeof(line) - 1] = 0;
+			}
+			McLog("%s.", line);
+			if (!loggedIn)
+				McLog("* Voce nao esta logado no WE Camp: quem tem conta salva os cartoes.");
+		}
+
+		// Sending online cards back takes a login (M. Card da ISO goes with
+		// the key too) - without one, this PC has nothing more to do.
+		if (!(loggedIn || iso)) {
+			delete m;
+			return 1;
+		}
+		McLog(m->midMatch ? "* Cada save no jogo vai para o WE Camp assim que o jogo termina de gravar."
+			: "* Os saves vao para o WE Camp no fim da partida.");
+		m->stop = CreateEvent(NULL, TRUE, FALSE, NULL);
+		if (m->midMatch && m->stop)
+			m->watcher = CreateThread(NULL, 0, McWatchThread, m, 0, NULL);
+		g_mcs = m;
 		return 1;
 	}
 
@@ -1028,11 +1275,13 @@ extern "C" {
 		return CurrentGameMemcardMode();
 	}
 
+	void KAILLERA_DLLEXP kailleraMemcardFinish();
+
 	int KAILLERA_DLLEXP kailleraMemcardPrepare(const char* contentId, const char* gameFile, const char* dir){
-		memset(&g_mc, 0, sizeof(g_mc));
+		if (g_mcs)
+			kailleraMemcardFinish(); // the last match's never ended - send what it has
 		if (contentId == NULL || dir == NULL || CurrentGameMemcardMode() != N02_MEMCARD_ONLINE)
 			return 0;
-		strncpy(g_mc.dir, dir, sizeof(g_mc.dir) - 1);
 
 		char sha[2][65];
 		if (kaillera_retryconnect_active()) {
@@ -1048,73 +1297,67 @@ extern "C" {
 		return 0;
 	}
 
-	struct McCommitJob {
-		char dir[MAX_PATH];
-		char contentId[32];
-		char players[8 * 32 + 8];
-		int slots;
-		char owner[2][32];
-		char base[2][65];
-		bool host;
-		char data[N02_MCD_SIZE];
-	};
-
-	// Every PC ends the match with the same two cards, so one send is enough:
-	// the host sends right away, everybody else only after a while - by then
-	// the host's send is normally in and theirs is an "already"; if the host
+	// Every PC ends the match with the same cards, so one send is enough: the
+	// sender sends right away, everybody else only after a while - by then
+	// the sender's is normally in and theirs is an "already"; if the sender
 	// dropped, theirs is the one that saves the cards.
 	#define N02_MC_GUEST_COMMIT_DELAY_MS 15000
 
-	static DWORD WINAPI McCommitThread(LPVOID param) {
-		McCommitJob* job = (McCommitJob*)param;
-		char* data = job->data;
-		if (!job->host)
+	static DWORD WINAPI McFinishThread(LPVOID param) {
+		McSession* m = (McSession*)param;
+		if (m->watcher) {
+			WaitForSingleObject(m->watcher, INFINITE); // a save it may still be sending
+			CloseHandle(m->watcher);
+		}
+		if (!m->sender)
 			Sleep(N02_MC_GUEST_COMMIT_DELAY_MS);
-		for (int s = 0; s < job->slots; s++) {
-			if (!McReadCard(job->dir, s, data)) {
-				McLog("* Memory Card online: nao encontrei o cartao de %s para salvar.", job->owner[s]);
+		for (int s = 0; s < m->slots; s++) {
+			if (!m->hasCard[s])
+				continue; // empty slot (no confirmed account) - nothing to save
+			char card[64];
+			McCardName(m, s, card, sizeof(card));
+			if (!m->finalOk[s]) {
+				McLog("* %s: nao encontrei o cartao para salvar.", card);
 				continue;
 			}
-			char status[64];
-			int version = 0;
-			n02_wecamp_commit(job->contentId, job->owner[s], job->base[s], job->players, data, status, sizeof(status), &version);
-			if (strcmp(status, "committed") == 0)
-				McLog("* Memory Card de %s salvo no WE Camp (versao %d).", job->owner[s], version);
-			else if (strcmp(status, "already") == 0)
-				; // the host (or another player) already saved this exact card
-			else if (strcmp(status, "unchanged") == 0) {
-				if (job->host)
-					McLog("* Memory Card de %s sem alteracoes.", job->owner[s]);
-			} else if (strcmp(status, "conflict") == 0)
-				McLog("* Memory Card de %s NAO foi salvo: ele mudou no WE Camp durante a partida "
-					"(envio pelo site ou cartao diferente do salvo pelo host).", job->owner[s]);
-			else
-				McLog("* Memory Card de %s NAO foi salvo (%s).", job->owner[s], status);
+			// Nothing new since the match began, or since this PC's last send.
+			if (memcmp(m->final[s], m->onServer[s], N02_MCD_SIZE) == 0) {
+				if (m->sender && !m->saved[s])
+					McLog("* %s sem alteracoes.", card);
+				continue;
+			}
+			McSend(m, s, m->final[s]);
 		}
-		delete job;
+		if (m->stop)
+			CloseHandle(m->stop);
+		delete m;
 		return 0;
 	}
 
 	void KAILLERA_DLLEXP kailleraMemcardFinish(){
-		if (!g_mc.live) {
-			memset(&g_mc, 0, sizeof(g_mc));
+		McSession* m = g_mcs;
+		g_mcs = NULL;
+		if (m == NULL)
+			return;
+		// The cards as the match ended - read now, the next match reuses the folder.
+		for (int s = 0; s < m->slots; s++)
+			if (m->hasCard[s])
+				m->finalOk[s] = McReadCard(m->dir, s, m->final[s]);
+		if (m->stop)
+			SetEvent(m->stop);
+		HANDLE t = CreateThread(NULL, 0, McFinishThread, m, 0, NULL);
+		if (t) {
+			CloseHandle(t);
 			return;
 		}
-		McCommitJob* job = new McCommitJob;
-		memset(job, 0, sizeof(*job));
-		strncpy(job->dir, g_mc.dir, sizeof(job->dir) - 1);
-		strncpy(job->contentId, g_mc.contentId, sizeof(job->contentId) - 1);
-		strncpy(job->players, g_mc.players, sizeof(job->players) - 1);
-		job->slots = g_mc.slots;
-		memcpy(job->owner, g_mc.owner, sizeof(job->owner));
-		memcpy(job->base, g_mc.base, sizeof(job->base));
-		job->host = active_mod.IsHost();
-		memset(&g_mc, 0, sizeof(g_mc));
-		HANDLE t = CreateThread(NULL, 0, McCommitThread, job, 0, NULL);
-		if (t)
-			CloseHandle(t);
-		else
-			delete job;
+		// No thread for the sends: stop watching and drop the cards' end.
+		if (m->watcher) {
+			WaitForSingleObject(m->watcher, INFINITE);
+			CloseHandle(m->watcher);
+		}
+		if (m->stop)
+			CloseHandle(m->stop);
+		delete m;
 	}
 
 	/* retry-connect (kcore/kaillera_retryconnect.h) - optional exports, same

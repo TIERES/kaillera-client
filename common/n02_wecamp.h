@@ -55,7 +55,7 @@ void n02_wecamp_logout();
 // "So logados" rooms: a short single-use ticket proving this account, bound
 // to the room (the Kaillera game id) - sent in the room's chat on joining.
 bool n02_wecamp_get_ticket(const char* room, char* ticket, int ticketCap, char* err, int errCap);
-// Host side: checks a joiner's ticket; on success username gets the
+// Host side (logged in or not - the API key then): checks a joiner's ticket; on success username gets the
 // account's name (to compare with the joiner's nick).
 bool n02_wecamp_verify_ticket(const char* ticket, const char* room, char* username, int usernameCap, char* err, int errCap);
 
@@ -64,23 +64,43 @@ struct n02_wecamp_checkout_result {
 	char player[2][32];      // card owners: slot 1 = 1P, slot 2 = 2P
 	char sha256[2][65];      // their current versions
 	int version[2];
+	bool multiBase;          // commits take a list of bases: saves can go out during the match
 };
 
 // Start of an online-card match. players = nicks in 1P,2P,... order,
 // comma separated. Returns true on success; on failure err has the reason
 // (missing_account lists who has no confirmed account).
-bool n02_wecamp_checkout(const char* contentId, const char* gameName, const char* players,
-	n02_wecamp_checkout_result* out, char* err, int errCap);
+// iso = "M. Card da ISO": the game's own cards (no owner, the same for
+// everyone), one for slot 1 and one for slot 2 - a server from before slot 2
+// existed sends slot 1 only (slots = 1); a player who isn't logged in asks
+// with the DLL's shared API key.
+// accounts (M. Card Online; NULL = the old rule, both players need an
+// account): nicks whose WE Camp account the room confirmed, comma separated.
+// A player not in it gets an empty slot (player[s] and sha256[s] empty) -
+// at least one slot has a card. Asked with the API key when not logged in,
+// so every PC gets the same slots.
+bool n02_wecamp_checkout(const char* contentId, const char* gameName, const char* players, bool iso,
+	const char* accounts, n02_wecamp_checkout_result* out, char* err, int errCap);
 
 // Downloads one card version (N02_MCD_SIZE bytes into buf, which must hold
 // N02_MCD_SIZE + 1 - a terminating NUL is written after the data) - with the
 // player's token, or with the DLL's shared API key for spectators/replays.
 bool n02_wecamp_get_card(const char* sha256, char* buf, bool useApiKey);
 
-// End of the match: the final content of one card. status receives the
-// server's verdict ("committed", "pending", "unchanged", "conflict", ...).
+// One card's content - at the end of the match, or a save during it.
+// baseSha256: the version the match began with or, with multiBase, a comma
+// separated list of it and each save this PC saw (WE Camp takes the send while
+// its current version is any of them). status receives the server's verdict
+// ("committed", "already", "unchanged", "conflict", ...).
+// iso: one of the game's cards, isoSlot 1 or 2 (slotPlayer unused); reporter =
+// our nick, which the server notes when we send it with the API key (not
+// logged in).
+// SHA-256 of data as 64 lowercase hex digits - the id WE Camp gives a card version.
+bool n02_wecamp_sha256(const void* data, int len, char out[65]);
+
 bool n02_wecamp_commit(const char* contentId, const char* slotPlayer, const char* baseSha256,
-	const char* players, const char* data, char* status, int statusCap, int* version);
+	const char* players, bool iso, int isoSlot, const char* reporter, const char* data, char* status, int statusCap,
+	int* version);
 
 // Discord voice channel of a match (wg-camp's /api/voice/join): the server
 // creates (or reuses) a private voice channel for the room's players in the

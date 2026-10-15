@@ -12,6 +12,9 @@ bool p2p_IsHost();
 bool p2p_StreamingEnabled();
 bool p2p_NoMemcardEnabled();
 bool p2p_McOnlineEnabled();
+bool p2p_McIsoEnabled();
+// The connection's confirmed WE Camp accounts (comma separated).
+int p2p_GetMcAccounts(char* out, int cap);
 int p2p_GetGamePlayers(char out[][32], int max);
 void p2p_ConfigureStream();
 void p2p_GetOwnerName(char* out, int cap);

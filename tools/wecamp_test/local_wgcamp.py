@@ -15,7 +15,7 @@ from pathlib import Path
 
 def dll_api_key():
     header = Path(__file__).resolve().parents[2] / "common" / "n02_stream.h"
-    match = re.search(r'N02_STREAM_DEFAULT_API_KEY\s+"([0-9a-f]+)"', header.read_text())
+    match = re.search(r'N02_STREAM_DEFAULT_API_KEY\s+"([0-9a-f]+)"', header.read_text(encoding="latin-1"))
     return match.group(1)
 
 
@@ -69,6 +69,10 @@ def main():
             db.commit()
             fake.voice = {"111": "lobby"}
     print(f"wg-camp local em http://127.0.0.1:{args.port} (dados em {root})", flush=True)
+    # O http.server pergunta o nome da máquina (getfqdn) e, num Windows com
+    # nome de rede acentuado, o Python 3.14 não decodifica a resposta.
+    import socket
+    socket.getfqdn = lambda name="": name or "localhost"
     run_simple("127.0.0.1", args.port, app, threaded=True)
 
 
