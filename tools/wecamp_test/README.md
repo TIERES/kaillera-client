@@ -62,3 +62,16 @@ Depois, mais 9 do M. Card Online com uma conta só: o host sem login confere o
 ingresso do convidado com a chave do DLL; o host sem login e o convidado
 logado recebem os mesmos slots (slot 1 vazio, slot 2 = cartão do convidado);
 sala sem nenhuma conta é recusada. Total: 75 verificações, todas OK.
+
+## Resultado (2026-10-15)
+
+83 verificações, todas OK. O "M. Card da ISO" passou a ter um cartão para cada
+slot: o checkout do host e o do convidado recebem os dois slots (o DLL pede
+`iso_slots=2`); salvar o slot 1 não mexe no slot 2; o slot 2 é salvo com
+`slot=2`, o envio igual do convidado não muda nada, um slot que não existe é
+recusado, e a próxima partida começa das versões salvas dos dois slots.
+
+Neste PC (Python 3.14 do E:\Projetos), o `local_wgcamp.py` precisou de dois
+ajustes: ler o `n02_stream.h` como Latin-1 e não perguntar o nome da máquina
+(`socket.getfqdn`). Para compilar aqui, o `vcvars64.bat` é o do VS 2019
+BuildTools (`C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools`).

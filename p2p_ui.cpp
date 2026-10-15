@@ -750,8 +750,8 @@ void p2p_ping_callback(int PING){
 // games, unless the host picked another choice for this peer). A P2P game
 // starts as soon as both are ready, so the host's "Ready" waits for the
 // check to end ("Sincronizando M. Cards Online...", p2p_RequestReady()).
-// "M. Card da ISO" (the game's single WE Camp card for everyone, slot 1 -
-// see kaillera_ui.cpp) only needs the host logged in, so the host can pick
+// "M. Card da ISO" (the game's own WE Camp cards for everyone, slots 1 and 2
+// - see kaillera_ui.cpp) only needs the host logged in, so the host can pick
 // it whatever the peer's check says.
 #define N02_NOMEMCARD_CHAT_PREFIX "[Sem M. Card]"
 #define N02_MCONLINE_CHAT_PREFIX  "[MC Online]"
@@ -898,7 +898,7 @@ static void p2p_HostSetMemcardChoice(int choice, bool byHost){
 	p2p_BroadcastMcOnlineState(online);
 	p2p_BroadcastMemcardState(!online && !iso);
 	if (byHost)
-		outpf(iso ? "* M. Card da ISO: os dois jogam com o cartao do jogo no slot 1, vindo do WE Camp; no fim da partida voce (host) salva o cartao de volta."
+		outpf(iso ? "* M. Card da ISO: os dois jogam com os cartoes do jogo nos slots 1 e 2, vindos do WE Camp; no fim da partida voce (host) salva de volta o cartao que mudou."
 			: online ? "* M. Card Online: o cartao do 1P (host) vai no slot 1 e o do 2P no slot 2, vindos do WE Camp (quem nao estiver logado joga sem memory card)."
 			: "* Sem M. Card: a partida vai iniciar sem memory card.");
 }

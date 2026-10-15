@@ -853,10 +853,11 @@ static void kaillera_BroadcastMcOnlineState(bool on){
 	kaillera_game_chat_send(on ? (char*)N02_MCONLINE_CHAT_PREFIX " ativado!" : (char*)N02_MCONLINE_CHAT_PREFIX " desativado.");
 }
 
-// "M. Card da ISO": instead of the players' own cards, the game's single WE
-// Camp card - the same for everybody who plays it in this mode (e.g. a
-// championship's Master League, one match at a time) - in slot 1, saved back
-// by the host at the end of the match (by a guest if the host dropped).
+// "M. Card da ISO": instead of the players' own cards, the game's own WE
+// Camp cards - the same for everybody who plays it in this mode (e.g. a
+// championship's Master League, one match at a time) - in slots 1 and 2, each
+// saved back (when the match changed it) by the host at the end of the match
+// (by a guest if the host dropped).
 // Only the host needs to be logged in to WE Camp, so a player without an
 // account doesn't block it. Same host-only announcement; it goes out before
 // "[MC Online]" and "[Sem M. Card]", and an older DLL that doesn't know it
@@ -1322,8 +1323,8 @@ static void kaillera_HostSetMemcardChoice(int choice, bool byHost){
 	if (!byHost)
 		return;
 	if (iso) {
-		kaillera_gdebug("* M. Card da ISO: todos jogam com o cartao do jogo no slot 1, vindo do WE Camp; "
-			"no fim da partida voce (host) salva o cartao de volta. So o host precisa estar logado.");
+		kaillera_gdebug("* M. Card da ISO: todos jogam com os cartoes do jogo nos slots 1 e 2, vindos do WE Camp; "
+			"no fim da partida voce (host) salva de volta o cartao que mudou. So o host precisa estar logado.");
 	} else if (online) {
 		kaillera_gdebug("* M. Card Online: o cartao do 1P vai no slot 1 e o do 2P no slot 2, vindos do WE Camp "
 			"(quem nao estiver logado joga sem memory card).");
@@ -1789,8 +1790,8 @@ void kaillera_game_chat_callback(char*name, char * msg){
 			g_mciso = on;
 			kaillera_UpdateMemcardControls();
 			if (on)
-				kaillera_gdebug("* %s selecionou M. Card da ISO: todos usam o cartao do jogo no WE Camp (slot 1), "
-					"salvo pelo host no fim da partida - nao precisa estar logado.", name);
+				kaillera_gdebug("* %s selecionou M. Card da ISO: todos usam os cartoes do jogo no WE Camp (slots 1 e 2), "
+					"salvos pelo host no fim da partida - nao precisa estar logado.", name);
 			else
 				kaillera_gdebug("* %s desativou o M. Card da ISO.", name);
 		}

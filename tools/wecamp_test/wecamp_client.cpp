@@ -97,7 +97,7 @@ int main(int argc, char** argv) {
 	char status[64];
 	int version = 0;
 	// The host (player 1) sends right away and that already saves it.
-	n02_wecamp_commit(content, co.player[0], co.sha256[0], players, false, NULL, card, status, sizeof(status), &version);
+	n02_wecamp_commit(content, co.player[0], co.sha256[0], players, false, 1, NULL, card, status, sizeof(status), &version);
 	CHECK(strcmp(status, "committed") == 0, "envio do host grava a nova versao");
 	printf("     -> %s v%d\n", status, version);
 
@@ -105,7 +105,7 @@ int main(int argc, char** argv) {
 	nSettings::set_str((char*)"WECAMP_TOKEN", token2);
 	nSettings::set_str((char*)"WECAMP_USER", (char*)p2);
 	n02_wecamp_load();
-	n02_wecamp_commit(content, co.player[0], co.sha256[0], players, false, NULL, card, status, sizeof(status), &version);
+	n02_wecamp_commit(content, co.player[0], co.sha256[0], players, false, 1, NULL, card, status, sizeof(status), &version);
 	CHECK(strcmp(status, "already") == 0, "envio igual do outro jogador nao muda nada");
 	printf("     -> %s v%d\n", status, version);
 
@@ -113,7 +113,7 @@ int main(int argc, char** argv) {
 	static char other[N02_MCD_SIZE + 1];
 	memcpy(other, card, N02_MCD_SIZE);
 	other[9000] ^= 0x11;
-	n02_wecamp_commit(content, co.player[0], co.sha256[0], players, false, NULL, other, status, sizeof(status), &version);
+	n02_wecamp_commit(content, co.player[0], co.sha256[0], players, false, 1, NULL, other, status, sizeof(status), &version);
 	CHECK(strcmp(status, "conflict") == 0, "cartao diferente do salvo vira conflito");
 
 	n02_wecamp_checkout_result after;
@@ -163,43 +163,68 @@ int main(int argc, char** argv) {
 	CHECK(strcmp(vstatus, "moved") == 0, "canal de voz: jogador 1 (ja em voz) esta no canal");
 	CHECK(strcmp(vurl, firstUrl) == 0, "canal de voz: os dois no mesmo canal");
 
-	// "M. Card da ISO": the game's single card. The host (player 1, logged
-	// in) and a guest without an account get the same one; the host saves it.
+	// "M. Card da ISO": the game's cards, slots 1 and 2. The host (player 1,
+	// logged in) and a guest without an account get the same ones; the host
+	// saves them.
 	const char* isoContent = "5e5e5e5e:1c473f60";
 	char isoPlayers[100];
 	_snprintf(isoPlayers, sizeof(isoPlayers), "%s,Convidado", p1);
 	n02_wecamp_checkout_result iso;
 	CHECK(n02_wecamp_checkout(isoContent, "MasterLeague.bin", isoPlayers, true, NULL, &iso, err, sizeof(err)), "iso: checkout do host");
-	CHECK(iso.slots == 1 && strcmp(iso.player[0], "ISO") == 0, "iso: um slot so, cartao do jogo");
-	printf("     -> v%d %.16s...\n", iso.version[0], iso.sha256[0]);
+	CHECK(iso.slots == 2 && strcmp(iso.player[0], "ISO") == 0 && strcmp(iso.player[1], "ISO") == 0
+		&& strlen(iso.sha256[1]) == 64, "iso: dois slots, os cartoes do jogo");
+	printf("     -> slot 1 v%d %.16s..., slot 2 v%d %.16s...\n", iso.version[0], iso.sha256[0], iso.version[1], iso.sha256[1]);
 	n02_wecamp_logout();
 	n02_wecamp_checkout_result isoGuest;
 	CHECK(!n02_wecamp_checkout(isoContent, "MasterLeague.bin", isoPlayers, false, NULL, &isoGuest, err, sizeof(err)),
 		"iso: sem login, o M. Card Online continua recusado");
 	CHECK(n02_wecamp_checkout(isoContent, "MasterLeague.bin", isoPlayers, true, NULL, &isoGuest, err, sizeof(err)),
 		"iso: checkout do convidado sem login (chave do DLL)");
-	CHECK(strcmp(isoGuest.sha256[0], iso.sha256[0]) == 0, "iso: host e convidado recebem o mesmo cartao");
+	CHECK(strcmp(isoGuest.sha256[0], iso.sha256[0]) == 0 && strcmp(isoGuest.sha256[1], iso.sha256[1]) == 0,
+		"iso: host e convidado recebem os mesmos cartoes");
 	static char isoCard[N02_MCD_SIZE + 1];
 	CHECK(n02_wecamp_get_card(iso.sha256[0], isoCard, true), "iso: convidado baixa o cartao com a chave");
 	isoCard[8192] = 0x6B;
 	isoCard[8193] = (char)GetTickCount();
 
 	CHECK(n02_wecamp_login(mail1, pass, err, sizeof(err)), "iso: host logado de novo");
-	n02_wecamp_commit(isoContent, iso.player[0], iso.sha256[0], isoPlayers, true, p1, isoCard, status, sizeof(status), &version);
+	n02_wecamp_commit(isoContent, iso.player[0], iso.sha256[0], isoPlayers, true, 1, p1, isoCard, status, sizeof(status), &version);
 	CHECK(strcmp(status, "committed") == 0, "iso: host salva o cartao no fim da partida");
 	printf("     -> %s v%d\n", status, version);
 	n02_wecamp_logout();
-	n02_wecamp_commit(isoContent, iso.player[0], iso.sha256[0], isoPlayers, true, "Convidado", isoCard, status, sizeof(status), &version);
+	n02_wecamp_commit(isoContent, iso.player[0], iso.sha256[0], isoPlayers, true, 1, "Convidado", isoCard, status, sizeof(status), &version);
 	CHECK(strcmp(status, "already") == 0, "iso: envio igual do convidado (15 s depois) nao muda nada");
 	memcpy(other, isoCard, N02_MCD_SIZE);
 	other[9000] ^= 0x22;
-	n02_wecamp_commit(isoContent, iso.player[0], iso.sha256[0], "A,B", true, "A", other, status, sizeof(status), &version);
+	n02_wecamp_commit(isoContent, iso.player[0], iso.sha256[0], "A,B", true, 1, "A", other, status, sizeof(status), &version);
 	CHECK(strcmp(status, "conflict") == 0, "iso: outra partida ao mesmo tempo nao sobrescreve");
-	n02_wecamp_commit(isoContent, iso.player[0], iso.sha256[0], isoPlayers, true, "Intruso", other, status, sizeof(status), &version);
+	n02_wecamp_commit(isoContent, iso.player[0], iso.sha256[0], isoPlayers, true, 1, "Intruso", other, status, sizeof(status), &version);
 	CHECK(strcmp(status, "not_in_players") == 0, "iso: quem nao esta na partida nao envia");
 	CHECK(n02_wecamp_checkout(isoContent, "MasterLeague.bin", isoPlayers, true, NULL, &isoGuest, err, sizeof(err))
 		&& isoGuest.version[0] == iso.version[0] + 1, "iso: a proxima partida comeca da versao salva");
 	CHECK(n02_wecamp_get_card(isoGuest.sha256[0], back, true) && memcmp(back, isoCard, N02_MCD_SIZE) == 0, "iso: cartao salvo volta igual");
+	CHECK(isoGuest.version[1] == iso.version[1] && strcmp(isoGuest.sha256[1], iso.sha256[1]) == 0,
+		"iso: salvar o slot 1 nao mexe no slot 2");
+
+	// Slot 2: its own card, sent with slot=2.
+	static char isoCard2[N02_MCD_SIZE + 1];
+	CHECK(n02_wecamp_get_card(iso.sha256[1], isoCard2, true), "iso slot 2: convidado baixa o cartao com a chave");
+	isoCard2[8192] = 0x7C;
+	isoCard2[8193] = (char)(GetTickCount() >> 8);
+	CHECK(n02_wecamp_login(mail1, pass, err, sizeof(err)), "iso slot 2: host logado de novo");
+	n02_wecamp_commit(isoContent, iso.player[1], iso.sha256[1], isoPlayers, true, 2, p1, isoCard2, status, sizeof(status), &version);
+	CHECK(strcmp(status, "committed") == 0, "iso slot 2: host salva o cartao do slot 2");
+	printf("     -> %s v%d\n", status, version);
+	n02_wecamp_logout();
+	n02_wecamp_commit(isoContent, iso.player[1], iso.sha256[1], isoPlayers, true, 2, "Convidado", isoCard2, status, sizeof(status), &version);
+	CHECK(strcmp(status, "already") == 0, "iso slot 2: envio igual do convidado nao muda nada");
+	n02_wecamp_commit(isoContent, iso.player[1], iso.sha256[1], isoPlayers, true, 3, "Convidado", isoCard2, status, sizeof(status), &version);
+	CHECK(strcmp(status, "bad_slot") == 0, "iso: slot que nao existe e recusado");
+	CHECK(n02_wecamp_checkout(isoContent, "MasterLeague.bin", isoPlayers, true, NULL, &isoGuest, err, sizeof(err))
+		&& isoGuest.version[1] == iso.version[1] + 1 && isoGuest.version[0] == iso.version[0] + 1,
+		"iso slot 2: a proxima partida comeca das versoes salvas dos dois slots");
+	CHECK(n02_wecamp_get_card(isoGuest.sha256[1], back, true) && memcmp(back, isoCard2, N02_MCD_SIZE) == 0,
+		"iso slot 2: cartao salvo volta igual");
 
 	// M. Card Online with one account: the host without one (not logged in
 	// here) checks the guest's ticket with the DLL's key, and both PCs get

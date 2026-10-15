@@ -348,8 +348,9 @@ bool n02_wecamp_checkout(const char* contentId, const char* gameName, const char
 	UrlEncode(gameName ? gameName : "", g, sizeof(g));
 	UrlEncode(players, pl, sizeof(pl));
 	UrlEncode(accounts ? accounts : "", ac, sizeof(ac));
+	// iso_slots=2: this DLL also plays (and sends back) the slot 2 card.
 	int len = _snprintf(body, sizeof(body), "content_id=%s&game_name=%s&players=%s%s%s%s", c, g, pl,
-		iso ? "&mode=iso" : "", accounts ? "&accounts=" : "", accounts ? ac : "");
+		iso ? "&mode=iso&iso_slots=2" : "", accounts ? "&accounts=" : "", accounts ? ac : "");
 	AuthOrKeyHeader(headers, sizeof(headers), iso || accounts, "Content-Type: application/x-www-form-urlencoded\r\n");
 	int status = HttpsRequest("POST", "/api/mc/checkout", headers, body, len, resp, sizeof(resp), NULL);
 	char value[128];
@@ -368,7 +369,7 @@ bool n02_wecamp_checkout(const char* contentId, const char* gameName, const char
 	out->slots = atoi(value);
 	char mode[16];
 	KvGet(resp, "mode", mode, sizeof(mode));
-	if (iso && (strcmp(mode, "iso") != 0 || out->slots != 1)) {
+	if (iso && strcmp(mode, "iso") != 0) {
 		// An older server ignores mode=iso and would hand out the players' own cards.
 		_snprintf(err, errCap, "o WE Camp ainda nao tem o M. Card da ISO.");
 		err[errCap - 1] = 0;
@@ -429,16 +430,19 @@ bool n02_wecamp_get_card(const char* sha256, char* buf, bool useApiKey) {
 }
 
 bool n02_wecamp_commit(const char* contentId, const char* slotPlayer, const char* baseSha256,
-	const char* players, bool iso, const char* reporter, const char* data, char* status, int statusCap, int* version) {
+	const char* players, bool iso, int isoSlot, const char* reporter, const char* data, char* status, int statusCap,
+	int* version) {
 	if (status && statusCap > 0) status[0] = 0;
 	if (version) *version = 0;
-	char c[64], sp[128], pl[600], rp[128], path[1300], headers[512], resp[1024];
+	char c[64], sp[128], pl[600], rp[128], isoq[32] = "", path[1300], headers[512], resp[1024];
 	UrlEncode(contentId, c, sizeof(c));
 	UrlEncode(slotPlayer, sp, sizeof(sp));
 	UrlEncode(players, pl, sizeof(pl));
 	UrlEncode(reporter ? reporter : "", rp, sizeof(rp));
+	if (iso)
+		_snprintf(isoq, sizeof(isoq), "&mode=iso&slot=%d", isoSlot);
 	_snprintf(path, sizeof(path), "/api/mc/commit?content_id=%s&slot_player=%s&base_sha256=%s&players=%s%s&reporter=%s",
-		c, sp, baseSha256, pl, iso ? "&mode=iso" : "", rp);
+		c, sp, baseSha256, pl, isoq, rp);
 	path[sizeof(path) - 1] = 0;
 	AuthOrKeyHeader(headers, sizeof(headers), iso, "Content-Type: application/octet-stream\r\n");
 	int http = HttpsRequest("POST", path, headers, data, N02_MCD_SIZE, resp, sizeof(resp), NULL);

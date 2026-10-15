@@ -895,11 +895,13 @@ extern "C" {
 	       McCommitThread); the first send becomes the cards' new version.
 	   "Live room" = a Server-mode room or a P2P connection; the notices go to
 	   that mode's chat (McLog).
-	   "M. Card da ISO" goes the same way with a single card - the game's own,
-	   shared by everyone who plays it in that mode (e.g. a championship's
-	   Master League, one match at a time) - in slot 1, slot 2 empty. Only the
-	   host needs a WE Camp login; the others fetch and send it with the DLL's
-	   shared key. A replay of it carries the same marker ("sha -").
+	   "M. Card da ISO" goes the same way with the game's own cards, shared by
+	   everyone who plays it in that mode (e.g. a championship's Master League,
+	   one match at a time) - one in slot 1 and one in slot 2 (slot 2 stays
+	   empty with a server from before it existed). Only the host needs a WE
+	   Camp login; the others fetch and send them with the DLL's shared key. A
+	   card is sent back only when the match changed it. A replay of it carries
+	   the same marker.
 	   ------------------------------------------------------------------ */
 
 	static void McLog(const char* fmt, ...) {
@@ -916,7 +918,7 @@ extern "C" {
 
 	static struct {
 		bool live;              // a live room's cards - send them back at the end
-		bool iso;               // "M. Card da ISO": the game's card, slot 1 only
+		bool iso;               // "M. Card da ISO": the game's cards, slots 1 and 2
 		bool firstAccount;      // M. Card Online: we're the room's first confirmed account - we send first
 		char dir[MAX_PATH];
 		char contentId[32];
@@ -924,6 +926,7 @@ extern "C" {
 		int slots;
 		char owner[2][32];
 		char base[2][65];
+		char baseData[2][N02_MCD_SIZE]; // "M. Card da ISO": the cards as fetched, to send only what changed
 	} g_mc;
 
 	static bool McWriteCard(const char* dir, int slot, const char* data) {
@@ -1034,11 +1037,12 @@ extern "C" {
 				continue; // no confirmed account: the core makes a blank card, nothing is saved
 			if (!n02_wecamp_get_card(co.sha256[s], buf, !loggedIn) || !McWriteCard(dir, s, buf)) {
 				if (iso)
-					McLog("* M. Card da ISO: falha ao baixar o cartao do jogo.");
+					McLog("* M. Card da ISO: falha ao baixar o cartao do slot %d.", s + 1);
 				else
 					McLog("* Memory Card online: falha ao baixar o cartao de %s.", co.player[s]);
 				return -1;
 			}
+			memcpy(g_mc.baseData[s], buf, N02_MCD_SIZE);
 		}
 
 		// Sending online cards back takes a login (M. Card da ISO goes with
@@ -1064,8 +1068,12 @@ extern "C" {
 		}
 		McWriteMarker(co.sha256[0], co.slots > 1 ? co.sha256[1] : "");
 		if (iso) {
-			McLog("* M. Card da ISO: slot 1 = cartao do jogo (versao %d) - o host salva no WE Camp no fim da partida.",
-				co.version[0]);
+			if (co.slots > 1)
+				McLog("* M. Card da ISO: slot 1 = cartao 1 do jogo (versao %d), slot 2 = cartao 2 do jogo (versao %d) - "
+					"o host salva no WE Camp, no fim da partida, o cartao que mudar.", co.version[0], co.version[1]);
+			else
+				McLog("* M. Card da ISO: slot 1 = cartao do jogo (versao %d) - o host salva no WE Camp no fim da partida.",
+					co.version[0]);
 		} else {
 			char line[300] = "* Memory Card online:";
 			for (int s = 0; s < co.slots; s++) {
@@ -1116,6 +1124,7 @@ extern "C" {
 		int slots;
 		char owner[2][32];
 		char base[2][65];
+		char baseData[2][N02_MCD_SIZE]; // iso: the cards as fetched
 		bool host;
 		bool iso;
 		char nick[32];
@@ -1138,7 +1147,7 @@ extern "C" {
 				continue; // empty slot (no confirmed account) - nothing to save
 			char card[64];
 			if (job->iso)
-				strcpy(card, "M. Card da ISO");
+				_snprintf(card, sizeof(card), "M. Card da ISO (slot %d)", s + 1);
 			else
 				_snprintf(card, sizeof(card), "Memory Card de %s", job->owner[s]);
 			card[sizeof(card) - 1] = 0;
@@ -1146,9 +1155,15 @@ extern "C" {
 				McLog("* %s: nao encontrei o cartao para salvar.", card);
 				continue;
 			}
+			// "M. Card da ISO": a card the match didn't touch isn't sent at all.
+			if (job->iso && memcmp(data, job->baseData[s], N02_MCD_SIZE) == 0) {
+				if (job->host)
+					McLog("* %s sem alteracoes.", card);
+				continue;
+			}
 			char status[64];
 			int version = 0;
-			n02_wecamp_commit(job->contentId, job->owner[s], job->base[s], job->players, job->iso, job->nick,
+			n02_wecamp_commit(job->contentId, job->owner[s], job->base[s], job->players, job->iso, s + 1, job->nick,
 				data, status, sizeof(status), &version);
 			if (strcmp(status, "committed") == 0)
 				McLog("* %s salvo no WE Camp (versao %d).", card, version);
@@ -1183,6 +1198,7 @@ extern "C" {
 		job->slots = g_mc.slots;
 		memcpy(job->owner, g_mc.owner, sizeof(job->owner));
 		memcpy(job->base, g_mc.base, sizeof(job->base));
+		memcpy(job->baseData, g_mc.baseData, sizeof(job->baseData));
 		// Who sends right away: the host in "M. Card da ISO"; in M. Card
 		// Online the room's first confirmed account (the host's, when it has one).
 		job->host = g_mc.iso ? active_mod.IsHost() : g_mc.firstAccount;

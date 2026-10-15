@@ -69,9 +69,10 @@ struct n02_wecamp_checkout_result {
 // Start of an online-card match. players = nicks in 1P,2P,... order,
 // comma separated. Returns true on success; on failure err has the reason
 // (missing_account lists who has no confirmed account).
-// iso = "M. Card da ISO": one slot, the game's own card (no owner, the same
-// for everyone); a player who isn't logged in asks with the DLL's shared
-// API key.
+// iso = "M. Card da ISO": the game's own cards (no owner, the same for
+// everyone), one for slot 1 and one for slot 2 - a server from before slot 2
+// existed sends slot 1 only (slots = 1); a player who isn't logged in asks
+// with the DLL's shared API key.
 // accounts (M. Card Online; NULL = the old rule, both players need an
 // account): nicks whose WE Camp account the room confirmed, comma separated.
 // A player not in it gets an empty slot (player[s] and sha256[s] empty) -
@@ -87,10 +88,12 @@ bool n02_wecamp_get_card(const char* sha256, char* buf, bool useApiKey);
 
 // End of the match: the final content of one card. status receives the
 // server's verdict ("committed", "pending", "unchanged", "conflict", ...).
-// iso: the game's card (slotPlayer unused); reporter = our nick, which the
-// server notes when we send it with the API key (not logged in).
+// iso: one of the game's cards, isoSlot 1 or 2 (slotPlayer unused); reporter =
+// our nick, which the server notes when we send it with the API key (not
+// logged in).
 bool n02_wecamp_commit(const char* contentId, const char* slotPlayer, const char* baseSha256,
-	const char* players, bool iso, const char* reporter, const char* data, char* status, int statusCap, int* version);
+	const char* players, bool iso, int isoSlot, const char* reporter, const char* data, char* status, int statusCap,
+	int* version);
 
 // Discord voice channel of a match (wg-camp's /api/voice/join): the server
 // creates (or reuses) a private voice channel for the room's players in the
