@@ -101,8 +101,10 @@ echo.
 
 REM Embed the same version string CI would (see .github/workflows/build.yml);
 REM falls back to n02_version.h's own "dev" default if git isn't available.
+REM git -C: this script's own repo, whatever folder it is run from (from
+REM another repo it would embed that repo's tag).
 set GIT_REVISION=
-for /f "usebackq tokens=*" %%g in (`git describe --tags --always 2^>nul`) do set GIT_REVISION=%%g
+for /f "usebackq tokens=*" %%g in (`git -C "%~dp0." describe --tags --always 2^>nul`) do set GIT_REVISION=%%g
 set EXTRADEFINES=
 if defined GIT_REVISION set EXTRADEFINES=/p:ExtraDefines="GIT_REVISION=%GIT_REVISION%"
 
@@ -112,9 +114,10 @@ echo Building n02 (64-bit Release)...
 if %ERRORLEVEL% EQU 0 (
     echo.
     echo Build successful!
-    echo Output: %~dp0x64\Release\n02p.dll
+    echo Output: %~dp0x64\Release\kailleraclient.dll
+    echo Version: %GIT_REVISION%
     echo.
-    echo To use with RMG, copy n02p.dll to your RMG Bin\Release folder as kailleraclient.dll
+    echo To use with RMG, copy it to your RMG Bin\Release folder
 ) else (
     echo.
     echo Build failed with error code %ERRORLEVEL%
