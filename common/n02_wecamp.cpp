@@ -4,9 +4,12 @@
 
 #include <windows.h>
 #include <winhttp.h>
+#include <bcrypt.h>   // SHA-256 of a card (n02_wecamp_sha256)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#pragma comment(lib, "bcrypt.lib")
 
 static char g_token[128];
 static char g_username[32];
@@ -375,6 +378,8 @@ bool n02_wecamp_checkout(const char* contentId, const char* gameName, const char
 		err[errCap - 1] = 0;
 		return false;
 	}
+	char multi[8];
+	out->multiBase = KvGet(resp, "multi_base", multi, sizeof(multi)) && strcmp(multi, "1") == 0;
 	char rule[16];
 	KvGet(resp, "rule", rule, sizeof(rule));
 	if (!iso && accounts && strcmp(rule, "accounts") != 0) {
@@ -429,12 +434,34 @@ bool n02_wecamp_get_card(const char* sha256, char* buf, bool useApiKey) {
 	return status == 200 && len == N02_MCD_SIZE && buf[0] == 'M' && buf[1] == 'C';
 }
 
+bool n02_wecamp_sha256(const void* data, int len, char out[65]) {
+	BCRYPT_ALG_HANDLE alg = NULL;
+	BCRYPT_HASH_HANDLE hash = NULL;
+	unsigned char digest[32];
+	bool ok = false;
+	out[0] = 0;
+	if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, NULL, 0) >= 0) {
+		if (BCryptCreateHash(alg, &hash, NULL, 0, NULL, 0, 0) >= 0) {
+			ok = BCryptHashData(hash, (PUCHAR)data, (ULONG)len, 0) >= 0
+				&& BCryptFinishHash(hash, digest, sizeof(digest), 0) >= 0;
+			BCryptDestroyHash(hash);
+		}
+		BCryptCloseAlgorithmProvider(alg, 0);
+	}
+	if (!ok)
+		return false;
+	for (int i = 0; i < 32; i++)
+		sprintf(out + 2 * i, "%02x", digest[i]);
+	out[64] = 0;
+	return true;
+}
+
 bool n02_wecamp_commit(const char* contentId, const char* slotPlayer, const char* baseSha256,
 	const char* players, bool iso, int isoSlot, const char* reporter, const char* data, char* status, int statusCap,
 	int* version) {
 	if (status && statusCap > 0) status[0] = 0;
 	if (version) *version = 0;
-	char c[64], sp[128], pl[600], rp[128], isoq[32] = "", path[1300], headers[512], resp[1024];
+	char c[64], sp[128], pl[600], rp[128], isoq[32] = "", path[3000], headers[512], resp[1024];
 	UrlEncode(contentId, c, sizeof(c));
 	UrlEncode(slotPlayer, sp, sizeof(sp));
 	UrlEncode(players, pl, sizeof(pl));

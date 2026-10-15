@@ -31,6 +31,24 @@ wecamp_client.exe Pele Mtgamess segredo123
 
 O servidor fica em primeiro plano - rode o cliente em outro terminal.
 
+## mc_session_test
+
+Roda o código de verdade do M. Card online do DLL (a `McSession` do
+`kailleraclient.cpp`, copiada pelo `extract_mc_region.py` no `build.cmd`) com
+uma sala simulada, contra o mesmo wg-camp local: o jogo gravando o cartão
+setor por setor, o envio do save durante a partida (só depois que o cartão
+fica 3 s parado), a linha "Memory Card Online Slot X foi salvo." no chat
+(saindo pela thread do jogo), o envio do fim da partida, a partida sem save
+(nada enviado) e o convidado, que só anota os saves e envia 15 s depois do
+fim (o host caiu).
+
+```
+mc_session_test.exe
+```
+
+Ele usa o mesmo `n02.ini` e se recusa a rodar se o `WECAMP_HOST` não for
+`127.0.0.1` - sem o `n02.ini`, o DLL falaria com o WE Camp de produção.
+
 Também testa os ingressos das salas "Só logados WE Camp": pedido pelo
 jogador, conferido pelo host, recusado em outra sala, de uso único, e falso.
 
@@ -75,3 +93,7 @@ Neste PC (Python 3.14 do E:\Projetos), o `local_wgcamp.py` precisou de dois
 ajustes: ler o `n02_stream.h` como Latin-1 e não perguntar o nome da máquina
 (`socket.getfqdn`). Para compilar aqui, o `vcvars64.bat` é o do VS 2019
 BuildTools (`C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools`).
+
+Depois, os saves durante a partida: o checkout traz `multi_base=1` e o
+SHA-256 que o DLL calcula é o mesmo do WE Camp - 85 verificações, todas OK.
+O `mc_session_test`: 20 verificações, todas OK.

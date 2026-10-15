@@ -174,6 +174,7 @@ int main(int argc, char** argv) {
 	CHECK(iso.slots == 2 && strcmp(iso.player[0], "ISO") == 0 && strcmp(iso.player[1], "ISO") == 0
 		&& strlen(iso.sha256[1]) == 64, "iso: dois slots, os cartoes do jogo");
 	printf("     -> slot 1 v%d %.16s..., slot 2 v%d %.16s...\n", iso.version[0], iso.sha256[0], iso.version[1], iso.sha256[1]);
+	CHECK(iso.multiBase, "iso: o servidor aceita a lista de bases (saves durante a partida)");
 	n02_wecamp_logout();
 	n02_wecamp_checkout_result isoGuest;
 	CHECK(!n02_wecamp_checkout(isoContent, "MasterLeague.bin", isoPlayers, false, NULL, &isoGuest, err, sizeof(err)),
@@ -225,6 +226,9 @@ int main(int argc, char** argv) {
 		"iso slot 2: a proxima partida comeca das versoes salvas dos dois slots");
 	CHECK(n02_wecamp_get_card(isoGuest.sha256[1], back, true) && memcmp(back, isoCard2, N02_MCD_SIZE) == 0,
 		"iso slot 2: cartao salvo volta igual");
+	char localSha[65];
+	CHECK(n02_wecamp_sha256(back, N02_MCD_SIZE, localSha) && strcmp(localSha, isoGuest.sha256[1]) == 0,
+		"sha256 do DLL igual ao do WE Camp");
 
 	// M. Card Online with one account: the host without one (not logged in
 	// here) checks the guest's ticket with the DLL's key, and both PCs get
