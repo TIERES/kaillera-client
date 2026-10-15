@@ -20,9 +20,23 @@
         },
         {
             "label": "Publish release to updater",
-            "detail": "Downloads the latest (or a chosen) GitHub release and publishes it to the community server so the self-updater offers it - see deploy/publish_release.sh",
+            "detail": "Publishes a GitHub release (DLL-only update) plus the last light zip empacotar.ps1 generated (full RetroArch TIERES package: only the files the site doesn't have yet) - see deploy/publish_release.sh",
             "type": "shell",
             "command": "bash deploy/publish_release.sh ${input:releaseTag}",
+            "options": {
+                "shell": {
+                    "executable": "C:\\Program Files\\Git\\bin\\bash.exe",
+                    "args": ["-l", "-c"]
+                }
+            },
+            "group": "none",
+            "problemMatcher": []
+        },
+        {
+            "label": "Publish release to updater (simular)",
+            "detail": "Same checks and comparison with the site as the task above, but uploads nothing",
+            "type": "shell",
+            "command": "bash deploy/publish_release.sh ${input:releaseTag} --simular",
             "options": {
                 "shell": {
                     "executable": "C:\\Program Files\\Git\\bin\\bash.exe",

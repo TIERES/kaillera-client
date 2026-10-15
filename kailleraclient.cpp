@@ -727,6 +727,11 @@ extern "C" {
 #endif
 	}
 	void KAILLERA_DLLEXP kailleraSelectServerDialog(void* parent){
+		// kailleraInit() just installed a package update and RetroArch is
+		// closing to reopen with it - no Kaillera window this time.
+		if (n02_update_restart_pending())
+			return;
+
 		KSSDFA.state = 0;
 		KSSDFA.input = 0;
 
