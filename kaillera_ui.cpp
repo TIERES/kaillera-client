@@ -3869,7 +3869,7 @@ void ShowCustomIPDialog(HWND hDlg) {
 // with e-mail + password. Only the API token returned by the site is kept
 // (n02.ini, see common/n02_wecamp.h), never the password. While logged in,
 // the nick IS the account's username: the server list's Nick field shows it
-// and is locked until "Sair".
+// and is locked until "Desconectar".
 
 static void WeCampApplyNick(HWND ssdlg) {
 	HWND nick = GetDlgItem(ssdlg, IDC_USRNAME);
@@ -3905,7 +3905,7 @@ static void WeCampDiscordRefresh(HWND hDlg) {
 }
 
 // Two faces: logged out (e-mail, password, Entrar, links) and logged in
-// (the account's e-mail and username, the Discord voice call, Sair).
+// (the account's e-mail and username, the Discord voice call, Desconectar).
 static void WeCampDialogRefresh(HWND hDlg) {
 	char text[240];
 	bool in = n02_wecamp_logged_in();
