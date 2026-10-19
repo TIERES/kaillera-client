@@ -1202,6 +1202,12 @@ extern "C" {
 			delete m;
 			return -1;
 		}
+		if (loggedIn && !n02_wecamp_logged_in()) {
+			// The site refused our login (the checkout went again with the
+			// DLL's key): from here on, a PC without one.
+			loggedIn = false;
+			McLog("* A sua conexao com a conta WE Camp caiu: entre de novo pelo botao \"M. Card Online\" da tela inicial do Kaillera.");
+		}
 		for (int s = 0; s < co.slots; s++) {
 			if (co.sha256[s][0] == 0)
 				continue; // no confirmed account: the core makes a blank card, nothing is saved

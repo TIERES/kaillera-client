@@ -33,7 +33,15 @@ int main(int argc, char** argv) {
 	_strlwr(mail1);
 	_strlwr(mail2);
 
+	setvbuf(stdout, NULL, _IONBF, 0);
+	// Only ever against the local wg-camp: refuse to run if n02.ini doesn't point there.
 	nSettings::Initialize((char*)"SC");
+	char host[128];
+	nSettings::get_str_in((char*)"SC", (char*)"WECAMP_HOST", host, (char*)"");
+	if (strcmp(host, "127.0.0.1") != 0) {
+		printf("n02.ini nao aponta para o wg-camp local (WECAMP_HOST=%s) - abortado\n", host);
+		return 2;
+	}
 	n02_wecamp_load();
 	n02_wecamp_logout();
 	CHECK(!n02_wecamp_logged_in(), "comeca desconectado");
@@ -250,6 +258,67 @@ int main(int argc, char** argv) {
 	CHECK(!n02_wecamp_checkout(content, "WE2002.bin", "SemConta,Outro456", false, "", &oneHost, err, sizeof(err)),
 		"uma conta: sem nenhuma conta na sala e recusado");
 	printf("     -> %s\n", err);
+	// A token the site no longer knows ("Desconectar" in another RetroArch
+	// that had this same n02.ini): the login is forgotten, and what the DLL's
+	// key can do still works - the "M. Card da ISO" cards above all.
+	char dead[128], user2[64];
+	CHECK(n02_wecamp_login(mail2, pass, err, sizeof(err)), "token recusado: convidado logado");
+	nSettings::get_str_in((char*)"SC", (char*)"WECAMP_TOKEN", dead, (char*)"");
+	strcpy(user2, n02_wecamp_username());
+	n02_wecamp_logout(); // the other window's "Desconectar": the same token, revoked
+	#define PLANT_DEAD_TOKEN() do { \
+		nSettings::set_str_in((char*)"SC", (char*)"WECAMP_TOKEN", dead); \
+		nSettings::set_str_in((char*)"SC", (char*)"WECAMP_USER", user2); \
+		n02_wecamp_load(); } while (0)
+	PLANT_DEAD_TOKEN();
+	CHECK(n02_wecamp_logged_in(), "token recusado: parece logado antes de falar com o site");
+	CHECK(!n02_wecamp_get_ticket("90", ticket, sizeof(ticket), err, sizeof(err)), "token recusado: ingresso negado");
+	printf("     -> %s\n", err);
+	CHECK(strstr(err, "caiu") != NULL, "token recusado: a mensagem diz que a conexao caiu");
+	char saved[128];
+	nSettings::get_str_in((char*)"SC", (char*)"WECAMP_TOKEN", saved, (char*)"x");
+	CHECK(!n02_wecamp_logged_in() && saved[0] == 0, "token recusado: login esquecido (memoria e n02.ini)");
+
+	PLANT_DEAD_TOKEN();
+	char isoPlayersDead[100];
+	_snprintf(isoPlayersDead, sizeof(isoPlayersDead), "%s,%s", p1, p2);
+	n02_wecamp_checkout_result isoDead;
+	CHECK(n02_wecamp_checkout(isoContent, "MasterLeague.bin", isoPlayersDead, true, NULL, &isoDead, err, sizeof(err)) && isoDead.slots == 2,
+		"token recusado: checkout do M. Card da ISO vai de novo com a chave");
+	CHECK(!n02_wecamp_logged_in(), "token recusado: checkout esquece o login");
+	CHECK(strcmp(isoDead.sha256[0], isoGuest.sha256[0]) == 0 && strcmp(isoDead.sha256[1], isoGuest.sha256[1]) == 0,
+		"token recusado: os mesmos cartoes da ISO que os outros PCs");
+	PLANT_DEAD_TOKEN();
+	CHECK(n02_wecamp_get_card(isoDead.sha256[1], back, false) && memcmp(back, isoCard2, N02_MCD_SIZE) == 0,
+		"token recusado: cartao baixado com a chave");
+	PLANT_DEAD_TOKEN();
+	char isoStatus[64];
+	int isoVersion = 0;
+	isoCard2[8194] = 0x5A; // a save in this match
+	CHECK(n02_wecamp_commit(isoContent, "", isoDead.sha256[1], isoPlayersDead, true, 2, user2, isoCard2, isoStatus, sizeof(isoStatus), &isoVersion)
+		&& strcmp(isoStatus, "committed") == 0, "token recusado: envio do M. Card da ISO vai com a chave");
+	printf("     -> %s v%d\n", isoStatus, isoVersion);
+
+	CHECK(n02_wecamp_login(mail2, pass, err, sizeof(err)), "token recusado: convidado entra de novo");
+	CHECK(n02_wecamp_get_ticket("91", ticket, sizeof(ticket), err, sizeof(err)), "token recusado: ingresso do login novo");
+	PLANT_DEAD_TOKEN();
+	CHECK(n02_wecamp_verify_ticket(ticket, "91", account, sizeof(account), err, sizeof(err)) && _stricmp(account, p2) == 0,
+		"token recusado: host confere o ingresso com a chave");
+
+	// Another window of the same folder logged in again (n02.ini has a newer
+	// token): only this window's dead one is forgotten.
+	CHECK(n02_wecamp_login(mail1, pass, err, sizeof(err)), "token recusado: outra janela loga de novo");
+	char fresh[128];
+	nSettings::get_str_in((char*)"SC", (char*)"WECAMP_TOKEN", fresh, (char*)"");
+	PLANT_DEAD_TOKEN();
+	nSettings::set_str_in((char*)"SC", (char*)"WECAMP_TOKEN", fresh);
+	CHECK(!n02_wecamp_refresh_discord() && !n02_wecamp_logged_in(), "token recusado: whoami esquece o login");
+	nSettings::get_str_in((char*)"SC", (char*)"WECAMP_TOKEN", saved, (char*)"");
+	CHECK(strcmp(saved, fresh) == 0, "token recusado: o login novo da outra janela fica no n02.ini");
+	n02_wecamp_load();
+	CHECK(n02_wecamp_logged_in() && n02_wecamp_get_ticket("92", ticket, sizeof(ticket), err, sizeof(err)),
+		"token recusado: o login novo continua valendo");
+
 	CHECK(n02_wecamp_login(mail1, pass, err, sizeof(err)), "login do jogador 1 (fim)");
 
 	n02_wecamp_logout();

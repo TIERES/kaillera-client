@@ -768,6 +768,7 @@ void p2p_ping_callback(int PING){
 #define N02_MEMCARD_CHOICE_ISO    2
 #define WM_N02_P2P_SENDCHAT    (WM_APP + 90)
 #define WM_N02_P2P_LOGINRESULT (WM_APP + 91)
+#define WM_N02_P2P_WECAMP_CHECKED (WM_APP + 92) // the saved login was checked with the site (P2P window)
 #define P2P_COLOR_OK RGB(0, 153, 0)
 extern char peername[32];
 static volatile bool g_p2p_no_memcard = true;
@@ -963,6 +964,10 @@ static DWORD WINAPI P2PSendTicketThread(LPVOID param){
 		p2p_PostChat(line);
 	} else {
 		outpf("* Nao consegui confirmar sua conta WE Camp: %s", err);
+		// The site refused our login (it's forgotten now): answer like any
+		// player without one, so the host doesn't wait for the timeout.
+		if (!n02_wecamp_logged_in())
+			p2p_PostChat(N02_TICKET_CHAT_PREFIX N02_TICKET_NOACCOUNT);
 	}
 	free(room);
 	return 0;
@@ -2415,7 +2420,7 @@ LRESULT CALLBACK P2PSelectionDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPA
 			
 			nSettings::Initialize();
 			n02_wecamp_load();
-			n02_wecamp_refresh_discord_async(NULL, 0); // see kaillera_ui.cpp
+			n02_wecamp_refresh_discord_async(hDlg, WM_N02_P2P_WECAMP_CHECKED); // see kaillera_ui.cpp
 
 			SetDlgItemInt(hDlg, IDC_PORT, nSettings::get_int("IDC_PORT", 27886), false);
 
@@ -2468,6 +2473,13 @@ LRESULT CALLBACK P2PSelectionDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPA
 
 				UpdateModeRadioButtons(hDlg);
 
+			}
+			break;
+		case WM_N02_P2P_WECAMP_CHECKED:
+			// wParam 1: the site refused the saved WE Camp login - it's gone now.
+			if (wParam && !n02_wecamp_logged_in()) {
+				EnableWindow(GetDlgItem(hDlg, IDC_USRNAME), TRUE);
+				MessageBox(hDlg, N02_WECAMP_REFUSED_NOTICE, "Conta WE Camp", MB_OK | MB_ICONWARNING);
 			}
 			break;
 		case WM_CLOSE:

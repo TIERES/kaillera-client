@@ -43,8 +43,17 @@ bool n02_wecamp_voice_enabled();
 void n02_wecamp_set_voice_enabled(bool on);
 bool n02_wecamp_refresh_discord();
 // Same, on a worker thread; posts msg to notify (if any) when the site
-// answered.
+// answered - wParam 1: it refused the token and the login is gone.
 void n02_wecamp_refresh_discord_async(HWND notify, UINT msg);
+
+// Any call whose token the site refuses (HTTP 401: "Desconectar" in another
+// RetroArch or PC with this same n02.ini, password changed, connection
+// removed on the site) forgets the login - n02_wecamp_logged_in() turns
+// false - and the calls the DLL's key can make go again with it. What the
+// player is told when that's noticed on opening the window:
+#define N02_WECAMP_REFUSED_NOTICE "Sua conta WE Camp nao esta mais conectada neste PC: o site recusou a conexao " \
+	"salva (\"Desconectar\" em outro RetroArch ou PC que usava a mesma, troca de senha ou conexao removida no site).\n\n" \
+	"Entre de novo pelo botao \"M. Card Online\"."
 
 // Logs in with the account's e-mail and password. Returns true and stores
 // token+username+e-mail on success; otherwise false with a message for the
