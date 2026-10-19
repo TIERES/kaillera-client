@@ -97,3 +97,15 @@ BuildTools (`C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools`).
 Depois, os saves durante a partida: o checkout traz `multi_base=1` e o
 SHA-256 que o DLL calcula é o mesmo do WE Camp - 85 verificações, todas OK.
 O `mc_session_test`: 20 verificações, todas OK.
+
+## Resultado (2026-10-19)
+
+102 verificações, todas OK. As novas são do token que o site não conhece
+mais ("Desconectar" em outro RetroArch que tinha o mesmo `n02.ini`): o pedido
+de ingresso é negado com a mensagem "sua conexao ... caiu" e o login é
+esquecido (memória e `n02.ini`); o checkout, o download e o envio do
+"M. Card da ISO" e a conferência de ingresso do host vão de novo com a chave
+do DLL; e, se outra janela da mesma pasta já logou de novo, só o token morto
+é esquecido - o login novo fica no `n02.ini`. O `wecamp_client` agora também
+se recusa a rodar se o `n02.ini` não apontar para `127.0.0.1`.
+O `mc_session_test`: 18 verificações, todas OK.

@@ -162,15 +162,92 @@ static void UrlEncode(const char* in, char* out, int cap) {
 	out[o] = 0;
 }
 
-static void AuthHeader(char* out, int cap, const char* more) {
-	_snprintf(out, cap, "Authorization: Bearer %s\r\n%s", g_token, more ? more : "");
+static void TokenHeader(char* out, int cap, const char* token, const char* more) {
+	_snprintf(out, cap, "Authorization: Bearer %s\r\n%s", token, more ? more : "");
 	out[cap - 1] = 0;
+}
+
+static void AuthHeader(char* out, int cap, const char* more) {
+	TokenHeader(out, cap, g_token, more);
+}
+
+static void KeyHeader(char* out, int cap, const char* more) {
+	_snprintf(out, cap, "X-Api-Key: %s\r\n%s", N02_STREAM_DEFAULT_API_KEY, more ? more : "");
+	out[cap - 1] = 0;
+}
+
+// The site no longer knows the token (HTTP 401 invalid_token): "Desconectar"
+// in another RetroArch or PC that had this same n02.ini, the password changed,
+// the connection removed on the site.
+static bool TokenRefused(int status, const char* resp) {
+	if (status != 401)
+		return false;
+	char code[32];
+	KvGet(resp, "error", code, sizeof(code));
+	return strcmp(code, "invalid_token") == 0;
+}
+
+#define N02_WECAMP_REFUSED_TEXT "sua conexao com a conta WE Camp caiu (foi desconectada em outro RetroArch ou PC?). " \
+	"Entre de novo pelo botao \"M. Card Online\" da tela inicial do Kaillera."
+
+static void ClearSavedLogin() {
+	nSettings::set_int_in(N02_WECAMP_SECTION, (char*)"DISCORD_LINKED", 0);
+	nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"DISCORD_NAME", (char*)"");
+	nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_TOKEN", (char*)"");
+	nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_USER", (char*)"");
+	nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_EMAIL", (char*)"");
+}
+
+// A refused token is forgotten: kept, it made every call fail - "M. Card da
+// ISO" cards included, which need no login - while the DLL went on showing
+// the account as logged in. n02.ini is cleared only while it still holds
+// that token (not another window's newer login).
+static void ForgetRefusedLogin(const char* refused) {
+	if (strcmp(g_token, refused) != 0)
+		return; // logged in again meanwhile
+	g_token[0] = 0;
+	g_username[0] = 0;
+	g_email[0] = 0;
+	g_discord_linked = false;
+	g_discord_name[0] = 0;
+	char saved[128];
+	nSettings::get_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_TOKEN", saved, (char*)"");
+	saved[sizeof(saved) - 1] = 0;
+	if (strcmp(saved, refused) == 0)
+		ClearSavedLogin();
+}
+
+// A request that identifies us: our token - or the DLL's key when allowKey
+// and we have no login. A refused token is forgotten and, with allowKey, the
+// request goes again with the key. refused (optional) tells the caller.
+static int AuthRequest(bool allowKey, const char* method, const char* path, const char* more,
+	const char* body, int bodyLen, char* resp, int respCap, int* respLen, bool* refused = NULL) {
+	if (refused) *refused = false;
+	char token[sizeof(g_token)], headers[512];
+	strncpy(token, g_token, sizeof(token) - 1); // another thread may forget it meanwhile
+	token[sizeof(token) - 1] = 0;
+	bool key = allowKey && !n02_wecamp_logged_in();
+	if (key)
+		KeyHeader(headers, sizeof(headers), more);
+	else
+		TokenHeader(headers, sizeof(headers), token, more);
+	int status = HttpsRequest(method, path, headers, body, bodyLen, resp, respCap, respLen);
+	if (key || token[0] == 0 || !TokenRefused(status, resp))
+		return status;
+	ForgetRefusedLogin(token);
+	if (refused) *refused = true;
+	if (!allowKey)
+		return status;
+	KeyHeader(headers, sizeof(headers), more);
+	return HttpsRequest(method, path, headers, body, bodyLen, resp, respCap, respLen);
 }
 
 static void ErrorFrom(int status, const char* resp, char* err, int errCap) {
 	if (err == NULL || errCap <= 0)
 		return;
-	if (status == 0) {
+	if (TokenRefused(status, resp)) {
+		_snprintf(err, errCap, "%s", N02_WECAMP_REFUSED_TEXT);
+	} else if (status == 0) {
 		_snprintf(err, errCap, "Sem conexao com o WE Camp (%s).", N02_WECAMP_HOST);
 	} else {
 		char message[256];
@@ -230,15 +307,21 @@ void n02_wecamp_set_voice_enabled(bool on) {
 	nSettings::set_int_in(N02_WECAMP_SECTION, (char*)"DISCORD_VOICE", on ? 1 : 0);
 }
 
-bool n02_wecamp_refresh_discord() {
+// 1 = refreshed, 0 = no answer (or not logged in), -1 = the token was
+// refused - the login is gone.
+static int RefreshDiscord() {
 	if (!n02_wecamp_logged_in())
-		return false;
-	char headers[256], resp[1024];
-	AuthHeader(headers, sizeof(headers), NULL);
-	if (HttpsRequest("GET", "/api/mc/whoami", headers, NULL, 0, resp, sizeof(resp), NULL) != 200)
-		return false;
+		return 0;
+	char resp[1024];
+	bool refused;
+	if (AuthRequest(false, "GET", "/api/mc/whoami", NULL, NULL, 0, resp, sizeof(resp), NULL, &refused) != 200)
+		return refused ? -1 : 0;
 	ApplyDiscord(resp);
-	return true;
+	return 1;
+}
+
+bool n02_wecamp_refresh_discord() {
+	return RefreshDiscord() > 0;
 }
 
 bool n02_wecamp_login(const char* email, const char* password, char* err, int errCap) {
@@ -286,11 +369,7 @@ void n02_wecamp_logout() {
 	g_email[0] = 0;
 	g_discord_linked = false;
 	g_discord_name[0] = 0;
-	nSettings::set_int_in(N02_WECAMP_SECTION, (char*)"DISCORD_LINKED", 0);
-	nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"DISCORD_NAME", (char*)"");
-	nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_TOKEN", (char*)"");
-	nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_USER", (char*)"");
-	nSettings::set_str_in(N02_WECAMP_SECTION, (char*)"WECAMP_EMAIL", (char*)"");
+	ClearSavedLogin();
 }
 
 bool n02_wecamp_get_ticket(const char* room, char* ticket, int ticketCap, char* err, int errCap) {
@@ -300,11 +379,11 @@ bool n02_wecamp_get_ticket(const char* room, char* ticket, int ticketCap, char* 
 		err[errCap - 1] = 0;
 		return false;
 	}
-	char r[160], body[200], resp[512], headers[512];
+	char r[160], body[200], resp[512];
 	UrlEncode(room, r, sizeof(r));
 	int len = _snprintf(body, sizeof(body), "room=%s", r);
-	AuthHeader(headers, sizeof(headers), "Content-Type: application/x-www-form-urlencoded\r\n");
-	int status = HttpsRequest("POST", "/api/mc/ticket", headers, body, len, resp, sizeof(resp), NULL);
+	int status = AuthRequest(false, "POST", "/api/mc/ticket", "Content-Type: application/x-www-form-urlencoded\r\n",
+		body, len, resp, sizeof(resp), NULL);
 	if (status != 200 || !KvGet(resp, "ticket", ticket, ticketCap)) {
 		ErrorFrom(status, resp, err, errCap);
 		return false;
@@ -312,25 +391,15 @@ bool n02_wecamp_get_ticket(const char* room, char* ticket, int ticketCap, char* 
 	return true;
 }
 
-// Our token, or - without a login, where allowed - the DLL's shared key.
-static void AuthOrKeyHeader(char* out, int cap, bool allowKey, const char* more) {
-	if (allowKey && !n02_wecamp_logged_in()) {
-		_snprintf(out, cap, "X-Api-Key: %s\r\n%s", N02_STREAM_DEFAULT_API_KEY, more ? more : "");
-		out[cap - 1] = 0;
-	} else {
-		AuthHeader(out, cap, more);
-	}
-}
-
 bool n02_wecamp_verify_ticket(const char* ticket, const char* room, char* username, int usernameCap, char* err, int errCap) {
 	if (username && usernameCap > 0) username[0] = 0;
-	char t[200], r[160], body[400], resp[512], headers[512];
+	char t[200], r[160], body[400], resp[512];
 	UrlEncode(ticket, t, sizeof(t));
 	UrlEncode(room, r, sizeof(r));
 	int len = _snprintf(body, sizeof(body), "ticket=%s&room=%s", t, r);
 	// A host without an account checks it too (with the DLL's key).
-	AuthOrKeyHeader(headers, sizeof(headers), true, "Content-Type: application/x-www-form-urlencoded\r\n");
-	int status = HttpsRequest("POST", "/api/mc/verify-ticket", headers, body, len, resp, sizeof(resp), NULL);
+	int status = AuthRequest(true, "POST", "/api/mc/verify-ticket", "Content-Type: application/x-www-form-urlencoded\r\n",
+		body, len, resp, sizeof(resp), NULL);
 	if (status != 200 || !KvGet(resp, "username", username, usernameCap) || username[0] == 0) {
 		ErrorFrom(status, resp, err, errCap);
 		return false;
@@ -346,7 +415,7 @@ bool n02_wecamp_checkout(const char* contentId, const char* gameName, const char
 		err[errCap - 1] = 0;
 		return false;
 	}
-	char c[64], g[400], pl[600], ac[600], body[1900], resp[2048], headers[512];
+	char c[64], g[400], pl[600], ac[600], body[1900], resp[2048];
 	UrlEncode(contentId, c, sizeof(c));
 	UrlEncode(gameName ? gameName : "", g, sizeof(g));
 	UrlEncode(players, pl, sizeof(pl));
@@ -354,8 +423,8 @@ bool n02_wecamp_checkout(const char* contentId, const char* gameName, const char
 	// iso_slots=2: this DLL also plays (and sends back) the slot 2 card.
 	int len = _snprintf(body, sizeof(body), "content_id=%s&game_name=%s&players=%s%s%s%s", c, g, pl,
 		iso ? "&mode=iso&iso_slots=2" : "", accounts ? "&accounts=" : "", accounts ? ac : "");
-	AuthOrKeyHeader(headers, sizeof(headers), iso || accounts, "Content-Type: application/x-www-form-urlencoded\r\n");
-	int status = HttpsRequest("POST", "/api/mc/checkout", headers, body, len, resp, sizeof(resp), NULL);
+	int status = AuthRequest(iso || accounts, "POST", "/api/mc/checkout", "Content-Type: application/x-www-form-urlencoded\r\n",
+		body, len, resp, sizeof(resp), NULL);
 	char value[128];
 	if (status != 200 || !KvGet(resp, "slots", value, sizeof(value))) {
 		KvGet(resp, "error", value, sizeof(value));
@@ -424,13 +493,13 @@ bool n02_wecamp_get_card(const char* sha256, char* buf, bool useApiKey) {
 	char path[128], headers[512];
 	_snprintf(path, sizeof(path), "/api/mc/card/%s", sha256);
 	path[sizeof(path) - 1] = 0;
-	if (useApiKey)
-		_snprintf(headers, sizeof(headers), "X-Api-Key: %s\r\n", N02_STREAM_DEFAULT_API_KEY);
-	else
-		AuthHeader(headers, sizeof(headers), NULL);
-	headers[sizeof(headers) - 1] = 0;
-	int len = 0;
-	int status = HttpsRequest("GET", path, headers, NULL, 0, buf, N02_MCD_SIZE + 1, &len);
+	int len = 0, status;
+	if (useApiKey) {
+		KeyHeader(headers, sizeof(headers), NULL);
+		status = HttpsRequest("GET", path, headers, NULL, 0, buf, N02_MCD_SIZE + 1, &len);
+	} else {
+		status = AuthRequest(true, "GET", path, NULL, NULL, 0, buf, N02_MCD_SIZE + 1, &len);
+	}
 	return status == 200 && len == N02_MCD_SIZE && buf[0] == 'M' && buf[1] == 'C';
 }
 
@@ -461,7 +530,7 @@ bool n02_wecamp_commit(const char* contentId, const char* slotPlayer, const char
 	int* version) {
 	if (status && statusCap > 0) status[0] = 0;
 	if (version) *version = 0;
-	char c[64], sp[128], pl[600], rp[128], isoq[32] = "", path[3000], headers[512], resp[1024];
+	char c[64], sp[128], pl[600], rp[128], isoq[32] = "", path[3000], resp[1024];
 	UrlEncode(contentId, c, sizeof(c));
 	UrlEncode(slotPlayer, sp, sizeof(sp));
 	UrlEncode(players, pl, sizeof(pl));
@@ -471,8 +540,8 @@ bool n02_wecamp_commit(const char* contentId, const char* slotPlayer, const char
 	_snprintf(path, sizeof(path), "/api/mc/commit?content_id=%s&slot_player=%s&base_sha256=%s&players=%s%s&reporter=%s",
 		c, sp, baseSha256, pl, isoq, rp);
 	path[sizeof(path) - 1] = 0;
-	AuthOrKeyHeader(headers, sizeof(headers), iso, "Content-Type: application/octet-stream\r\n");
-	int http = HttpsRequest("POST", path, headers, data, N02_MCD_SIZE, resp, sizeof(resp), NULL);
+	int http = AuthRequest(iso, "POST", path, "Content-Type: application/octet-stream\r\n",
+		data, N02_MCD_SIZE, resp, sizeof(resp), NULL);
 	char value[64];
 	if (status) {
 		if (!KvGet(resp, "status", status, statusCap)) {
@@ -493,11 +562,11 @@ bool n02_wecamp_voice_join(const char* players, char* status, int statusCap, cha
 		errCode[errCodeCap - 1] = 0;
 		return false;
 	}
-	char pl[600], body[700], resp[1024], headers[512];
+	char pl[600], body[700], resp[1024];
 	UrlEncode(players, pl, sizeof(pl));
 	int len = _snprintf(body, sizeof(body), "players=%s", pl);
-	AuthHeader(headers, sizeof(headers), "Content-Type: application/x-www-form-urlencoded\r\n");
-	int status_ = HttpsRequest("POST", "/api/voice/join", headers, body, len, resp, sizeof(resp), NULL);
+	int status_ = AuthRequest(false, "POST", "/api/voice/join", "Content-Type: application/x-www-form-urlencoded\r\n",
+		body, len, resp, sizeof(resp), NULL);
 	if (status_ != 200 || !KvGet(resp, "status", status, statusCap)) {
 		KvGet(resp, "error", errCode, errCodeCap);
 		ErrorFrom(status_, resp, err, errCap);
@@ -515,8 +584,9 @@ struct RefreshJob {
 
 static DWORD WINAPI RefreshDiscordThread(LPVOID param) {
 	RefreshJob* job = (RefreshJob*)param;
-	if (n02_wecamp_refresh_discord() && job->notify && IsWindow(job->notify))
-		PostMessage(job->notify, job->msg, 0, 0);
+	int r = RefreshDiscord();
+	if (r != 0 && job->notify && IsWindow(job->notify))
+		PostMessage(job->notify, job->msg, r < 0 ? 1 : 0, 0);
 	delete job;
 	return 0;
 }

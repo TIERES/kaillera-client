@@ -1106,6 +1106,10 @@ static DWORD WINAPI SendTicketThread(LPVOID){
 	wsprintf(room, "%u", kaillera_get_game_id());
 	if (!n02_wecamp_get_ticket(room, ticket, sizeof(ticket), err, sizeof(err))) {
 		kaillera_ui_gdebug("* Nao consegui confirmar sua conta WE Camp para esta sala: %s", err);
+		// The site refused our login (it's forgotten now): answer like any
+		// player without one, so the host doesn't wait for the timeout.
+		if (!n02_wecamp_logged_in())
+			PostRoomChat(N02_TICKET_CHAT_PREFIX N02_TICKET_NOACCOUNT);
 		return 0;
 	}
 	char line[128];
@@ -4028,8 +4032,15 @@ LRESULT CALLBACK WeCampDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 		}
 		return FALSE;
 	case WM_N02_WECAMP_DISCORD:
-		if (n02_wecamp_logged_in())
+		if (n02_wecamp_logged_in()) {
 			WeCampDiscordRefresh(hDlg);
+		} else if (wParam) {
+			// The site refused the saved login: back to the logged-out face.
+			WeCampDialogRefresh(hDlg);
+			WeCampApplyNick(kaillera_ssdlg);
+			SetWindowText(GetDlgItem(hDlg, IDC_WECAMP_STATE),
+				"Conexao recusada pelo site (desconectada em outro RetroArch ou PC?). Entre de novo.");
+		}
 		return TRUE;
 	case WM_CLOSE:
 		EndDialog(hDlg, 0);
@@ -4123,8 +4134,9 @@ LRESULT CALLBACK KailleraServerSelectDialogProc(HWND hDlg, UINT uMsg, WPARAM wPa
 			nSettings::Initialize("SC");
 			n02_wecamp_load();
 			// A Discord linked on the site since the last run switches the
-			// voice call on (once) before the first game.
-			n02_wecamp_refresh_discord_async(NULL, 0);
+			// voice call on (once) before the first game - and a saved login
+			// the site refuses shows up now, not in the room.
+			n02_wecamp_refresh_discord_async(hDlg, WM_N02_WECAMP_DISCORD);
 
 			/*
 			
@@ -4196,6 +4208,13 @@ LRESULT CALLBACK KailleraServerSelectDialogProc(HWND hDlg, UINT uMsg, WPARAM wPa
 				
 			}
 			break;
+	case WM_N02_WECAMP_DISCORD:
+		// wParam 1: the site refused the saved WE Camp login - it's gone now.
+		if (wParam && !n02_wecamp_logged_in()) {
+			WeCampApplyNick(hDlg); // the Nick field is editable again
+			MessageBox(hDlg, N02_WECAMP_REFUSED_NOTICE, "Conta WE Camp", MB_OK | MB_ICONWARNING);
+		}
+		break;
 	case WM_CLOSE:
 		{
 			char tbuf[128];
