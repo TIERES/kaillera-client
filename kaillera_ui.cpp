@@ -1929,10 +1929,49 @@ void kaillera_game_status_change_callback(unsigned int id, char status, int play
 	kaillera_sdlg_gameslvReSort();
 }
 
+// Start pressed: the button stays off until that game ends - a second Start
+// while the server is still synchronizing only earns its "Please Wait: Game
+// is synchronizing!" error. Back on after N02_START_ANSWER_MS if no game
+// began (the server refused the Start: fewer than 2 players...).
+#define N02_START_ANSWER_MS 8000
+static DWORD g_start_sent_tick;	// 0 = no Start pending
+static bool g_start_game_seen;
+
+static void StartButtonReset(){
+	g_start_sent_tick = 0;
+	g_start_game_seen = false;
+}
+
+static void StartButtonPressed(){
+	g_start_sent_tick = GetTickCount() | 1;
+	g_start_game_seen = false;
+	EnableWindow(kaillera_sdlg_BTN_START, FALSE);
+}
+
+// Dialog thread, once a second (WM_TIMER) - same thread as the KSSDFA loop.
+static void StartButtonTick(){
+	if (KSSDFA.state != 0 || KSSDFA.input == KSSDFA_START_GAME) {
+		// A game is on - a retry-connect start, too.
+		if (!g_start_game_seen && hosting)
+			EnableWindow(kaillera_sdlg_BTN_START, FALSE);
+		g_start_sent_tick = GetTickCount() | 1;
+		g_start_game_seen = true;
+		return;
+	}
+	if (!g_start_sent_tick)
+		return;
+	if (!g_start_game_seen && GetTickCount() - g_start_sent_tick < N02_START_ANSWER_MS)
+		return;
+	StartButtonReset();
+	if (hosting)
+		EnableWindow(kaillera_sdlg_BTN_START, !IsNonGameLobbyName(GAME));
+}
+
 void kaillera_user_game_create_callback(){
 	inGame = true;
 	SwitchJoinMessageContext(true);
 	hosting = true;
+	StartButtonReset();
 	kaillera_sdlgGameMode();
 	kaillera_sdlg_LV_GULIST.DeleteAllRows();
 	SetWindowText(kaillera_sdlg_RE_GCHAT, "");
@@ -1945,6 +1984,7 @@ void kaillera_user_game_closed_callback(){
 	inGame = false;
 	SwitchJoinMessageContext(false);
 	hosting = false;
+	StartButtonReset();
 	kaillera_sdlgNormalMode();
 }
 
@@ -1952,6 +1992,7 @@ void kaillera_user_game_joined_callback(){
 	inGame = true;
 	SwitchJoinMessageContext(false);
 	hosting = false;
+	StartButtonReset();
 	kaillera_sdlgGameMode();
 	kaillera_sdlg_LV_GULIST.DeleteAllRows();
 	SetWindowText(kaillera_sdlg_RE_GCHAT, "");
@@ -3090,6 +3131,7 @@ LRESULT CALLBACK KailleraServerDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 	case WM_TIMER:
 		{
 			LoginChecksTick();
+			StartButtonTick();
 			if (kaillera_sdlg_MODE==1) {
 				char xx[256];
 				if (kaillera_is_connected())
@@ -3206,6 +3248,7 @@ LRESULT CALLBACK KailleraServerDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 						"(sala com M. Card Online).", LoginChecksPending());
 				} else {
 					kaillera_start_game();
+					StartButtonPressed();
 				}
 				break;
 			case BTN_RETRYCONNECT:
