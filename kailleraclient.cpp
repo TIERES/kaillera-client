@@ -426,9 +426,8 @@ int WINAPI _gameCallback(char *game, int player, int numplayers){
 		n02_TRACE();
 	}
 
-	// A solo game (the host alone) is never streamed - the room's box is off
-	// then too (kaillera_UpdateStreamForPlayers()).
-	if (active_mod.StreamingEnabled() && active_mod.IsHost() && numplayers > 1) {
+	// A solo game (the host alone) streams too.
+	if (active_mod.StreamingEnabled() && active_mod.IsHost()) {
 		active_mod.ConfigureStream();
 		char ownerName[64];
 		active_mod.GetOwnerName(ownerName, sizeof(ownerName));

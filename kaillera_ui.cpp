@@ -731,33 +731,6 @@ static void kaillera_BroadcastStreamState(bool live){
 	kaillera_game_chat_send(live ? (char*)N02_STREAM_LIVE_CHAT_PREFIX " ativado!" : (char*)N02_STREAM_LIVE_CHAT_PREFIX " desativado.");
 }
 
-// A host alone in the room plays a solo game, which is never streamed: the
-// box is unchecked and disabled while nobody else is in the room, and goes
-// back to the host's saved choice when someone joins (kailleraclient.cpp
-// also never starts a stream for a 1-player game).
-static int g_stream_players = 0; // room size the box last reacted to
-void __cdecl kaillera_ui_gdebug(char* arg_0, ...);
-static void kaillera_UpdateStreamForPlayers(){
-	HWND chk = GetDlgItem(kaillera_sdlg, CHK_STREAM);
-	if (!hosting) {
-		EnableWindow(chk, FALSE);
-		return;
-	}
-	int players = kaillera_sdlg_LV_GULIST.RowsCount();
-	bool solo = players <= 1;
-	if (solo) {
-		if (kaillera_StreamingEnabled() && g_stream_players > 1) {
-			kaillera_BroadcastStreamState(false);
-			kaillera_ui_gdebug("* Sozinho na sala: Stream ao vivo! desligado (jogo solo nao e transmitido).");
-		}
-		SendMessage(chk, BM_SETCHECK, BST_UNCHECKED, 0);
-	} else if (g_stream_players <= 1) {
-		SendMessage(chk, BM_SETCHECK, nSettings::get_int("KAILLERA_STREAM_LIVE", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
-	}
-	EnableWindow(chk, !solo);
-	g_stream_players = players;
-}
-
 // "Sem M. Card": RetroArch starts the game with no memory card in either
 // slot (retroarch-k3's kaillera_sync.c), so nobody's own card can make the
 // machines boot differently. With it off and no "M. Card Online" each player
@@ -1402,15 +1375,13 @@ void kaillera_sdlgGameMode(bool toggle = false){
 		HWND chkStream = GetDlgItem(kaillera_sdlg, CHK_STREAM);
 		ShowWindow(chkStream, SW_SHOW);
 		if (!toggle) {
-			// Entering the room: off until the room's list shows somebody
-			// else (kaillera_UpdateStreamForPlayers()) - a non-host follows the
-			// host's announcement.
-			g_stream_players = 0;
-			SendMessage(chkStream, BM_SETCHECK, BST_UNCHECKED, 0);
-			EnableWindow(chkStream, FALSE);
-		} else {
-			kaillera_UpdateStreamForPlayers();
+			// Entering the room: the host starts from its saved choice, alone
+			// in the room too (a solo game streams like any other); a non-host
+			// follows the host's announcement (kaillera_game_chat_callback()).
+			int streamChecked = hosting ? nSettings::get_int("KAILLERA_STREAM_LIVE", 0) : 0;
+			SendMessage(chkStream, BM_SETCHECK, streamChecked ? BST_CHECKED : BST_UNCHECKED, 0);
 		}
+		EnableWindow(chkStream, hosting);
 	}
 	{
 		// Only when entering the room, not on the "Swap" view toggle - that
@@ -2015,7 +1986,6 @@ void kaillera_player_add_callback(char *name, int ping, unsigned short id, char 
 	wsprintf(bfx, "%i frames", thrp * conn - 1);
 	kaillera_sdlg_LV_GULIST.FillRow(bfx, 3, x);
 	kaillera_UpdateMultiTapForPlayers();
-	kaillera_UpdateStreamForPlayers();
 }
 void kaillera_player_joined_callback(char * username, int ping, unsigned short uid, char connset){
 	kaillera_ui_gdebug_color(KAILLERA_COLOR_DARK_BLUE, "* Joins: %s", username);
@@ -2066,7 +2036,6 @@ void kaillera_player_left_callback(char * user, unsigned short id){
 	kaillera_sdlg_LV_GULIST.DeleteRow (kaillera_sdlg_LV_GULIST.Find(id));
 	LoginCheckRemove(id);
 	kaillera_UpdateMultiTapForPlayers();
-	kaillera_UpdateStreamForPlayers();
 	// The one with the room's only account may be the one who left: the
 	// choice locks and the room goes back to "Sem M. Card".
 	BroadcastAccounts();
