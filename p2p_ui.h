@@ -10,11 +10,9 @@ void p2p_ui_chat_send(char * xxx);
 bool p2p_RecordingEnabled();
 bool p2p_IsHost();
 bool p2p_StreamingEnabled();
-bool p2p_NoMemcardEnabled();
-bool p2p_McOnlineEnabled();
-bool p2p_McIsoEnabled();
-// The connection's confirmed WE Camp accounts (comma separated).
-int p2p_GetMcAccounts(char* out, int cap);
+// The memory card of the game starting now, slot 1 and 2
+// (N02_MEMCARD_CHOICE_*, common/n02_mcchoice.h).
+void p2p_GetGameMcSlots(int slot[2]);
 int p2p_GetGamePlayers(char out[][32], int max);
 void p2p_ConfigureStream();
 void p2p_GetOwnerName(char* out, int cap);

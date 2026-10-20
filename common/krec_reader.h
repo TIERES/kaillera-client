@@ -73,12 +73,15 @@ inline int n02_multitap_from_marker(const char* msg) {
 	return strstr(msg, "desativado") ? 0 : 1;
 }
 
-// "M. Card online" (kaillera_ui.cpp's CHK_MCONLINE): the two WE Camp cards
-// the match started with, by SHA-256 ("-" for an empty slot) - written when
-// the cards are fetched (kailleraclient.cpp's kailleraMemcardPrepare), before
-// the first input record. Replays, Watch Live and retry-connect download
-// exactly those versions.
+// "M. Card online" (common/n02_mcchoice.h): the two WE Camp cards the match
+// started with, by SHA-256 - written when the cards are fetched
+// (kailleraclient.cpp's kailleraMemcardPrepare), before the first input
+// record. Replays, Watch Live and retry-connect download exactly those
+// versions. A slot without a card is N02_MCONLINE_MARKER_NOCARD: played with
+// no card inserted (since 2026-10-20); "-" in older replays: played with a
+// blank card the core made.
 #define N02_MCONLINE_MARKER_PREFIX "[M. Card online] "
+#define N02_MCONLINE_MARKER_NOCARD "none"
 
 // Fills sha[0]/sha[1] (65 bytes each) from such a marker; false otherwise.
 inline bool n02_mconline_from_marker(const char* msg, char sha[2][65]) {
