@@ -109,3 +109,18 @@ do DLL; e, se outra janela da mesma pasta já logou de novo, só o token morto
 é esquecido - o login novo fica no `n02.ini`. O `wecamp_client` agora também
 se recusa a rodar se o `n02.ini` não apontar para `127.0.0.1`.
 O `mc_session_test`: 18 verificações, todas OK.
+
+## Resultado (2026-10-20)
+
+Memory card escolhido por jogador (o 1P decide o slot 1, o 2P o slot 2 -
+`common/n02_mcchoice.h`). O `mc_session_test` agora usa os slots da partida
+em vez de um modo da sala: jogo solo com o M. Card da ISO nos dois slots;
+partida mista (slot 1 = cartão 1 do jogo, slot 2 = M. Card Online do
+Mtgamess), em que cada slot é enviado primeiro pelo seu jogador - o save
+do slot 1 sai durante a partida, o do slot 2 só é anotado e vai 15 s depois
+do fim quando o Mtgamess "cai"; e o convidado sem login com o slot 2 sem
+cartão inserido (`kailleraMemcardEmptySlots()` = 2). O marcador do replay
+grava `none` para esse slot (sem cartão) e um replay antigo com `-` continua
+com o cartão em branco. 30 verificações, todas OK.
+
+Para rodar neste PC: `E:\Projetos\wg-camp\.venv\Scripts\python.exe local_wgcamp.py E:\Projetos\wg-camp --port 5055`.
