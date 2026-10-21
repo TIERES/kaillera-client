@@ -124,3 +124,13 @@ grava `none` para esse slot (sem cartão) e um replay antigo com `-` continua
 com o cartão em branco. 30 verificações, todas OK.
 
 Para rodar neste PC: `E:\Projetos\wg-camp\.venv\Scripts\python.exe local_wgcamp.py E:\Projetos\wg-camp --port 5055`.
+
+## Resultado (2026-10-21)
+
+"M. Card da ISO" uma partida por vez (a trava do wg-camp). O `mc_session_test`
+ganhou 6 verificações: a partida prende os cartões do jogo no checkout; o
+checkout de outra partida é recusado dizendo quem está jogando; o "status"
+que o host pede antes do Start acusa a outra sala pelo nome do jogo, mas não
+a própria partida nem outro jogo; e a trava é solta no fim da partida.
+36 verificações, todas OK. O `wecamp_client`: 102, todas OK. O
+`mc_session_test` espera um wg-camp local recém-iniciado (banco novo).

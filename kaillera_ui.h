@@ -17,6 +17,8 @@ void kaillera_GetGameMcSlots(int slot[2]);
 int kaillera_GetGamePlayers(char out[][32], int max);
 void kaillera_ConfigureStream();
 void kaillera_GetOwnerName(char* out, int cap);
+// The connected server's name (as in the server list) - or its address.
+void kaillera_GetServerName(char* out, int cap);
 
 bool ValidateGameBeforePlay(const char* gameName);
 

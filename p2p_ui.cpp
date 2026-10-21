@@ -1058,6 +1058,124 @@ bool p2p_hold_ready_callback(){
 	p2p_SyncingNotice();
 	return true;
 }
+// "M. Card da ISO" is one match at a time per game (wg-camp's lock - see
+// kaillera_ui.cpp's IsoCheckBeforeStart, the Server mode's Start). In P2P the
+// game starts once both are ready, so when a slot would play with it the
+// host's "Ready" goes out only after WE Camp says no other match of this
+// game holds it; if one does, the box is unchecked and both ends are told
+// that whoever picked it can switch cards to play now. No answer: the Ready
+// goes, the checkout checks again.
+#define WM_N02_P2P_ISOCHECK (WM_APP + 93)
+static volatile LONG g_p2p_iso_check_running = 0;
+struct P2PIsoCheckJob {
+	char players[80];
+	char game[128];
+};
+struct P2PIsoCheckResult {
+	int r; // n02_wecamp_iso_lock: 1 free, 0 taken, -1 no answer
+	char msg[300];
+};
+static DWORD WINAPI P2PIsoCheckThread(LPVOID param){
+	P2PIsoCheckJob* job = (P2PIsoCheckJob*)param;
+	P2PIsoCheckResult* r = new P2PIsoCheckResult;
+	memset(r, 0, sizeof(*r));
+	r->r = n02_wecamp_iso_lock("status", NULL, job->players, job->game, "P2P", r->msg, sizeof(r->msg));
+	delete job;
+	if (p2p_ui_connection_dlg == NULL || !PostMessage(p2p_ui_connection_dlg, WM_N02_P2P_ISOCHECK, 0, (LPARAM)r)) {
+		delete r;
+		InterlockedExchange(&g_p2p_iso_check_running, 0);
+	}
+	return 0;
+}
+// Who fills a slot with "M. Card da ISO" if the game started now.
+static bool p2p_UsesIso(char* who, int whoCap){
+	// p2p_GetGameMcSlots()'s rule, without its notice.
+	char names[2][32];
+	p2p_GetGamePlayers(names, 2);
+	char accounts[80];
+	int n = p2p_GetMcAccounts(accounts, sizeof(accounts));
+	int slot[2];
+	bool outdated;
+	n02_mcchoice_game_slots(names, 2, &g_p2p_mc, n >= 0 ? accounts : NULL, p2p_IsPcsxGame(), slot, &outdated);
+	who[0] = 0;
+	for (int s = 0; s < 2; s++) {
+		if (slot[s] != N02_MEMCARD_CHOICE_ISO)
+			continue;
+		if (who[0])
+			strncat(who, ", ", whoCap - strlen(who) - 1);
+		strncat(who, names[s], whoCap - strlen(who) - 1);
+	}
+	return who[0] != 0;
+}
+// Host: true when our "Ready" waits for the check instead of going out.
+static bool p2p_IsoCheckBeforeReady(){
+	if (!HOST)
+		return false;
+	if (g_p2p_iso_check_running)
+		return true;
+	char who[80];
+	if (!p2p_IsPcsxGame() || !p2p_UsesIso(who, sizeof(who)))
+		return false;
+	P2PIsoCheckJob* job = new P2PIsoCheckJob;
+	char names[2][32];
+	p2p_GetGamePlayers(names, 2);
+	_snprintf(job->players, sizeof(job->players), "%s,%s", names[0], names[1]);
+	job->players[sizeof(job->players) - 1] = 0;
+	strncpy(job->game, GAME, sizeof(job->game) - 1);
+	job->game[sizeof(job->game) - 1] = 0;
+	InterlockedExchange(&g_p2p_iso_check_running, 1);
+	HANDLE t = CreateThread(NULL, 0, P2PIsoCheckThread, job, 0, NULL);
+	if (!t) {
+		delete job;
+		InterlockedExchange(&g_p2p_iso_check_running, 0);
+		return false;
+	}
+	CloseHandle(t);
+	outpf("* Conferindo se o M. Card da ISO deste jogo esta livre...");
+	return true;
+}
+static bool p2p_ReadyBoxChecked(){
+	return p2p_ui_connection_dlg != NULL
+		&& SendMessage(GetDlgItem(p2p_ui_connection_dlg, IDC_READY), BM_GETCHECK, 0, 0) == BST_CHECKED;
+}
+// Dialog thread: WE Camp answered.
+static void p2p_IsoCheckDone(P2PIsoCheckResult* r){
+	InterlockedExchange(&g_p2p_iso_check_running, 0);
+	if (!HOST || KSSDFA.state != 0 || !p2p_ReadyBoxChecked())
+		return; // "Ready" unchecked (or a game began) meanwhile
+	if (r->r == 0) {
+		char who[80];
+		if (!p2p_UsesIso(who, sizeof(who)))
+			strcpy(who, "alguem");
+		SendMessage(GetDlgItem(p2p_ui_connection_dlg, IDC_READY), BM_SETCHECK, BST_UNCHECKED, 0);
+		p2p_set_ready(false);
+		p2p_UpdateMemcardControls();
+		p2p_debug_color(RGB(192, 0, 0), "* %s A partida nao pode comecar enquanto %s estiver com \"M. Card da ISO\": "
+			"mude para \"Sem M. Card\" ou \"M. Card Online\" para jogar agora, ou espere a outra partida terminar.", r->msg, who);
+		char line[128];
+		_snprintf(line, sizeof(line), "M. Card da ISO em uso em outra partida: %s, mude de M. Card para iniciar.", who);
+		line[sizeof(line) - 1] = 0;
+		p2p_send_chat(line);
+		return;
+	}
+	if (r->r < 0)
+		outpf("* Nao consegui conferir o M. Card da ISO no WE Camp - a partida comeca assim mesmo.");
+	p2p_set_ready(true);
+}
+// Core thread (host): the peer switched its slot to "M. Card da ISO" while
+// our "Ready" was out - take it back until the check is done.
+static void p2p_IsoRecheckIfReady(){
+	if (!HOST || KSSDFA.state != 0 || !p2p_ReadyBoxChecked() || g_p2p_ready_wanted)
+		return;
+	if (g_p2p_iso_check_running)
+		return;
+	char who[80];
+	if (!p2p_UsesIso(who, sizeof(who)))
+		return;
+	p2p_set_ready(false);
+	p2p_IsoCheckBeforeReady();
+}
+
 // The "Ready" box.
 static void p2p_RequestReady(bool on){
 	if (on && p2p_PeerCheckPending()) {
@@ -1066,6 +1184,8 @@ static void p2p_RequestReady(bool on){
 		return;
 	}
 	g_p2p_ready_wanted = false;
+	if (on && p2p_IsoCheckBeforeReady())
+		return; // p2p_IsoCheckDone() sends it
 	p2p_set_ready(on);
 }
 // The peer's check is over: send the "Ready" that was held back.
@@ -1073,10 +1193,10 @@ static void p2p_ReadyAfterCheck(){
 	if (!g_p2p_ready_wanted || p2p_PeerCheckPending())
 		return;
 	g_p2p_ready_wanted = false;
-	if (p2p_ui_connection_dlg != NULL
-		&& SendMessage(GetDlgItem(p2p_ui_connection_dlg, IDC_READY), BM_GETCHECK, 0, 0) == BST_CHECKED) {
+	if (p2p_ReadyBoxChecked()) {
 		outpf("* M. Cards Online sincronizados.");
-		p2p_set_ready(true);
+		if (!p2p_IsoCheckBeforeReady())
+			p2p_set_ready(true);
 	}
 }
 
@@ -1148,8 +1268,11 @@ void p2p_chat_callback(char * nick, char * msg){
 		bool noLogin;
 		if (_stricmp(nick, USERNAME) != 0
 			&& n02_mcchoice_parse(msg + strlen(N02_MCCHOICE_CHAT_PREFIX), &choice, &noLogin)
-			&& n02_mcchoices_set(&g_p2p_mc, nick, choice, noLogin))
+			&& n02_mcchoices_set(&g_p2p_mc, nick, choice, noLogin)) {
 			p2p_McChoiceNotice(nick, choice, noLogin);
+			if (choice == N02_MEMCARD_CHOICE_ISO)
+				p2p_IsoRecheckIfReady();
+		}
 		return;
 	}
 	if (msg != NULL && strncmp(msg, N02_TICKET_CHAT_PREFIX, strlen(N02_TICKET_CHAT_PREFIX)) == 0) {
@@ -1818,6 +1941,15 @@ LRESULT CALLBACK ConnectionDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARA
 			P2PLoginResult* r = (P2PLoginResult*)lParam;
 			if (r) {
 				p2p_AccountCheckResult(r);
+				delete r;
+			}
+		}
+		return 0;
+	case WM_N02_P2P_ISOCHECK:
+		{
+			P2PIsoCheckResult* r = (P2PIsoCheckResult*)lParam;
+			if (r) {
+				p2p_IsoCheckDone(r);
 				delete r;
 			}
 		}

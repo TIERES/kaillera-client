@@ -74,6 +74,8 @@ struct n02_wecamp_checkout_result {
 	char sha256[2][65];      // their current versions
 	int version[2];
 	bool multiBase;          // commits take a list of bases: saves can go out during the match
+	bool locked;             // "M. Card da ISO": this match holds the game's cards (n02_wecamp_iso_lock renew/release)
+	bool busy;               // ... refused: another match holds them (err = who)
 };
 
 // Start of an online-card match. players = nicks in 1P,2P,... order,
@@ -88,8 +90,25 @@ struct n02_wecamp_checkout_result {
 // A player not in it gets an empty slot (player[s] and sha256[s] empty) -
 // at least one slot has a card. Asked with the API key when not logged in,
 // so every PC gets the same slots.
+// lockRoomGame (iso only; NULL = no lock, like before): one match at a time
+// with the game's cards - the checkout takes them for this match (the same
+// players list on every PC of it) or fails with out->busy and who has them
+// in err. lockRoomGame = the room's game name (what n02_wecamp_iso_lock's
+// "status" looks for before the Start), lockServer = where the room is.
 bool n02_wecamp_checkout(const char* contentId, const char* gameName, const char* players, bool iso,
-	const char* accounts, n02_wecamp_checkout_result* out, char* err, int errCap);
+	const char* accounts, n02_wecamp_checkout_result* out, char* err, int errCap,
+	const char* lockRoomGame = NULL, const char* lockServer = NULL);
+
+// The "M. Card da ISO" lock (wg-camp's /api/mc/iso-lock), with the token or
+// the DLL's key. action:
+//  "status"  - before the Start: does another match of the game named
+//              roomGame hold the cards? (contentId unused)
+//  "renew"   - during the match, every minute (the lock lapses without it)
+//  "release" - end of the match
+// 1 = free / done, 0 = another match holds them (msg = who, for the room),
+// -1 = no answer, or a server without the lock.
+int n02_wecamp_iso_lock(const char* action, const char* contentId, const char* players,
+	const char* roomGame, const char* server, char* msg, int msgCap);
 
 // Downloads one card version (N02_MCD_SIZE bytes into buf, which must hold
 // N02_MCD_SIZE + 1 - a terminating NUL is written after the data) - with the

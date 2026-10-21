@@ -408,27 +408,35 @@ bool n02_wecamp_verify_ticket(const char* ticket, const char* room, char* userna
 }
 
 bool n02_wecamp_checkout(const char* contentId, const char* gameName, const char* players, bool iso,
-	const char* accounts, n02_wecamp_checkout_result* out, char* err, int errCap) {
+	const char* accounts, n02_wecamp_checkout_result* out, char* err, int errCap,
+	const char* lockRoomGame, const char* lockServer) {
 	memset(out, 0, sizeof(*out));
 	if (!iso && !accounts && !n02_wecamp_logged_in()) {
 		_snprintf(err, errCap, "Voce nao esta conectado a sua conta WE Camp.");
 		err[errCap - 1] = 0;
 		return false;
 	}
-	char c[64], g[400], pl[600], ac[600], body[1900], resp[2048];
+	bool lock = iso && lockRoomGame != NULL;
+	char c[64], g[400], pl[600], ac[600], rg[400], sv[400], body[2800], resp[2048];
 	UrlEncode(contentId, c, sizeof(c));
 	UrlEncode(gameName ? gameName : "", g, sizeof(g));
 	UrlEncode(players, pl, sizeof(pl));
 	UrlEncode(accounts ? accounts : "", ac, sizeof(ac));
+	UrlEncode(lock ? lockRoomGame : "", rg, sizeof(rg));
+	UrlEncode(lock && lockServer ? lockServer : "", sv, sizeof(sv));
 	// iso_slots=2: this DLL also plays (and sends back) the slot 2 card.
-	int len = _snprintf(body, sizeof(body), "content_id=%s&game_name=%s&players=%s%s%s%s", c, g, pl,
-		iso ? "&mode=iso&iso_slots=2" : "", accounts ? "&accounts=" : "", accounts ? ac : "");
+	int len = _snprintf(body, sizeof(body), "content_id=%s&game_name=%s&players=%s%s%s%s%s%s%s%s", c, g, pl,
+		iso ? "&mode=iso&iso_slots=2" : "", accounts ? "&accounts=" : "", accounts ? ac : "",
+		lock ? "&lock=1&room_game=" : "", lock ? rg : "", lock ? "&server=" : "", lock ? sv : "");
 	int status = AuthRequest(iso || accounts, "POST", "/api/mc/checkout", "Content-Type: application/x-www-form-urlencoded\r\n",
 		body, len, resp, sizeof(resp), NULL);
 	char value[128];
 	if (status != 200 || !KvGet(resp, "slots", value, sizeof(value))) {
 		KvGet(resp, "error", value, sizeof(value));
-		if (strcmp(value, "missing_account") == 0) {
+		if (strcmp(value, "iso_in_use") == 0) {
+			out->busy = true;
+			ErrorFrom(status, resp, err, errCap); // the server's "...em uso na partida de X"
+		} else if (strcmp(value, "missing_account") == 0) {
 			char who[256];
 			KvGet(resp, "message", who, sizeof(who));
 			_snprintf(err, errCap, "Sem conta WE Camp confirmada: %s", who);
@@ -449,6 +457,8 @@ bool n02_wecamp_checkout(const char* contentId, const char* gameName, const char
 	}
 	char multi[8];
 	out->multiBase = KvGet(resp, "multi_base", multi, sizeof(multi)) && strcmp(multi, "1") == 0;
+	// An older server ignores lock=1: the match goes as before (no lock).
+	out->locked = lock && KvGet(resp, "lock", multi, sizeof(multi)) && strcmp(multi, "1") == 0;
 	char rule[16];
 	KvGet(resp, "rule", rule, sizeof(rule));
 	if (!iso && accounts && strcmp(rule, "accounts") != 0) {
@@ -487,6 +497,35 @@ bool n02_wecamp_checkout(const char* contentId, const char* gameName, const char
 		return false;
 	}
 	return true;
+}
+
+int n02_wecamp_iso_lock(const char* action, const char* contentId, const char* players,
+	const char* roomGame, const char* server, char* msg, int msgCap) {
+	if (msg && msgCap > 0) msg[0] = 0;
+	char c[64], pl[600], rg[400], sv[400], body[1600], resp[1024];
+	UrlEncode(contentId ? contentId : "", c, sizeof(c));
+	UrlEncode(players, pl, sizeof(pl));
+	UrlEncode(roomGame ? roomGame : "", rg, sizeof(rg));
+	UrlEncode(server ? server : "", sv, sizeof(sv));
+	int len = _snprintf(body, sizeof(body), "action=%s&content_id=%s&players=%s&room_game=%s&server=%s",
+		action, c, pl, rg, sv);
+	int status = AuthRequest(true, "POST", "/api/mc/iso-lock", "Content-Type: application/x-www-form-urlencoded\r\n",
+		body, len, resp, sizeof(resp), NULL);
+	char value[32];
+	KvGet(resp, "error", value, sizeof(value));
+	bool busy = strcmp(value, "iso_in_use") == 0;
+	if (status == 200 && KvGet(resp, "busy", value, sizeof(value)))
+		busy = strcmp(value, "1") == 0;
+	if (busy) {
+		if (msg && msgCap > 0) {
+			KvGet(resp, "message", msg, msgCap);
+			if (msg[0] == 0)
+				_snprintf(msg, msgCap, "O M. Card da ISO deste jogo esta em uso em outra partida.");
+			msg[msgCap - 1] = 0;
+		}
+		return 0;
+	}
+	return status == 200 ? 1 : -1;
 }
 
 bool n02_wecamp_get_card(const char* sha256, char* buf, bool useApiKey) {
