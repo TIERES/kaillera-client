@@ -730,8 +730,9 @@ extern "C" {
 #endif
 	}
 	void KAILLERA_DLLEXP kailleraSelectServerDialog(void* parent){
-		// kailleraInit() just installed a package update and RetroArch is
-		// closing to reopen with it - no Kaillera window this time.
+		// kailleraInit() just installed an update: RetroArch is closing to
+		// reopen with it, or Kaillera will open again with the new DLL once
+		// this one is unloaded - no Kaillera window this time.
 		if (n02_update_restart_pending())
 			return;
 

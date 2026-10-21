@@ -220,7 +220,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--wgcamp", required=True)
     parser.add_argument("--sem-build", action="store_true")
-    parser.add_argument("--cenario", default="ABCDEFGHI")
+    parser.add_argument("--cenario", default="ABCDEFGHIJ")
     args = parser.parse_args()
 
     trabalho = Path(os.environ.get("ATUALIZADOR_TESTE_DIR", tempfile.gettempdir())) / "atualizador_teste"
@@ -312,14 +312,23 @@ def main():
         srv.publicar_dll("v.TIERES.0.99", dll099)
 
     if "E" in args.cenario:
-        print("E) outro RetroArch (sem a marca TIERES): so o DLL, como antes")
+        print("E) outro RetroArch (sem a marca TIERES): so o DLL, e o Kaillera reabre sozinho com ele")
         pasta = montar_pasta(raiz, "E", {"retroarch.exe": outro, "kailleraclient.dll": dll098}, srv.porta)
-        log = rodar(pasta)
+        log = rodar(pasta, [], {"FAKE_DIALOG": "1"})
         print("    " + log.replace("\n", "\n    "))
-        ok("Uma nova versao do Kaillera" in log, "E: aviso antigo (so DLL)")
+        ok("Uma nova versao do Kaillera" in log and "O Kaillera vai fechar e abrir de novo sozinho no final." in log,
+           "E: aviso so DLL, dizendo que o Kaillera reabre sozinho")
         ok(sha256(pasta / "retroarch.exe") == sha256(outro), "E: exe intocado")
         ok(sha256(pasta / "kailleraclient.dll") == sha256(dll099), "E: DLL trocado")
-        ok("wm_close" not in log.splitlines() and not (pasta / "cores" / "pcsx_rearmed_libretro.dll").exists(),
+        linhas = log.splitlines()
+        ok("dialog returned" in linhas and "kaillera unloaded" in linhas and "menu kaillera" in linhas
+           and linhas.index("kaillera unloaded") < linhas.index("menu kaillera"),
+           "E: o diálogo velho voltou, o DLL foi descarregado e depois o menu Kaillera foi acionado")
+        depois = log[log.find("menu kaillera"):]
+        ok("kailleraInit returned" in depois and "msgbox N02 v.TIERES.0.99" in depois
+           and "Uma nova versao" not in depois, "E: o Kaillera reabriu com o DLL novo, sem perguntar de novo")
+        ok("foreign msgbox" not in log, "E: nenhum aviso para abrir o Kaillera à mão")
+        ok("wm_close" not in linhas and not (pasta / "cores" / "pcsx_rearmed_libretro.dll").exists(),
            "E: sem reinicio e sem nucleo baixado")
 
     if "F" in args.cenario:
@@ -380,6 +389,16 @@ def main():
         ok(not (pasta / "cores" / "pcsx_rearmed_libretro.dll.lck").exists(), "I: o .lck novo foi desfeito")
         ok(sobras(pasta) == [], f"I: sem sobras ({sobras(pasta)})")
         ok("wm_close" not in log.splitlines(), "I: nao reiniciou")
+
+    if "J" in args.cenario:
+        print("J) so DLL sem a barra de menus: o Kaillera nao reabre, aviso para abrir a mao")
+        pasta = montar_pasta(raiz, "J", {"retroarch.exe": outro, "kailleraclient.dll": dll098}, srv.porta)
+        log = rodar(pasta, [], {"FAKE_DIALOG": "1", "FAKE_NO_MENU": "1", "FAKE_TIMER_MS": "25000"})
+        print("    " + log.replace("\n", "\n    "))
+        ok(sha256(pasta / "kailleraclient.dll") == sha256(dll099), "J: DLL trocado")
+        ok(log.count("menu kaillera ignored (no menubar)") == 3, "J: o menu Kaillera foi tentado 3 vezes")
+        ok("foreign msgbox Atualização | A nova versão do Kaillera foi instalada." in log,
+           "J: aviso para abrir o Kaillera de novo")
 
     srv.http.shutdown()
     falhas = [m for passou, m in RESULTADOS if not passou]

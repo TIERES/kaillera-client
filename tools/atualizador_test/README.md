@@ -1,13 +1,15 @@
 # atualizador_test
 
-Testa a atualização do pacote completo do RetroArch TIERES (`common/n02_update.cpp`):
-dentro do `retroarch.exe` TIERES, o DLL baixa do WE Camp os arquivos do light que
-mudaram (`retroarch.exe`, `kailleraclient.dll`, núcleo), troca todos e reinicia o
-RetroArch. Nada aqui fala com o WE Camp de produção.
+Testa o atualizador do DLL (`common/n02_update.cpp`). Dentro do `retroarch.exe`
+TIERES, o DLL baixa do WE Camp os arquivos do light que mudaram (`retroarch.exe`,
+`kailleraclient.dll`, núcleo), troca todos e reinicia o RetroArch. Numa versão só do
+DLL dentro de um RetroArch, o Kaillera fecha e abre de novo com o DLL novo. Nada aqui
+fala com o WE Camp de produção.
 
 - `fake_retroarch.c`: um `retroarch.exe` falso que faz com o DLL o que o fork faz ao
   abrir o Kaillera (janela de classe `RetroArch`, `kailleraInit`, o diálogo numa
-  thread, recusa o fechamento enquanto o Kaillera está carregado), responde sozinho
+  thread, descarrega o DLL quando o diálogo volta, recarrega pelo item do menu, recusa
+  o fechamento enquanto o Kaillera está carregado), responde sozinho
   às caixas do DLL e anota tudo em `teste.log`.
 - `run_test.py`: compila o DLL de verdade como `v.TIERES.0.98` e `v.TIERES.0.99`
   (de uma cópia do código, porque o `n02p.vcxproj` fixa os `.obj` em `x64\Release`),
@@ -18,11 +20,15 @@ RetroArch. Nada aqui fala com o WE Camp de produção.
   - B: mesma versão do DLL com exe antigo: baixa só o exe;
   - C: tudo em dia: nenhum aviso;
   - D: build de testador mais nova que a publicada: nenhum aviso;
-  - E: outro RetroArch (sem a marca `FFW.TIERES`): só o DLL, como antes;
+  - E: outro RetroArch (sem a marca `FFW.TIERES`): só o DLL; o Kaillera fecha, o DLL
+    velho é descarregado e o item "Kaillera Netplay" do menu (WM_COMMAND 40028) abre
+    o Kaillera de novo com o DLL novo, sem reiniciar o RetroArch;
   - F: arquivo corrompido no servidor: nada muda;
   - G: Cancelar no meio do download: nada muda;
   - H: a janela de progresso mostra arquivo, "n de 4" e MB;
-  - I: um arquivo preso por outro programa: desfaz tudo.
+  - I: um arquivo preso por outro programa: desfaz tudo;
+  - J: só o DLL com a barra de menus desligada: o menu não reabre o Kaillera e aparece
+    o aviso para abri-lo à mão.
 - `servidor_local.py`: um wg-camp local com um light publicado, para testar à mão
   com o RetroArch TIERES de verdade ou a task de publicação (`--simular`).
 
