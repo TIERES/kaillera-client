@@ -4,7 +4,7 @@
 // fault_proxy.py. Grava em esperado.bin os registros na ordem em que foram
 // entregues ao stream - o que o servidor tem que ter no fim, byte a byte.
 //
-//   stream_test.exe [porta] [frames]     (padrão: 5070, 2400)
+//   stream_test.exe [porta] [frames] [host]     (padrão: 5070, 2400, 127.0.0.1)
 #include <winsock2.h>
 #include <windows.h>
 #include <stdarg.h>
@@ -37,6 +37,7 @@ static void Record(const char* bytes, int len) {
 int main(int argc, char** argv) {
 	int port = argc > 1 ? atoi(argv[1]) : 5070;
 	int frames = argc > 2 ? atoi(argv[2]) : 2400;
+	const char* host = argc > 3 ? argv[3] : "127.0.0.1";
 
 	WSADATA wsa;
 	WSAStartup(MAKEWORD(2, 2), &wsa);
@@ -44,7 +45,7 @@ int main(int argc, char** argv) {
 	if (g_expected == NULL)
 		return 1;
 
-	n02_stream_configure("127.0.0.1", port, N02_STREAM_DEFAULT_PATH, N02_STREAM_DEFAULT_API_KEY);
+	n02_stream_configure(host, port, N02_STREAM_DEFAULT_PATH, N02_STREAM_DEFAULT_API_KEY);
 	char names[4][32] = { "host", "convidado", "", "" };
 	n02_stream_start_session("RetroArch teste", "PCSX ReARMed: teste do stream", 1, 2, names, "host");
 

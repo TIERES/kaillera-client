@@ -37,12 +37,20 @@ stream_test.exe 5070 2400
 O proxy fica em primeiro plano. Rode o `stream_test.exe` em outro terminal, na
 mesma pasta do `esperado.bin`.
 
+Contra o servidor de verdade (sem falhas injetadas, só confere que o DLL lê a
+resposta do Caddy): `stream_test.exe 8080 600 we2002.wgs.dev.br`. Uma sessão
+de 10 s não aparece nos Replays Online, que só listam partidas de 5 min ou mais.
+
 ## Resultado (2026-10-21)
 
 | DLL | POSTs | falhas injetadas | reenvios ignorados pelo servidor | lotes perdidos | stream no servidor |
 |---|---|---|---|---|---|
 | master (antes) | 141 | 47 | 0 | 23 | diferente a partir do byte 597 |
 | corrigido | 94 | 31 | 16 | 0 | idêntico (65 024 bytes) |
+
+Em produção (2026-10-21, logo depois do deploy do ingest novo), 600 frames
+foram em 43 lotes, todos com 204 e sem reenvio. No servidor: `last_sequence`
+42, `lost_batches` 0, e os registros idênticos aos enviados.
 
 O wg-camp com o ingest novo registra no log cada sequência pulada ("N lote(s)
 perdido(s) antes da sequência X") e conta em `live_sessions.lost_batches`. É
