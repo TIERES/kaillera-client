@@ -226,13 +226,53 @@ static char g_resolved_host[256] = { 0 };
 static struct in_addr g_resolved_addr;
 static bool g_resolved_valid = false;
 
-static bool HttpPostBytes(const char* host, int port, const char* path, const char* apiKey, const char* sessionId, const char* ownerName, unsigned int sequence, bool sessionEnd, const char* body, int bodyLen) {
+// Reads the reply's status line ("HTTP/1.x NNN ...") and drains the rest so
+// the server can close cleanly. Returns NNN, or 0 when no status line came
+// back within timeoutMs - the connection dropped, or the server is still busy.
+static int ReadHttpStatus(SOCKET s, int timeoutMs) {
+	setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeoutMs, sizeof(timeoutMs));
+	char head[64];
+	int have = 0;
+	char discard[512];
+	DWORD start = GetTickCount();
+	while (GetTickCount() - start < (DWORD)timeoutMs) {
+		int r;
+		if (have < (int)sizeof(head) - 1) {
+			r = recv(s, head + have, sizeof(head) - 1 - have, 0);
+			if (r > 0)
+				have += r;
+		} else {
+			r = recv(s, discard, sizeof(discard), 0);
+		}
+		if (r <= 0)
+			break;
+	}
+	head[have] = 0;
+	if (have < 12 || strncmp(head, "HTTP/1.", 7) != 0)
+		return 0;
+	return atoi(head + 9);
+}
+
+// HttpPostBytes() results: the server has the batch, the server will never
+// take it (bad key, malformed - sending it again changes nothing), or no
+// telling - it must go again with the same X-Sequence.
+#define N02_STREAM_POST_DELIVERED 0
+#define N02_STREAM_POST_REFUSED   1
+#define N02_STREAM_POST_RETRY     2
+
+// How long to wait for the reply. A batch counts as delivered only on a 2xx,
+// and one that times out here is sent again - the server drops the repeat by
+// its X-Sequence, but a little patience saves the round trip.
+#define N02_STREAM_REPLY_TIMEOUT_MS 5000
+
+static int HttpPostBytes(const char* host, int port, const char* path, const char* apiKey, const char* sessionId, const char* ownerName, unsigned int sequence, bool sessionEnd, const char* body, int bodyLen, int* httpStatus) {
+	*httpStatus = 0;
 	if (host == NULL || host[0] == 0 || port <= 0)
-		return false;
+		return N02_STREAM_POST_RETRY;
 
 	SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
 	if (s == INVALID_SOCKET)
-		return false;
+		return N02_STREAM_POST_RETRY;
 
 	sockaddr_in server;
 	memset(&server, 0, sizeof(server));
@@ -246,7 +286,7 @@ static bool HttpPostBytes(const char* host, int port, const char* path, const ch
 			struct hostent* he = gethostbyname(host);
 			if (he == NULL || he->h_addr_list == NULL || he->h_addr_list[0] == NULL) {
 				closesocket(s);
-				return false;
+				return N02_STREAM_POST_RETRY;
 			}
 			g_resolved_addr = *(struct in_addr*)he->h_addr_list[0];
 			strncpy(g_resolved_host, host, sizeof(g_resolved_host) - 1);
@@ -283,7 +323,7 @@ static bool HttpPostBytes(const char* host, int port, const char* path, const ch
 
 	if (!connected) {
 		closesocket(s);
-		return false;
+		return N02_STREAM_POST_RETRY;
 	}
 
 	char apiKeyHeader[192];
@@ -315,12 +355,12 @@ static bool HttpPostBytes(const char* host, int port, const char* path, const ch
 		apiKeyHeader);
 	if (headerLen < 0 || headerLen >= (int)sizeof(header)) {
 		closesocket(s);
-		return false;
+		return N02_STREAM_POST_REFUSED; // would never fit - nothing to retry
 	}
 
 	if (send(s, header, headerLen, 0) != headerLen) {
 		closesocket(s);
-		return false;
+		return N02_STREAM_POST_RETRY;
 	}
 	if (bodyLen > 0) {
 		int sent = 0;
@@ -328,24 +368,25 @@ static bool HttpPostBytes(const char* host, int port, const char* path, const ch
 			int r = send(s, body + sent, bodyLen - sent, 0);
 			if (r <= 0) {
 				closesocket(s);
-				return false;
+				return N02_STREAM_POST_RETRY;
 			}
 			sent += r;
 		}
 	}
 
-	// Drain (and discard) whatever the server replies, just to let it close
-	// the connection cleanly; we don't need the response body.
-	char discard[512];
-	DWORD start = GetTickCount();
-	while (GetTickCount() - start < (DWORD)timeoutMs) {
-		int r = recv(s, discard, sizeof(discard), 0);
-		if (r <= 0)
-			break;
-	}
-
+	// A finished send() only means the bytes left this PC: the batch counts
+	// as delivered on the server's own 2xx. Taking the send as enough lost
+	// whole batches for good whenever the proxy in front of the app answered
+	// 502 (seen in production, 2026-10) - every spectator and online replay
+	// of that match desynced from there on.
+	int status = ReadHttpStatus(s, N02_STREAM_REPLY_TIMEOUT_MS);
 	closesocket(s);
-	return true;
+	*httpStatus = status;
+	if (status >= 200 && status < 300)
+		return N02_STREAM_POST_DELIVERED;
+	if (status >= 400 && status < 500 && status != 408 && status != 429)
+		return N02_STREAM_POST_REFUSED;
+	return N02_STREAM_POST_RETRY;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -363,13 +404,13 @@ public:
 		running = true;
 		char sendBuf[64 * 1024 + sizeof(g_session_header)];
 
-		// A batch that failed to POST stays here (same bytes, same
-		// X-Sequence) and is retried next tick instead of being dropped -
-		// the receiving server just appends bytes as they arrive with no
-		// gap detection (see spectate.py's /spectate/ingest), so silently
-		// losing a batch used to permanently corrupt the record framing for
-		// the rest of the session. New frames keep queuing (bounded,
-		// drop-oldest - see StreamEnqueue) while a batch is stuck retrying.
+		// A batch the server didn't confirm with a 2xx stays here (same
+		// bytes, same X-Sequence) and is retried next tick instead of being
+		// dropped - a lost batch shifts every frame after it for anyone
+		// replaying the stream, and the server drops a repeat of one it
+		// already has by its X-Sequence (see spectate.py's
+		// /spectate/ingest). New frames keep queuing (bounded, drop-oldest -
+		// see StreamEnqueue) while a batch is stuck retrying.
 		bool havePending = false;
 		char* pendingPayload = NULL;
 		int pendingLen = 0;
@@ -400,15 +441,19 @@ public:
 				havePending = true;
 			}
 
-			if (HttpPostBytes(g_stream_host, g_stream_port, g_stream_path, g_stream_api_key, g_session_id, g_session_owner, g_session_sequence, pendingEnded, pendingPayload, pendingLen)) {
-				g_session_sequence++;
-				havePending = false;
-				if (pendingEnded) {
-					g_session_active = false;
-					break;
-				}
-			} else {
-				StatsAppendLine("stream: POST failed (seq %u, %d bytes) - will retry", g_session_sequence, pendingLen);
+			int httpStatus;
+			int result = HttpPostBytes(g_stream_host, g_stream_port, g_stream_path, g_stream_api_key, g_session_id, g_session_owner, g_session_sequence, pendingEnded, pendingPayload, pendingLen, &httpStatus);
+			if (result == N02_STREAM_POST_RETRY) {
+				StatsAppendLine("stream: POST failed (seq %u, %d bytes, HTTP %d) - will retry", g_session_sequence, pendingLen, httpStatus);
+				continue;
+			}
+			if (result == N02_STREAM_POST_REFUSED)
+				StatsAppendLine("stream: server refused seq %u (HTTP %d) - batch dropped", g_session_sequence, httpStatus);
+			g_session_sequence++;
+			havePending = false;
+			if (pendingEnded) {
+				g_session_active = false;
+				break;
 			}
 		}
 		running = false;
@@ -607,14 +652,11 @@ static bool HttpPostSimple(const char* host, int port, const char* path, const c
 		}
 	}
 
-	char discard[512];
-	DWORD start = GetTickCount();
-	while (GetTickCount() - start < (DWORD)timeoutMs) {
-		int r = recv(s, discard, sizeof(discard), 0);
-		if (r <= 0) break;
-	}
+	// Only the server's 2xx means it has the state - on anything else the
+	// pending flag stays set there, and the next poll captures a fresh one.
+	int status = ReadHttpStatus(s, timeoutMs);
 	closesocket(s);
-	return true;
+	return status >= 200 && status < 300;
 }
 
 // Background thread doing all of this feature's host-side network I/O. Both
