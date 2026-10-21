@@ -1260,6 +1260,12 @@ int kaillera_GetGamePlayers(char out[][32], int max){
 void kaillera_GetOwnerName(char* out, int cap){
 	kaillera_get_username(out, cap);
 }
+extern char kaillera_sdlg_NAME[128];
+extern char kaillera_sdlg_ip[128];
+void kaillera_GetServerName(char* out, int cap){
+	strncpy(out, kaillera_sdlg_NAME[0] ? kaillera_sdlg_NAME : kaillera_sdlg_ip, cap - 1);
+	out[cap - 1] = 0;
+}
 int kaillera_sdlg_MODE;
 void kaillera_sdlgGameMode(bool toggle = false){
 	kaillera_sdlg_MODE = 0;
@@ -1793,6 +1799,125 @@ static void StartButtonTick(){
 	StartButtonReset();
 	if (hosting)
 		EnableWindow(kaillera_sdlg_BTN_START, !IsNonGameLobbyName(GAME));
+}
+
+// "M. Card da ISO" is one match at a time per game (wg-camp's lock, taken at
+// the game's checkout - kailleraclient.cpp's McPrepareLive). So before the
+// Start, when a slot would play with it, the host asks WE Camp whether
+// another match of this game (by the room's game name - the content id only
+// exists once RetroArch opened the game) holds it: if so, no Start - the
+// room is told who has it and that whoever picked "M. Card da ISO" can
+// switch to another card to play now. No answer (or a server without the
+// lock): the Start goes ahead, the checkout checks again.
+#define WM_N02_ISOCHECK (WM_APP + 82)
+static volatile LONG g_iso_check_running = 0;
+struct IsoCheckJob {
+	char players[8 * 32 + 8];
+	char game[128];
+	char server[128];
+};
+struct IsoCheckResult {
+	int r;          // n02_wecamp_iso_lock: 1 free, 0 taken, -1 no answer
+	char msg[300];
+	char who[8 * 32 + 8]; // whoever picked "M. Card da ISO"
+};
+static DWORD WINAPI IsoCheckThread(LPVOID param){
+	IsoCheckJob* job = (IsoCheckJob*)param;
+	IsoCheckResult* r = new IsoCheckResult;
+	memset(r, 0, sizeof(*r));
+	r->r = n02_wecamp_iso_lock("status", NULL, job->players, job->game, job->server, r->msg, sizeof(r->msg));
+	delete job;
+	if (!PostMessage(kaillera_sdlg, WM_N02_ISOCHECK, 0, (LPARAM)r)) {
+		delete r;
+		InterlockedExchange(&g_iso_check_running, 0);
+	}
+	return 0;
+}
+// The room as the game would start now: the players (1P, 2P, ... - the
+// list's order) and who of them fills a slot with "M. Card da ISO" - the same
+// rule as kaillera_game_callback().
+static bool McRoomUsesIso(char* players, int playersCap, char* who, int whoCap){
+	char names[8][32];
+	int count = kaillera_sdlg_LV_GULIST.RowsCount();
+	if (count > 8)
+		count = 8;
+	players[0] = who[0] = 0;
+	for (int i = 0; i < count; i++) {
+		kaillera_sdlg_LV_GULIST.CheckRow(names[i], 31, 0, i);
+		names[i][31] = 0;
+		if (i && strlen(players) + 1 < (size_t)playersCap)
+			strcat(players, ",");
+		if (strlen(players) + strlen(names[i]) < (size_t)playersCap)
+			strcat(players, names[i]);
+	}
+	char accounts[N02_ACCOUNTS_LEN];
+	CurrentAccounts(accounts, sizeof(accounts));
+	int slot[2];
+	bool outdated;
+	n02_mcchoice_game_slots(names, count, &g_room_mc, accounts, McRoomIsPcsx(), slot, &outdated);
+	for (int s = 0; s < 2; s++) {
+		if (slot[s] != N02_MEMCARD_CHOICE_ISO)
+			continue;
+		const char* name = names[s < count ? s : 0];
+		if (s == 1 && count < 2)
+			continue; // solo: the 1P's slot 2 - already named
+		if (who[0] && strlen(who) + 2 < (size_t)whoCap)
+			strcat(who, ", ");
+		if (strlen(who) + strlen(name) < (size_t)whoCap)
+			strcat(who, name);
+	}
+	return who[0] != 0;
+}
+// Start pressed by the host: true when it waits for the check instead.
+static bool IsoCheckBeforeStart(){
+	if (g_iso_check_running)
+		return true; // already asking - the answer starts the game
+	IsoCheckJob* job = new IsoCheckJob;
+	char who[8 * 32 + 8];
+	if (!McRoomIsPcsx() || !McRoomUsesIso(job->players, sizeof(job->players), who, sizeof(who))) {
+		delete job;
+		return false;
+	}
+	strncpy(job->game, GAME, sizeof(job->game) - 1);
+	job->game[sizeof(job->game) - 1] = 0;
+	kaillera_GetServerName(job->server, sizeof(job->server));
+	InterlockedExchange(&g_iso_check_running, 1);
+	EnableWindow(kaillera_sdlg_BTN_START, FALSE);
+	HANDLE t = CreateThread(NULL, 0, IsoCheckThread, job, 0, NULL);
+	if (!t) {
+		delete job;
+		InterlockedExchange(&g_iso_check_running, 0);
+		EnableWindow(kaillera_sdlg_BTN_START, TRUE);
+		return false;
+	}
+	CloseHandle(t);
+	kaillera_gdebug("* Conferindo se o M. Card da ISO deste jogo esta livre...");
+	return true;
+}
+// Dialog thread: WE Camp answered.
+static void IsoCheckDone(IsoCheckResult* r){
+	InterlockedExchange(&g_iso_check_running, 0);
+	if (!hosting || !inGame || kaillera_sdlg_MODE != 0 || kaillera_is_game_running() || KSSDFA.state != 0)
+		return; // left the room (or a game began) meanwhile
+	if (r->r == 0) {
+		char who[8 * 32 + 8], players[8 * 32 + 8];
+		McRoomUsesIso(players, sizeof(players), who, sizeof(who));
+		kaillera_gdebug_color(N02_LOGIN_COLOR_BAD, "* %s A partida nao pode comecar enquanto %s estiver com \"M. Card da ISO\": "
+			"mude para \"Sem M. Card\" ou \"M. Card Online\" para jogar agora, ou espere a outra partida terminar.",
+			r->msg, who[0] ? who : "alguem");
+		// Short - servers cap the chat line's length.
+		char line[128];
+		_snprintf(line, sizeof(line), "M. Card da ISO em uso em outra partida: %s, mude de M. Card para iniciar.",
+			who[0] ? who : "quem escolheu");
+		line[sizeof(line) - 1] = 0;
+		kaillera_game_chat_send(line);
+		EnableWindow(kaillera_sdlg_BTN_START, !IsNonGameLobbyName(GAME));
+		return;
+	}
+	if (r->r < 0)
+		kaillera_gdebug("* Nao consegui conferir o M. Card da ISO no WE Camp - a partida comeca assim mesmo.");
+	kaillera_start_game();
+	StartButtonPressed();
 }
 
 void kaillera_user_game_create_callback(){
@@ -2956,6 +3081,15 @@ LRESULT CALLBACK KailleraServerDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 			}
 		}
 		return 0;
+	case WM_N02_ISOCHECK:
+		{
+			IsoCheckResult* r = (IsoCheckResult*)lParam;
+			if (r) {
+				IsoCheckDone(r);
+				delete r;
+			}
+		}
+		return 0;
 	case WM_TIMER:
 		{
 			LoginChecksTick();
@@ -3077,6 +3211,8 @@ LRESULT CALLBACK KailleraServerDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 				} else if (hosting && McRoomIsPcsx() && McChecksPendingWithCard() > 0) {
 					kaillera_gdebug_color(N02_LOGIN_COLOR_BAD, "* Aguarde: %d jogador(es) que escolheram memory card ainda nao "
 						"confirmaram a conta WE Camp.", McChecksPendingWithCard());
+				} else if (hosting && IsoCheckBeforeStart()) {
+					// the answer (WM_N02_ISOCHECK) starts the game, or says why not
 				} else {
 					kaillera_start_game();
 					StartButtonPressed();

@@ -31,6 +31,13 @@ static int CurrentGameMemcardMode() { return N02_MEMCARD_ONLINE; }
 static int get_active_mode_index() { return 1; }
 int p2p_GetGamePlayers(char out[][32], int max) { memcpy(out, t_names, sizeof(t_names)); return t_count; }
 int kaillera_GetGamePlayers(char out[][32], int max) { memcpy(out, t_names, sizeof(t_names)); return t_count; }
+static char t_room_game[128] = "ML (PCSX ReARMed)";
+static void McRoomInfo(char* game, int gameCap, char* server, int serverCap) {
+	strncpy(game, t_room_game, gameCap - 1);
+	game[gameCap - 1] = 0;
+	strncpy(server, "Teste", serverCap - 1);
+	server[serverCap - 1] = 0;
+}
 bool kaillera_retryconnect_active() { return false; }
 bool kaillera_retryconnect_mconline(char sha[2][65]) { return false; }
 bool player_is_watching() { return false; }
@@ -142,6 +149,21 @@ int main(int argc, char** argv) {
 	CHECK(g_mcs && g_mcs->midMatch && g_mcs->watcher && g_mcs->sender[0] && g_mcs->sender[1]
 		&& g_mcs->iso[0] && g_mcs->iso[1], "host: envia os dois slots durante a partida");
 	CHECK(kailleraMemcardEmptySlots() == 0, "solo ISO: nenhum slot vazio");
+	{
+		// --- one match at a time with the game's cards ---
+		char msg[300];
+		n02_wecamp_checkout_result other;
+		CHECK(g_mcs && g_mcs->isoLock, "trava: a partida prende o M. Card da ISO");
+		// (with our token we must be in its list - another match of Pele's, with B)
+		CHECK(!n02_wecamp_checkout(kContent, "ML.bin", "Pele,B", true, NULL, &other, err, sizeof(err), "Outra sala", "SP")
+			&& other.busy && strstr(err, "Pele") != NULL, "trava: o checkout de outra partida e recusado (diz quem esta jogando)");
+		CHECK(n02_wecamp_iso_lock("status", NULL, "A,B", t_room_game, "SP", msg, sizeof(msg)) == 0
+			&& strstr(msg, "Teste") != NULL, "trava: o Start de outra sala do mesmo jogo fica bloqueado");
+		CHECK(n02_wecamp_iso_lock("status", NULL, "Pele", t_room_game, "Teste", msg, sizeof(msg)) == 1,
+			"trava: a propria partida nao se bloqueia");
+		CHECK(n02_wecamp_iso_lock("status", NULL, "A,B", "Outro jogo", "SP", msg, sizeof(msg)) == 1,
+			"trava: outro jogo nao e afetado");
+	}
 	GameSaves(2, 0x20);
 	Sleep(2000);
 	CHECK(Versions(&v1, &v2) && v2 == 1, "save ainda gravando/acomodando: nada enviado");
@@ -160,6 +182,11 @@ int main(int argc, char** argv) {
 	t_chatCount = 0;
 	McFlushChat();
 	CHECK(ChatSaid("Memory Card Online Slot 1 foi salvo."), "chat: Memory Card Online Slot 1 foi salvo.");
+	{
+		char msg[300];
+		CHECK(n02_wecamp_iso_lock("status", NULL, "A,B", t_room_game, "SP", msg, sizeof(msg)) == 1,
+			"trava: solta no fim da partida - a outra sala ja pode comecar");
+	}
 
 	// --- a match with no save sends nothing ---
 	CHECK(kailleraMemcardPrepare(kContent, "ML.bin", g_dir) == 1, "partida sem save: inicio");

@@ -931,6 +931,20 @@ extern "C" {
 			kaillera_ui_gdebug((char*)"%s", msg);
 	}
 
+	// The room's game name and where the room is - what the "M. Card da ISO"
+	// lock tells another room that finds it taken (and looks the game up by
+	// before its Start: the content id only exists once RetroArch opened it).
+	static void McRoomInfo(char* game, int gameCap, char* server, int serverCap) {
+		strncpy(game, GAME, gameCap - 1);
+		game[gameCap - 1] = 0;
+		if (get_active_mode_index() == 0) {
+			strncpy(server, "P2P", serverCap - 1);
+			server[serverCap - 1] = 0;
+		} else {
+			kaillera_GetServerName(server, serverCap);
+		}
+	}
+
 	// One live match's online cards, from kailleraMemcardPrepare() until the
 	// last one went to WE Camp - on the heap, because that last send (a
 	// guest's comes 15 s after the match) can still be going when the next
@@ -944,9 +958,16 @@ extern "C" {
 	// (the slot's own player, who picked its card) sends it. The others only
 	// note it as a version they saw, so their send at the end still goes in
 	// if that player dropped after a save.
+	//
+	// "M. Card da ISO" is one match at a time per game: the checkout takes the
+	// game's cards for this match (wg-camp's lock, keyed by the players list -
+	// the same on every PC of the match), every PC renews it each
+	// N02_MC_LOCK_RENEW_MS and lets it go at the end (McFinishThread). A PC
+	// that closed without that leaves it to lapse on the server by itself.
 	#define N02_MC_KNOWN_MAX 16        // card versions a send can name as its base
 	#define N02_MC_WATCH_MS 1000       // how often the cards are checked during the match
 	#define N02_MC_SAVE_SETTLE_MS 3000 // a save is over once its card stayed this long unchanged
+	#define N02_MC_LOCK_RENEW_MS 60000 // the lock lapses after 5 min without a renewal
 
 	struct McSession {
 		bool iso[2];               // "M. Card da ISO": the game's card of that slot (else the slot player's own)
@@ -954,6 +975,9 @@ extern "C" {
 		bool track[2];             // this PC watches and sends that slot: it has a card this PC may send
 		                           // (with a login, or the DLL's key for M. Card da ISO)
 		bool midMatch;             // WE Camp takes a list of bases - saves go out during the match
+		bool isoLock;              // this match holds the game's "M. Card da ISO" cards (renew, release)
+		char roomGame[128];
+		char server[128];
 		char dir[MAX_PATH];
 		char contentId[32];
 		char players[8 * 32 + 8];
@@ -971,7 +995,7 @@ extern "C" {
 		char final[2][N02_MCD_SIZE];      // the cards as the match ended
 		bool finalOk[2];
 		HANDLE stop;                      // signalled when the match ends
-		HANDLE watcher;                   // McWatchThread (midMatch only)
+		HANDLE watcher;                   // McWatchThread (midMatch or isoLock)
 	};
 	static McSession* g_mcs; // the current match's - set and cleared by the thread that runs the game
 	// The slots the match starts with no card inserted (bit 0 = slot 1, bit 1
@@ -1139,8 +1163,19 @@ extern "C" {
 			memcpy(pending[s], m->onServer[s], N02_MCD_SIZE);
 			memcpy(settled[s], m->onServer[s], N02_MCD_SIZE);
 		}
+		DWORD renewedAt = GetTickCount();
+		bool lockLost = false;
 		while (WaitForSingleObject(m->stop, N02_MC_WATCH_MS) == WAIT_TIMEOUT) {
-			for (int s = 0; s < m->slots; s++) {
+			if (m->isoLock && !lockLost && GetTickCount() - renewedAt >= N02_MC_LOCK_RENEW_MS) {
+				renewedAt = GetTickCount();
+				char msg[300];
+				if (n02_wecamp_iso_lock("renew", m->contentId, m->players, m->roomGame, m->server, msg, sizeof(msg)) == 0) {
+					// Lapsed (WE Camp out of reach for 5 min) and another match took it.
+					lockLost = true;
+					McLog("* M. Card da ISO: esta partida perdeu a vez - %s Os saves daqui em diante podem ser recusados.", msg);
+				}
+			}
+			for (int s = 0; s < m->slots && m->midMatch; s++) {
 				if (!m->track[s] || !McReadCard(m->dir, s, now))
 					continue;
 				if (memcmp(now, pending[s], N02_MCD_SIZE) != 0) {
@@ -1224,11 +1259,17 @@ extern "C" {
 			delete m;
 			return -1;
 		}
-		if (anyIso && !n02_wecamp_checkout(contentId, gameFile, m->players, true, NULL, &co[1], err, sizeof(err))) {
-			McLog("* M. Card da ISO indisponivel: %s", err);
+		McRoomInfo(m->roomGame, sizeof(m->roomGame), m->server, sizeof(m->server));
+		if (anyIso && !n02_wecamp_checkout(contentId, gameFile, m->players, true, NULL, &co[1], err, sizeof(err),
+				m->roomGame, m->server)) {
+			if (co[1].busy) // two rooms pressed Start at the same time - the other one got it
+				McLog("* M. Card da ISO indisponivel: %s So uma partida por vez usa o M. Card da ISO de um jogo.", err);
+			else
+				McLog("* M. Card da ISO indisponivel: %s", err);
 			delete m;
 			return -1;
 		}
+		m->isoLock = anyIso && co[1].locked;
 		if (loggedIn && !n02_wecamp_logged_in()) {
 			// The site refused our login (the checkout went again with the
 			// DLL's key): from here on, a PC without one.
@@ -1250,6 +1291,8 @@ extern "C" {
 					McLog("* M. Card da ISO: falha ao baixar o cartao do slot %d.", s + 1);
 				else
 					McLog("* Memory Card online: falha ao baixar o cartao de %s.", c->player[s]);
+				if (m->isoLock) // this match plays without a card: the next one needn't wait for the lock to lapse
+					n02_wecamp_iso_lock("release", contentId, m->players, NULL, NULL, NULL, 0);
 				delete m;
 				return -1;
 			}
@@ -1298,13 +1341,15 @@ extern "C" {
 
 		// Without a card this PC may send, it has nothing more to do.
 		if (!m->track[0] && !m->track[1]) {
+			if (m->isoLock)
+				n02_wecamp_iso_lock("release", m->contentId, m->players, NULL, NULL, NULL, 0);
 			delete m;
 			return 1;
 		}
 		McLog(m->midMatch ? "* Cada save no jogo vai para o WE Camp assim que o jogo termina de gravar."
 			: "* Os saves vao para o WE Camp no fim da partida.");
 		m->stop = CreateEvent(NULL, TRUE, FALSE, NULL);
-		if (m->midMatch && m->stop)
+		if ((m->midMatch || m->isoLock) && m->stop)
 			m->watcher = CreateThread(NULL, 0, McWatchThread, m, 0, NULL);
 		g_mcs = m;
 		return 1;
@@ -1381,6 +1426,10 @@ extern "C" {
 				McSend(m, s, m->final[s]);
 			}
 		}
+		// The game's cards are free for the next match (the first PC of this
+		// one to get here lets them go; the others' release finds nothing).
+		if (m->isoLock)
+			n02_wecamp_iso_lock("release", m->contentId, m->players, NULL, NULL, NULL, 0);
 		if (m->stop)
 			CloseHandle(m->stop);
 		delete m;
