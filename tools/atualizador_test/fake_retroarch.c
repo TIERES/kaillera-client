@@ -3,17 +3,24 @@
  * Faz o que o RetroArch TIERES faz com o DLL ao abrir o Kaillera: tem uma
  * janela de classe "RetroArch", carrega o kailleraclient.dll da pasta dele,
  * chama kailleraInit() e, se FAKE_DIALOG=1, kailleraSelectServerDialog() numa
- * thread (como o kailleraThread do fork). Um WM_CLOSE fecha o programa, como
- * no RetroArch.
+ * thread (como o kailleraThread do fork), que descarrega o DLL quando o
+ * dialogo volta (CloseKaillera). O item "Kaillera Netplay" do menu
+ * (WM_COMMAND 40028) carrega o DLL de novo, como o LoadKaillera() do fork -
+ * menos com FAKE_NO_MENU=1 (a barra de menus desligada). Um WM_CLOSE fecha o
+ * programa, como no RetroArch; sem ele, o programa sai sozinho depois de
+ * FAKE_TIMER_MS (padrao 5000).
  *
  * Uma thread responde sozinha as caixas de mensagem do DLL (Sim/OK, ou Nao com
  * FAKE_ANSWER=nao) e, com FAKE_CANCEL=1, clica em Cancelar na janela de
- * progresso. Tudo vai para teste.log, ao lado do exe:
+ * progresso. Fecha tambem a caixa "Atualizacao" de outro processo (o rundll32
+ * do DLL). Tudo vai para teste.log, ao lado do exe:
  *
  *     start <versao> pid=<pid> args=<argumentos>
  *     msgbox <titulo> | <texto>
+ *     foreign msgbox <titulo> | <texto>   (de outro processo)
  *     progress <texto>          (janela de progresso vista)
- *     dialog returned
+ *     dialog returned / kaillera unloaded
+ *     menu kaillera / menu kaillera ignored (...)
  *     wm_close / exit
  *
  * Compilado com /DFAKE_VERSION="v1" (ou v2...) e /DFAKE_TIERES para ter a
@@ -129,11 +136,23 @@ static void Screenshot(HWND hwnd, const wchar_t* name) {
 static BOOL CALLBACK ClickerEnum(HWND hwnd, LPARAM lp) {
 	DWORD pid = 0;
 	GetWindowThreadProcessId(hwnd, &pid);
-	if (pid != GetCurrentProcessId() || !IsWindowVisible(hwnd))
+	if (!IsWindowVisible(hwnd))
 		return TRUE;
 	wchar_t cls[64], title[256], text[2048];
 	GetClassNameW(hwnd, cls, 64);
 	GetWindowTextW(hwnd, title, 256);
+	if (pid != GetCurrentProcessId()) {
+		/* the DLL's reopener (rundll32) telling the player to open Kaillera */
+		if (wcscmp(cls, L"#32770") == 0 && wcsncmp(title, L"Atualiza", 8) == 0) {
+			text[0] = 0;
+			GetDlgItemTextW(hwnd, 0xFFFF, text, 2048);
+			Flatten(text);
+			LogLine(L"foreign msgbox %s | %s", title, text);
+			PostMessageW(hwnd, WM_CLOSE, 0, 0);
+			Sleep(300);
+		}
+		return TRUE;
+	}
 	if (wcscmp(cls, L"#32770") == 0) {
 		text[0] = 0;
 		GetDlgItemTextW(hwnd, 0xFFFF, text, 2048);
@@ -191,6 +210,10 @@ static DWORD WINAPI ClickerThread(LPVOID p) {
 typedef int (WINAPI* InitFn)(void);
 typedef void (WINAPI* DialogFn)(void*);
 static DialogFn g_dialog;
+static HMODULE g_dll;
+
+/* the "Kaillera Netplay" item of the fork's window menu (ID_KAILLERA) */
+#define FAKE_MENU_KAILLERA 40028
 
 static DWORD WINAPI DialogThread(LPVOID p) {
 	(void)p;
@@ -200,11 +223,52 @@ static DWORD WINAPI DialogThread(LPVOID p) {
 	const char* ms = getenv("FAKE_KAILLERA_MS");
 	Sleep(ms ? (DWORD)atoi(ms) : 300);
 	InterlockedExchange(&g_kaillera_open, 0);
+	FreeLibrary(g_dll);
+	g_dll = NULL;
+	LogLine(L"kaillera unloaded");
 	return 0;
+}
+
+/* LoadKaillera() + InitialiseKaillera(): the DLL from disk, kailleraInit,
+   and the dialog on its own thread. */
+static int OpenKaillera(void) {
+	g_dll = LoadLibraryW(L"kailleraclient.dll");
+	if (g_dll == NULL) {
+		LogLine(L"LoadLibrary failed %lu", GetLastError());
+		return 0;
+	}
+	InitFn init = (InitFn)GetProcAddress(g_dll, "kailleraInit");
+	g_dialog = (DialogFn)GetProcAddress(g_dll, "kailleraSelectServerDialog");
+	InterlockedExchange(&g_kaillera_open, 1);
+	init();
+	LogLine(L"kailleraInit returned");
+
+	const char* dialog = getenv("FAKE_DIALOG");
+	if (dialog && strcmp(dialog, "1") == 0) {
+		/* like the fork's kailleraThread: the main thread keeps pumping */
+		CloseHandle(CreateThread(NULL, 0, DialogThread, NULL, 0, NULL));
+	} else {
+		InterlockedExchange(&g_kaillera_open, 0);
+	}
+	return 1;
 }
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 	switch (msg) {
+	case WM_COMMAND:
+		if (LOWORD(wp) == FAKE_MENU_KAILLERA) {
+			const char* noMenu = getenv("FAKE_NO_MENU");
+			if (noMenu && strcmp(noMenu, "1") == 0)
+				LogLine(L"menu kaillera ignored (no menubar)");
+			else if (g_kaillera_open || g_dll != NULL)
+				LogLine(L"menu kaillera ignored (kaillera open)");
+			else {
+				LogLine(L"menu kaillera");
+				OpenKaillera();
+			}
+			return 0;
+		}
+		break;
 	case WM_CLOSE:
 		if (g_kaillera_open) {
 			LogLine(L"close refused (kaillera open)");
@@ -255,26 +319,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmdLine, int show) {
 
 	HANDLE clicker = CreateThread(NULL, 0, ClickerThread, NULL, 0, NULL);
 
-	HMODULE dll = LoadLibraryW(L"kailleraclient.dll");
-	if (dll == NULL) {
-		LogLine(L"LoadLibrary failed %lu", GetLastError());
+	if (!OpenKaillera())
 		return 2;
-	}
-	InitFn init = (InitFn)GetProcAddress(dll, "kailleraInit");
-	g_dialog = (DialogFn)GetProcAddress(dll, "kailleraSelectServerDialog");
-	InterlockedExchange(&g_kaillera_open, 1);
-	init();
-	LogLine(L"kailleraInit returned");
 
-	const char* dialog = getenv("FAKE_DIALOG");
-	if (dialog && strcmp(dialog, "1") == 0) {
-		/* like the fork's kailleraThread: the main thread keeps pumping */
-		CloseHandle(CreateThread(NULL, 0, DialogThread, NULL, 0, NULL));
-	} else {
-		InterlockedExchange(&g_kaillera_open, 0);
-	}
-
-	SetTimer(hwnd, 1, 5000, NULL);
+	const char* timer = getenv("FAKE_TIMER_MS");
+	SetTimer(hwnd, 1, timer ? (UINT)atoi(timer) : 5000, NULL);
 	MSG m;
 	while (GetMessageW(&m, NULL, 0, 0) > 0) {
 		TranslateMessage(&m);

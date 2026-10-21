@@ -14,6 +14,7 @@
 #include <winhttp.h>
 #include <bcrypt.h>
 #include <commctrl.h>
+#include <tlhelp32.h>
 #pragma comment(lib, "bcrypt.lib")
 #endif
 
@@ -221,8 +222,10 @@ static int HttpGetToBuffer(const char* host, int port, const char* path, char* o
 // even while this DLL is loaded and running - the Windows loader opens DLL
 // files with share-delete/rename permission, so the currently-executing
 // code keeps running unaffected from the renamed-away file, and whichever
-// process loads "kailleraclient.dll" next picks up the new one. No reboot,
-// no helper process needed - just a message telling the user to relaunch.
+// process loads "kailleraclient.dll" next picks up the new one. Inside
+// RetroArch, a helper then opens Kaillera again with it (see
+// kailleraUpdateReopenW()); anywhere else, a message tells the player to
+// close and open the emulator.
 ///////////////////////////////////////////////////////////////////////////////
 
 static bool SwapInPendingUpdate(const char* dllPath) {
@@ -421,6 +424,15 @@ static void DirectoryOf(const wchar_t* path, wchar_t* dir, int cap) {
 #define N02_RELAUNCH_CLOSE_EVERY_MS 1500
 #define N02_RELAUNCH_CLOSE_FOR_MS (60 * 1000)
 #define N02_RELAUNCH_WAIT_MS (5 * 60 * 1000)
+// DLL-only update inside RetroArch: the "Kaillera Netplay" item of its window
+// menu (ID_KAILLERA, ui/drivers/ui_win32_resource.h in the fork). The
+// reopener waits up to N02_REOPEN_UNLOAD_WAIT_MS for the old DLL to go, then
+// picks the item up to N02_REOPEN_TRIES times, N02_REOPEN_LOAD_WAIT_MS apart.
+#define N02_RA_MENU_KAILLERA 40028
+#define N02_REOPEN_UNLOAD_WAIT_MS (30 * 1000)
+#define N02_REOPEN_LOAD_WAIT_MS 4000
+#define N02_REOPEN_TRIES 3
+#define N02_REOPEN_POLL_MS 100
 
 static bool g_restart_pending = false;
 
@@ -1203,23 +1215,22 @@ static const wchar_t* SkipFirstArgument(const wchar_t* cmd) {
 	return p;
 }
 
-// Starts "rundll32 <this DLL>,kailleraUpdateRelaunch <pid> "<exe>" <args>":
-// once this process ends, it starts retroarch.exe again with the same
-// arguments (and, inherited, the same working folder and environment).
-static bool StartRelauncher(const wchar_t* dllPath) {
-	wchar_t exe[MAX_PATH], sys[MAX_PATH], rundll[MAX_PATH];
-	if (GetModuleFileNameW(NULL, exe, MAX_PATH) == 0 || GetSystemDirectoryW(sys, MAX_PATH) == 0)
+// Starts "rundll32 <dllPath>,<entry> <arguments>": a helper running the DLL
+// at dllPath - the one just installed - in its own process, so it outlives
+// this DLL being unloaded or this whole process ending. It inherits the same
+// working folder and environment.
+static bool StartRundll(const wchar_t* dllPath, const wchar_t* entry, const wchar_t* arguments) {
+	wchar_t sys[MAX_PATH], rundll[MAX_PATH];
+	if (GetSystemDirectoryW(sys, MAX_PATH) == 0)
 		return false;
 	_snwprintf(rundll, MAX_PATH, L"%s\\rundll32.exe", sys);
 	rundll[MAX_PATH - 1] = 0;
 
-	const wchar_t* args = SkipFirstArgument(GetCommandLineW());
-	size_t cap = wcslen(rundll) + wcslen(dllPath) + wcslen(exe) + wcslen(args) + 96;
+	size_t cap = wcslen(rundll) + wcslen(dllPath) + wcslen(entry) + wcslen(arguments) + 16;
 	wchar_t* cmd = (wchar_t*)malloc(cap * sizeof(wchar_t));
 	if (cmd == NULL)
 		return false;
-	_snwprintf(cmd, cap, L"\"%s\" \"%s\",kailleraUpdateRelaunch %lu \"%s\"%s%s",
-		rundll, dllPath, GetCurrentProcessId(), exe, args[0] ? L" " : L"", args);
+	_snwprintf(cmd, cap, L"\"%s\" \"%s\",%s %s", rundll, dllPath, entry, arguments);
 	cmd[cap - 1] = 0;
 
 	STARTUPINFOW si;
@@ -1233,6 +1244,35 @@ static bool StartRelauncher(const wchar_t* dllPath) {
 	CloseHandle(pi.hThread);
 	CloseHandle(pi.hProcess);
 	return true;
+}
+
+// Starts "rundll32 <this DLL>,kailleraUpdateRelaunch <pid> "<exe>" <args>":
+// once this process ends, it starts retroarch.exe again with the same
+// arguments.
+static bool StartRelauncher(const wchar_t* dllPath) {
+	wchar_t exe[MAX_PATH];
+	if (GetModuleFileNameW(NULL, exe, MAX_PATH) == 0)
+		return false;
+	const wchar_t* args = SkipFirstArgument(GetCommandLineW());
+	size_t cap = wcslen(exe) + wcslen(args) + 32;
+	wchar_t* arguments = (wchar_t*)malloc(cap * sizeof(wchar_t));
+	if (arguments == NULL)
+		return false;
+	_snwprintf(arguments, cap, L"%lu \"%s\"%s%s", GetCurrentProcessId(), exe, args[0] ? L" " : L"", args);
+	arguments[cap - 1] = 0;
+	bool ok = StartRundll(dllPath, L"kailleraUpdateRelaunch", arguments);
+	free(arguments);
+	return ok;
+}
+
+// Starts "rundll32 <the new DLL>,kailleraUpdateReopen <pid>": once this
+// process has unloaded this DLL, it opens Kaillera again with the new one -
+// see kailleraUpdateReopenW().
+static bool StartReopener(const wchar_t* dllPath) {
+	wchar_t arguments[16];
+	_snwprintf(arguments, 16, L"%lu", GetCurrentProcessId());
+	arguments[15] = 0;
+	return StartRundll(dllPath, L"kailleraUpdateReopen", arguments);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1481,6 +1521,89 @@ extern "C" __declspec(dllexport) void CALLBACK kailleraUpdateRelaunchW(HWND, HIN
 	free(cmd);
 }
 
+// 1 when process pid has a module named `name` loaded, 0 when it doesn't,
+// -1 when it can't be looked at (the process is gone).
+static int ProcessHasModule(DWORD pid, const wchar_t* name) {
+	HANDLE snap = INVALID_HANDLE_VALUE;
+	for (int i = 0; i < 5 && snap == INVALID_HANDLE_VALUE; i++) {
+		snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, pid);
+		if (snap == INVALID_HANDLE_VALUE && GetLastError() != ERROR_BAD_LENGTH)
+			return -1; // ERROR_BAD_LENGTH: the module list was changing - just try again
+	}
+	if (snap == INVALID_HANDLE_VALUE)
+		return -1;
+	MODULEENTRY32W me;
+	me.dwSize = sizeof(me);
+	int found = 0;
+	for (BOOL ok = Module32FirstW(snap, &me); ok; ok = Module32NextW(snap, &me)) {
+		if (_wcsicmp(me.szModule, name) == 0) {
+			found = 1;
+			break;
+		}
+	}
+	CloseHandle(snap);
+	return found;
+}
+
+// Polls until ProcessHasModule() says `want`, the process ends or timeoutMs
+// passes. True only for `want`.
+static bool WaitForModule(HANDLE process, DWORD pid, const wchar_t* name, int want, DWORD timeoutMs) {
+	DWORD start = GetTickCount();
+	for (;;) {
+		int has = ProcessHasModule(pid, name);
+		if (has == want)
+			return true;
+		if (has < 0 || WaitForSingleObject(process, N02_REOPEN_POLL_MS) != WAIT_TIMEOUT)
+			return false; // the process ended
+		if (GetTickCount() - start >= timeoutMs)
+			return false;
+	}
+}
+
+// rundll32 entry point (see StartReopener), run from the DLL just installed.
+// cmdLine: <pid> of the RetroArch whose kailleraInit() installed it.
+//
+// The fork loads kailleraclient.dll each time Kaillera's window opens and
+// frees it once kailleraSelectServerDialog() returns - which the old DLL does
+// at once after the update (n02_update_restart_pending()). So: wait for that
+// unload, then pick RetroArch's "Kaillera Netplay" menu item, whose
+// LoadKaillera() loads this new DLL from disk and opens the window again. No
+// RetroArch restart, and it works with any TIERES exe already out there.
+//
+// The menu item is only handled with RetroArch's menu bar on
+// (ui_menubar_enable - on in the package). If Kaillera doesn't come back
+// for that or any other reason, the player is told to open it.
+extern "C" __declspec(dllexport) void CALLBACK kailleraUpdateReopenW(HWND, HINSTANCE, LPWSTR cmdLine, int) {
+	DWORD pid = cmdLine != NULL ? wcstoul(cmdLine, NULL, 10) : 0;
+	if (pid == 0)
+		return;
+	wchar_t self[MAX_PATH];
+	if (GetModuleFileNameW(hx, self, MAX_PATH) == 0)
+		return;
+	const wchar_t* slash = wcsrchr(self, L'\\');
+	const wchar_t* name = slash != NULL ? slash + 1 : self;
+
+	HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid);
+	if (process == NULL)
+		return; // RetroArch is already gone
+	bool reopened = false;
+	if (WaitForModule(process, pid, name, 0, N02_REOPEN_UNLOAD_WAIT_MS)) {
+		for (int i = 0; i < N02_REOPEN_TRIES && !reopened; i++) {
+			HWND ra = FindRetroArchWindow(pid);
+			if (ra == NULL)
+				break;
+			PostMessageW(ra, WM_COMMAND, MAKEWPARAM(N02_RA_MENU_KAILLERA, 0), 0);
+			reopened = WaitForModule(process, pid, name, 1, N02_REOPEN_LOAD_WAIT_MS);
+		}
+	}
+	bool alive = WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
+	CloseHandle(process);
+	if (!reopened && alive)
+		MessageBoxW(NULL,
+			L"A nova vers\u00e3o do Kaillera foi instalada.\n\nAbra o Kaillera de novo (menu Kaillera Netplay) para us\u00e1-la.",
+			L"Atualiza\u00e7\u00e3o", MB_OK | MB_ICONINFORMATION | MB_TOPMOST);
+}
+
 #endif // _WIN64
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1559,10 +1682,18 @@ void n02_update_check_and_prompt() {
 	if (CompareVersionStrings(version, N02_VERSION) <= 0)
 		return;
 
+#ifdef _WIN64
+	// Inside RetroArch the new DLL takes over by itself: Kaillera closes and
+	// opens again - see kailleraUpdateReopenW().
+	bool reopen = FindRetroArchWindow() != NULL;
+#else
+	bool reopen = false;
+#endif
+
 	char msg[512];
 	wsprintf(msg,
-		"Uma nova versao do Kaillera esta disponivel:\n\n  Atual: %s\n  Nova:  %s\n\nDeseja baixar e atualizar agora?",
-		N02_VERSION, version);
+		"Uma nova versao do Kaillera esta disponivel:\n\n  Atual: %s\n  Nova:  %s\n\nDeseja baixar e atualizar agora?%s",
+		N02_VERSION, version, reopen ? " O Kaillera vai fechar e abrir de novo sozinho no final." : "");
 	if (MessageBox(NULL, msg, "Atualizacao disponivel", MB_YESNO | MB_ICONQUESTION) != IDYES)
 		return;
 
@@ -1602,6 +1733,14 @@ void n02_update_check_and_prompt() {
 	}
 
 	if (SwapInPendingUpdate(selfPath)) {
+#ifdef _WIN64
+		if (reopen && StartReopener(selfPathW)) {
+			// kailleraSelectServerDialog() returns at once, RetroArch unloads
+			// this DLL, and the reopener opens Kaillera with the new one.
+			g_restart_pending = true;
+			return;
+		}
+#endif
 		MessageBox(NULL,
 			"Atualizacao instalada! Feche e abra o emulador novamente para usar a nova versao.",
 			"Atualizacao", MB_OK | MB_ICONINFORMATION);
