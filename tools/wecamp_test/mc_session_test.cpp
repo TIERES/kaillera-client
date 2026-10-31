@@ -8,6 +8,7 @@
 #include <stdarg.h>
 #include "../../common/n02_wecamp.h"
 #include "../../common/n02_mcchoice.h"
+#include "../../common/n02_thread.h"
 #include "../../common/nSettings.h"
 
 #define KAILLERA_DLLEXP __stdcall

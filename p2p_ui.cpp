@@ -4,6 +4,7 @@
 #include "common/n02_stream.h"
 #include "common/n02_wecamp.h"
 #include "common/n02_mcchoice.h"
+#include "common/n02_thread.h"
 #include "p2p_ui.h"
 #include "p2p_appcode.h"
 #include <windows.h>
@@ -958,7 +959,7 @@ static void p2p_AnswerAccountCheck(const char* room){
 		return;
 	}
 	char* copy = _strdup(room);
-	HANDLE t = copy ? CreateThread(NULL, 0, P2PSendTicketThread, copy, 0, NULL) : NULL;
+	HANDLE t = copy ? n02_create_thread(P2PSendTicketThread, copy) : NULL;
 	if (t) CloseHandle(t); else free(copy);
 }
 
@@ -1033,7 +1034,7 @@ static void p2p_HandleAccountAnswer(const char* nick, const char* answer){
 	strncpy(job->nick, nick, 31);
 	strncpy(job->ticket, answer, 63);
 	strncpy(job->room, g_p2p_check_room, 31);
-	HANDLE t = CreateThread(NULL, 0, P2PVerifyTicketThread, job, 0, NULL);
+	HANDLE t = n02_create_thread(P2PVerifyTicketThread, job);
 	if (t) CloseHandle(t); else delete job;
 }
 
@@ -1124,7 +1125,7 @@ static bool p2p_IsoCheckBeforeReady(){
 	strncpy(job->game, GAME, sizeof(job->game) - 1);
 	job->game[sizeof(job->game) - 1] = 0;
 	InterlockedExchange(&g_p2p_iso_check_running, 1);
-	HANDLE t = CreateThread(NULL, 0, P2PIsoCheckThread, job, 0, NULL);
+	HANDLE t = n02_create_thread(P2PIsoCheckThread, job);
 	if (!t) {
 		delete job;
 		InterlockedExchange(&g_p2p_iso_check_running, 0);
