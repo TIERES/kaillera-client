@@ -1,6 +1,7 @@
 #include "n02_wecamp.h"
 #include "n02_stream.h" // N02_STREAM_DEFAULT_API_KEY - the DLL's shared key
 #include "nSettings.h"
+#include "n02_thread.h"
 
 #include <windows.h>
 #include <winhttp.h>
@@ -636,7 +637,7 @@ void n02_wecamp_refresh_discord_async(HWND notify, UINT msg) {
 	RefreshJob* job = new RefreshJob;
 	job->notify = notify;
 	job->msg = msg;
-	HANDLE t = CreateThread(NULL, 0, RefreshDiscordThread, job, 0, NULL);
+	HANDLE t = n02_create_thread(RefreshDiscordThread, job);
 	if (t)
 		CloseHandle(t);
 	else

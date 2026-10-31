@@ -15,6 +15,7 @@
 #include "common/n02_replays.h"
 #include "common/n02_wecamp.h"
 #include "common/n02_mcchoice.h"
+#include "common/n02_thread.h"
 #include "kcore/kaillera_retryconnect.h"
 #include "player.h"
 
@@ -1082,7 +1083,7 @@ static void AnswerAccountCheck(){
 		PostRoomChat(N02_TICKET_CHAT_PREFIX N02_TICKET_NOACCOUNT);
 		return;
 	}
-	HANDLE t = CreateThread(NULL, 0, SendTicketThread, NULL, 0, NULL);
+	HANDLE t = n02_create_thread(SendTicketThread, NULL);
 	if (t) CloseHandle(t);
 }
 
@@ -1143,7 +1144,7 @@ static void StartTicketCheck(const char* nick, const char* answer){
 	strncpy(job->nick, nick, 31);
 	strncpy(job->ticket, answer, 63);
 	wsprintf(job->room, "%u", kaillera_get_game_id());
-	HANDLE t = CreateThread(NULL, 0, VerifyTicketThread, job, 0, NULL);
+	HANDLE t = n02_create_thread(VerifyTicketThread, job);
 	if (t) CloseHandle(t); else delete job;
 }
 
@@ -1883,7 +1884,7 @@ static bool IsoCheckBeforeStart(){
 	kaillera_GetServerName(job->server, sizeof(job->server));
 	InterlockedExchange(&g_iso_check_running, 1);
 	EnableWindow(kaillera_sdlg_BTN_START, FALSE);
-	HANDLE t = CreateThread(NULL, 0, IsoCheckThread, job, 0, NULL);
+	HANDLE t = n02_create_thread(IsoCheckThread, job);
 	if (!t) {
 		delete job;
 		InterlockedExchange(&g_iso_check_running, 0);

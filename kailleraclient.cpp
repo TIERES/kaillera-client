@@ -22,6 +22,7 @@
 #include "common/n02_watch.h"
 #include "common/n02_wecamp.h"
 #include "common/n02_mcchoice.h"
+#include "common/n02_thread.h"
 
 void __cdecl kaillera_ui_gdebug(char* arg_0, ...); // kaillera_ui.cpp - room chat line
 void __cdecl outpf(char * arg_0, ...); // p2p_ui.cpp - P2P connection window line
@@ -347,7 +348,7 @@ static void VoiceJoinStart(int numplayers) {
 		strncat(job->players, names[i], 31);
 	}
 	job->game = InterlockedIncrement(&g_voice_game);
-	HANDLE t = CreateThread(NULL, 0, VoiceJoinThread, job, 0, NULL);
+	HANDLE t = n02_create_thread(VoiceJoinThread, job);
 	if (t)
 		CloseHandle(t);
 	else
@@ -686,7 +687,13 @@ extern "C" {
 
 		return 0;
 	}
+	void KAILLERA_DLLEXP kailleraMemcardFinish();
+
 	void KAILLERA_DLLEXP kailleraShutdown(){
+		// Kaillera closed during a match (its window shut, so the game never
+		// ended through kailleraEndGame): stop watching the cards and send
+		// what they have now, instead of a watcher running on forever.
+		kailleraMemcardFinish();
 		k_socket::Cleanup();
 		if (gamelist != 0)
 			free(gamelist);
@@ -997,7 +1004,7 @@ extern "C" {
 		HANDLE stop;                      // signalled when the match ends
 		HANDLE watcher;                   // McWatchThread (midMatch or isoLock)
 	};
-	static McSession* g_mcs; // the current match's - set and cleared by the thread that runs the game
+	static McSession* g_mcs; // the current match's - set by the thread that runs the game, taken by kailleraMemcardFinish()
 	// The slots the match starts with no card inserted (bit 0 = slot 1, bit 1
 	// = slot 2) - kailleraMemcardEmptySlots(), for the frontend.
 	static int g_mc_empty_slots;
@@ -1350,7 +1357,7 @@ extern "C" {
 			: "* Os saves vao para o WE Camp no fim da partida.");
 		m->stop = CreateEvent(NULL, TRUE, FALSE, NULL);
 		if ((m->midMatch || m->isoLock) && m->stop)
-			m->watcher = CreateThread(NULL, 0, McWatchThread, m, 0, NULL);
+			m->watcher = n02_create_thread(McWatchThread, m);
 		g_mcs = m;
 		return 1;
 	}
@@ -1437,8 +1444,9 @@ extern "C" {
 	}
 
 	void KAILLERA_DLLEXP kailleraMemcardFinish(){
-		McSession* m = g_mcs;
-		g_mcs = NULL;
+		// The game's thread and kailleraShutdown() (RetroArch's Kaillera
+		// thread) may both get here for the same match - only one takes it.
+		McSession* m = (McSession*)InterlockedExchangePointer((PVOID volatile*)&g_mcs, NULL);
 		if (m == NULL)
 			return;
 		// The cards as the match ended - read now, the next match reuses the folder.
@@ -1447,7 +1455,7 @@ extern "C" {
 				m->finalOk[s] = McReadCard(m->dir, s, m->final[s]);
 		if (m->stop)
 			SetEvent(m->stop);
-		HANDLE t = CreateThread(NULL, 0, McFinishThread, m, 0, NULL);
+		HANDLE t = n02_create_thread(McFinishThread, m);
 		if (t) {
 			CloseHandle(t);
 			return;
