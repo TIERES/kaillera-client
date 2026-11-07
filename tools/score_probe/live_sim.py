@@ -32,7 +32,8 @@ DEFAULT_KEY = "25dc982372ced3c0f18a53e18d9224a8ebbec36974e9f6520ea8fb3e88b0aa22"
 # os patches mantêm o do motor. Lado 0 = LOCAL do jogo.
 SERIAL = 0x9E19
 TEAMS = 128
-BASE = {"scratch": False, "goal_size": 4, "roster_team": 0, "kick_on_run": False, "end_resets": False, "extra": 0}
+BASE = {"scratch": False, "goal_size": 4, "roster_team": 0, "kick_on_run": False, "end_resets": False, "extra": 0,
+        "phase": 0, "pens": 0, "kicker": 0}
 ENGINES = {
     "SLPM_870.56": dict(BASE, **{  # Winning Eleven 2002 (Euro vs Copa America, CAN 2025, BR Turbo...)
         "label": "WE2002", "sig": ((0x1701C, "070040122120c0022198400221900000"), (0x1D038, "b070000c200806240c00401401000324")),
@@ -42,6 +43,9 @@ ENGINES = {
         # Só na tela de seleção de times: ponteiro para o nome de cada time e
         # o código de 3 letras (aqui, os próprios códigos, time 0 por último).
         "sel_names": 0xBF0E8, "sel_codes": 0x800DC, "code_ptrs": False, "mixed_case": False,
+        # Fase (0/1 tempos, 2/3 prorrogação, 4 pênaltis), placar dos pênaltis
+        # (LOCAL, VISITA) e o batedor (FF quando a disputa acabou).
+        "phase": 0x7570E, "pens": 0x7570C, "kicker": 0x7571C,
     }),
     "SLPM_862.91": dict(BASE, **{  # Winning Eleven 4 (Traducida)
         "label": "WE4", "sig": ((0x17034, "60000924200008241e00072421282701"), (0x1D03C, "0100843400200524002006240780013c")),
@@ -155,7 +159,10 @@ def read_state(ram, st, m, teams=None):
         out.append({"id": team_id, "name": "", "code": "", "goals": goals, "scorers": scorers})
     return {"period": period, "clock": clock, "pads": pads, "teams": out,
             "in_play": ram[m["in_play"]] if m["in_play"] else 1,
-            "extra": u16(st, m["extra"]) if m["extra"] else None}
+            "extra": u16(st, m["extra"]) if m["extra"] else None,
+            "phase": ram[m["phase"]] if m["phase"] else None,
+            "pens": [ram[m["pens"]], ram[m["pens"] + 1]] if m["pens"] else None,
+            "kicker": ram[m["kicker"]] if m["kicker"] else None}
 
 
 class MatchWatch:
@@ -183,13 +190,21 @@ class MatchWatch:
         self.last_msg = None
 
     def _message(self, serial, frame, st, final):
-        st = {k: v for k, v in st.items() if k not in ("in_play", "extra")}
+        shootout = st["phase"] == 4
+        st = {k: v for k, v in st.items() if k not in ("in_play", "extra", "phase", "kicker", "pens")}
+        pens = self.last["pens"] if self.last else None
+        if pens and (shootout or any(pens)):
+            st["pens"] = list(pens)
         st["teams"] = [dict(t) for t in st["teams"]]
         if self.names:
             for team in st["teams"]:
                 if team["id"] < len(self.names[0]):
                     team["name"], team["code"] = self.names[0][team["id"]], self.names[1][team["id"]]
-        if self.extra and not final:
+        if final:
+            st["period"] = 4 if shootout else st["period"]
+        elif self.last and self.last["phase"] is not None:
+            st["period"] = self.last["phase"]  # WE2002: a própria fase
+        elif self.extra:
             st["period"] += 2  # prorrogação
         return {"v": 2, "engine": serial, "content": self.content, "kickoff": self.kickoff, "frame": frame,
                 "half": self.half, "final": int(final), **st}
@@ -235,6 +250,9 @@ class MatchWatch:
                         self.active = False
             # WE2002, WE3: depois do 2º tempo, o período volta a 0 com o relógio zerado
             # (o WE3 zera o placar junto: o fim é a amostra anterior).
+            # WE2002: o período também volta a 0 quando o empate vai para os pênaltis (fase 4).
+            elif self.active and prev["period"] == 1 and st["period"] == 0 and st["clock"] == 0 and st["phase"] == 4:
+                pass
             elif self.active and prev["period"] == 1 and st["period"] == 0 and st["clock"] == 0:
                 if not m["end_resets"]:
                     final = True
@@ -242,6 +260,9 @@ class MatchWatch:
                     final_before = True
                 else:
                     self.active = False
+        # WE2002: a disputa de pênaltis acaba quando o batedor vira FF (placar decidido).
+        if self.active and st["phase"] == 4 and st["kicker"] == 0xFF and st["pens"][0] != st["pens"][1]:
+            final = True
         # WE3: relógio e acréscimo do 2º tempo em 0 por 10 s = fim.
         if self.active and m["extra"] and not final and not final_before:
             if st["period"] == 1 and st["clock"] == 0 and st["extra"] == 0:
@@ -259,7 +280,7 @@ class MatchWatch:
         if m["end_resets"]:
             st = read_state(ram, mem, m, self.teams)  # com os times do pontapé inicial
             self.last_msg = self._message(serial, frame, st, False)
-        key = json.dumps([st["period"], st["pads"], st["teams"]])
+        key = json.dumps([st["period"], st["pads"], st["teams"], st["phase"], st["pens"]])
         if not final and key == self.sent_key and frame - self.sent_frame < HEARTBEAT_FRAMES:
             return None
         self.sent_key, self.sent_frame = key, frame
