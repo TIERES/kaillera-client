@@ -143,10 +143,13 @@ def read_state(ram, st, m, teams=None):
         base = m["goals"][side]
         for n in range(32):
             scorer, assist, minute = ram[base + gs * n:base + gs * n + 3]
-            if scorer == 0xFF:
+            if minute == 0xFF:  # fim da lista
                 break
-            if scorer >= m["roster_len"] or minute > 200:
+            if (scorer != 0xFF and scorer >= m["roster_len"]) or minute > 200:
                 return None
+            if scorer == 0xFF:  # gol contra: na lista do time que ganhou o gol, sem o jogador
+                scorers.append(["Gol contra", minute, ""])
+                continue
             scorers.append([cstr(ram, roster + size * scorer, size), minute,
                             cstr(ram, roster + size * assist, size) if assist < m["roster_len"] else ""])
         out.append({"id": team_id, "name": "", "code": "", "goals": goals, "scorers": scorers})

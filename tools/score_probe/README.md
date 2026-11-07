@@ -48,7 +48,7 @@ memória que o pcsx_rearmed publica, e o krec_harness também
 | Acréscimos: u16, crescem no tempo e descem depois do relógio chegar a 0 | — | — | 0x1F8002C8 |
 | Bola rolando (1) / parada no intervalo e no fim (0) | — | 0x800754B9 | — |
 | Gols LOCAL / VISITA | 0x80075702 / 03 | 0x80075293 / 94 | 0x1F8002D1 / D2 |
-| Gols: 32 registros `autor, assistência (FF = sem), minuto[, 0]`, FF = fim | 0x800755C4 / 0x80075644, 4 bytes | 0x80075157 / 0x800751D7, 4 bytes | 0x80107FE5 / 0x80108045, 3 bytes |
+| Gols: 32 registros `autor, assistência (FF = sem), minuto[, 0]`, minuto FF = fim; autor FF = gol contra (na lista do time que ganhou o gol, sem o jogador) | 0x800755C4 / 0x80075644, 4 bytes | 0x80075157 / 0x800751D7, 4 bytes | 0x80107FE5 / 0x80108045, 3 bytes |
 | Elencos (nome em N bytes, índice = autor/assistência) | LOCAL 0x80064570 / VISITA 0x800646E0, 23 x 16 | LOCAL 0x8007490C / VISITA 0x800749E8, 22 x 10 | por time: 0x800C8504 + time x 0xB0, 22 x 8 (japoneses em Shift-JIS: saem sem nome) |
 | Controles 1-4: 0 = LOCAL, 1 = VISITA, FF = sem time (cópias em +4 e +8) | 0x800758D9 | 0x80075469 | não achado: 1P no LOCAL, 2P na VISITA (como a tela de seleção mostra) |
 | Só na tela de seleção: ponteiro para o nome de cada time | 0x800BF0E8 | 0x800A67C0 (nomes em inglês; a tela mostra em japonês) | 0x801D1B48 (a tela mostra em japonês; o patch "Camera torre TV mode" tem os nomes em português) |
