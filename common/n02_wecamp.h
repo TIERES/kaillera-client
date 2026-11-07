@@ -33,7 +33,7 @@ bool n02_wecamp_logged_in();
 
 // Discord linked on the site (cached in n02.ini, refreshed at login and by
 // n02_wecamp_refresh_discord(), which blocks - call it from a worker
-// thread) and the "Chamada de voz no Discord" choice of the M. Card Online
+// thread) and the "Chamada de voz no Discord" choice of the Conta WE Camp
 // dialog (DISCORD_VOICE): off by default, switched on by itself once per
 // account when its Discord first shows up linked; the player can turn it
 // off. n02_wecamp_voice_enabled() = linked and switched on.
@@ -53,7 +53,7 @@ void n02_wecamp_refresh_discord_async(HWND notify, UINT msg);
 // player is told when that's noticed on opening the window:
 #define N02_WECAMP_REFUSED_NOTICE "Sua conta WE Camp nao esta mais conectada neste PC: o site recusou a conexao " \
 	"salva (\"Desconectar\" em outro RetroArch ou PC que usava a mesma, troca de senha ou conexao removida no site).\n\n" \
-	"Entre de novo pelo botao \"M. Card Online\"."
+	"Entre de novo pelo botao \"Conta WE Camp\"."
 
 // Logs in with the account's e-mail and password. Returns true and stores
 // token+username+e-mail on success; otherwise false with a message for the

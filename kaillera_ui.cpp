@@ -923,7 +923,7 @@ static void McChoiceNotice(const char* nick, int choice, bool noLogin){
 	if (noLogin) {
 		if (own)
 			kaillera_gdebug_color(N02_LOGIN_COLOR_BAD, "* Voce nao esta logado no WE Camp: Sem M. Card. Para usar o M. Card Online ou o da ISO, "
-				"entre na sua conta pelo botao \"M. Card Online\" da tela inicial do Kaillera.");
+				"entre na sua conta pelo botao \"Conta WE Camp\" da tela inicial do Kaillera.");
 		else
 			kaillera_gdebug("* %s nao esta logado no WE Camp: Sem M. Card.", nick);
 		return;

@@ -863,7 +863,7 @@ static void p2p_McChoiceNotice(const char* nick, int choice, bool noLogin){
 	if (noLogin) {
 		if (own)
 			p2p_debug_color(RGB(192, 0, 0), "* Voce nao esta logado no WE Camp: Sem M. Card. Para usar o M. Card Online ou o da ISO, "
-				"entre na sua conta pelo botao \"M. Card Online\" da tela inicial do Kaillera (modo Server).");
+				"entre na sua conta pelo botao \"Conta WE Camp\" da tela inicial do Kaillera (modo Server).");
 		else
 			outpf("* %s nao esta logado no WE Camp: Sem M. Card.", nick);
 		return;

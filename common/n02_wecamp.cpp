@@ -189,7 +189,7 @@ static bool TokenRefused(int status, const char* resp) {
 }
 
 #define N02_WECAMP_REFUSED_TEXT "sua conexao com a conta WE Camp caiu (foi desconectada em outro RetroArch ou PC?). " \
-	"Entre de novo pelo botao \"M. Card Online\" da tela inicial do Kaillera."
+	"Entre de novo pelo botao \"Conta WE Camp\" da tela inicial do Kaillera."
 
 static void ClearSavedLogin() {
 	nSettings::set_int_in(N02_WECAMP_SECTION, (char*)"DISCORD_LINKED", 0);

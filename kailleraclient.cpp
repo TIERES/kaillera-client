@@ -246,7 +246,7 @@ static int CurrentGameMultiTap() {
    channel is opened in the Discord app (once per channel - "Entrar" is one
    click). Each player's own DLL asks for itself - nobody can pull anybody
    else into a call. Only with "Participar da chamada de voz" checked in the
-   M. Card Online dialog (n02_wecamp_voice_enabled()); unchecked, the room
+   Conta WE Camp dialog (n02_wecamp_voice_enabled()); unchecked, the room
    is told in the chat that this player stays out of the call.
    The channel only exists once 2 players of the room asked for it: until
    then wg-camp answers "waiting" and this DLL asks again every few seconds
@@ -332,7 +332,7 @@ static void VoiceJoinStart(int numplayers) {
 		return; // playing under another nick - not this account's match
 	if (!n02_wecamp_voice_enabled()) {
 		char line[160];
-		_snprintf(line, sizeof(line) - 1, "* %s nao vai participar da chamada de voz do Discord (desativada em M. Card Online).", nick);
+		_snprintf(line, sizeof(line) - 1, "* %s nao vai participar da chamada de voz do Discord (desativada em Conta WE Camp).", nick);
 		line[sizeof(line) - 1] = 0;
 		active_mod.ChatSend(line);
 		return;
@@ -1282,7 +1282,7 @@ extern "C" {
 			// The site refused our login (the checkout went again with the
 			// DLL's key): from here on, a PC without one.
 			loggedIn = false;
-			McLog("* A sua conexao com a conta WE Camp caiu: entre de novo pelo botao \"M. Card Online\" da tela inicial do Kaillera.");
+			McLog("* A sua conexao com a conta WE Camp caiu: entre de novo pelo botao \"Conta WE Camp\" da tela inicial do Kaillera.");
 		}
 		bool multiBase = true;
 		char sha[2][65] = { "", "" };
