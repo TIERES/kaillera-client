@@ -617,6 +617,12 @@ bool n02_wecamp_voice_join(const char* players, char* status, int statusCap, cha
 	return true;
 }
 
+int n02_wecamp_live_post(const char* body, int bodyLen) {
+	char resp[256];
+	return AuthRequest(true, "POST", "/api/live/match", "Content-Type: application/x-www-form-urlencoded\r\n",
+		body, bodyLen, resp, sizeof(resp), NULL);
+}
+
 struct RefreshJob {
 	HWND notify;
 	UINT msg;

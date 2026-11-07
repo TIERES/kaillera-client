@@ -23,6 +23,7 @@
 #include "common/n02_wecamp.h"
 #include "common/n02_mcchoice.h"
 #include "common/n02_thread.h"
+#include "common/n02_live.h"
 
 void __cdecl kaillera_ui_gdebug(char* arg_0, ...); // kaillera_ui.cpp - room chat line
 void __cdecl outpf(char * arg_0, ...); // p2p_ui.cpp - P2P connection window line
@@ -1364,6 +1365,31 @@ extern "C" {
 
 	int KAILLERA_DLLEXP kailleraGetMemcardMode(){
 		return CurrentGameMemcardMode();
+	}
+
+	/* Placar ao vivo (common/n02_live.h): the match state the frontend read
+	   from the game's RAM (JSON) - goes to WE Camp with the game's players,
+	   our nick and the room, from a worker thread. Only a match being played
+	   (P2P or Servidor), not a replay or Watch Live. */
+	void KAILLERA_DLLEXP kailleraLiveMatch(const char* stateJson){
+		int mode = get_active_mode_index();
+		if (stateJson == NULL || (mode != 0 && mode != 1) || player_is_watching())
+			return;
+		char names[8][32];
+		int count = mode == 0 ? p2p_GetGamePlayers(names, 8) : kaillera_GetGamePlayers(names, 8);
+		if (numplayers < count)
+			count = numplayers;
+		if (count < 1)
+			return;
+		char players[8 * 33] = "";
+		for (int i = 0; i < count; i++) {
+			if (i) strcat(players, ",");
+			strncat(players, names[i], 31);
+		}
+		char nick[32], room[256], server[256];
+		active_mod.GetOwnerName(nick, sizeof(nick));
+		McRoomInfo(room, sizeof(room), server, sizeof(server));
+		n02_live_submit(stateJson, players, nick, room, strstr(stateJson, "\"final\":1") != NULL);
 	}
 
 	/* After kailleraMemcardPrepare() returned 1: the slots the match starts

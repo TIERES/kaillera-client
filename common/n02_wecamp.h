@@ -139,3 +139,8 @@ bool n02_wecamp_commit(const char* contentId, const char* slotPlayer, const char
 // "disabled" (off on the server) or another reason in err.
 bool n02_wecamp_voice_join(const char* players, char* status, int statusCap, char* url, int urlCap,
 	char* appUrl, int appUrlCap, char* errCode, int errCodeCap, char* err, int errCap);
+
+// Placar ao vivo (n02_live.cpp): POSTs one ready form body (state, players,
+// reporter, room) to /api/live/match - with our token, or the DLL's key when
+// not logged in. Returns the HTTP status (0 = no answer).
+int n02_wecamp_live_post(const char* body, int bodyLen);
