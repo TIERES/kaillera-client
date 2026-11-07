@@ -28,7 +28,11 @@ O jogo é reconhecido pelo nome do executável que o kernel do PS1 guarda em
 **0x80009E19** (o mesmo endereço em todos os jogos; os patches mantêm o do
 motor): `SLPM_870.56` = Winning Eleven 2002, `SLPM_862.91` = Winning Eleven 4,
 `SLPM_861.62` = Winning Eleven 3 Final Version. O formato do arquivo (.bin,
-.chd) não muda nada. Lado 0 = LOCAL do jogo (não necessariamente o mandante
+.chd) não muda nada. Patch que renomeou o executável (World Cup 26 PepeWE:
+`WC26_5MX2`) é reconhecido por dois pedaços de 16 bytes do código do motor
+(WE 2002: 0x8001701C e 0x8001D038; WE4: 0x80017034 e 0x8001D03C; WE3:
+0x8001714C e 0x8001D19C - os bytes estão no fork e no live_sim.py), iguais
+em todas as ISOs conferidas, nos menus e na partida. Lado 0 = LOCAL do jogo (não necessariamente o mandante
 do campeonato).
 
 O WE3 guarda a partida (times, período, relógio, placar) no **scratchpad**
@@ -74,6 +78,9 @@ divergir dos digests dos jogadores:
   2025 (9704, 11980) e BR Turbo 2025 em .chd (15056).
 - WE4: Winning Eleven 4 Traducida .chd (12560: Irlanda 7 x 0 Portugal; 16036:
   Portugal x França abandonada pelo menu, depois França 2 x 1 Portugal).
+- WE 2002 renomeado: WorldCup26PepeWEmxCamOriginal.chd (42668: Argentina x
+  Japão, gol de pênalti do Messi - o registro do gol não marca pênalti, sai
+  como gol sem assistência).
 - WE3: WE3 Camera torre TV mode.bin, patch do Final Version (30928: Japão 5 x
   2 Nigéria e Brasil 1 x 3 Nigéria; 3512: Argentina 7 x 1 Holanda e 3 x 0).
   O Final Ver. (Eng) .chd tem o mesmo executável e os elencos nos mesmos

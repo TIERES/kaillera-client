@@ -35,7 +35,8 @@ TEAMS = 128
 BASE = {"scratch": False, "goal_size": 4, "roster_team": 0, "kick_on_run": False, "end_resets": False, "extra": 0}
 ENGINES = {
     "SLPM_870.56": dict(BASE, **{  # Winning Eleven 2002 (Euro vs Copa America, CAN 2025, BR Turbo...)
-        "label": "WE2002", "team_id": 0x75564, "period": 0x75566, "clock": 0x7591C, "in_play": None,
+        "label": "WE2002", "sig": ((0x1701C, "070040122120c0022198400221900000"), (0x1D038, "b070000c200806240c00401401000324")),
+        "team_id": 0x75564, "period": 0x75566, "clock": 0x7591C, "in_play": None,
         "score": 0x75702, "goals": (0x755C4, 0x75644), "roster": (0x64570, 0x646E0), "roster_len": 23,
         "name_len": 16, "pads": 0x758D9,
         # Só na tela de seleção de times: ponteiro para o nome de cada time e
@@ -43,14 +44,16 @@ ENGINES = {
         "sel_names": 0xBF0E8, "sel_codes": 0x800DC, "code_ptrs": False, "mixed_case": False,
     }),
     "SLPM_862.91": dict(BASE, **{  # Winning Eleven 4 (Traducida)
-        "label": "WE4", "team_id": 0x750FB, "period": 0x750FD, "clock": 0x754A8, "in_play": 0x754B9,
+        "label": "WE4", "sig": ((0x17034, "60000924200008241e00072421282701"), (0x1D03C, "0100843400200524002006240780013c")),
+        "team_id": 0x750FB, "period": 0x750FD, "clock": 0x754A8, "in_play": 0x754B9,
         "score": 0x75293, "goals": (0x75157, 0x751D7), "roster": (0x7490C, 0x749E8), "roster_len": 22,
         "name_len": 10, "pads": 0x75469,
         "sel_names": 0xA67C0, "sel_codes": 0xA6AC0, "code_ptrs": True, "mixed_case": True,
     }),
     "SLPM_861.62": dict(BASE, **{  # Winning Eleven 3 Final Version (e patches, "Camera torre TV mode")
         # team_id, period, clock, score e extra ficam no scratchpad (0x1F800000 + offset).
-        "label": "WE3", "scratch": True, "team_id": 0x2DD, "period": 0x2DF, "clock": 0x2C4, "in_play": None,
+        "label": "WE3", "sig": ((0x1714C, "801f023c98024290801f013c9a0220a0"), (0x1D19C, "1c00b3af4c00b3931180073c78c1e724")),
+        "scratch": True, "team_id": 0x2DD, "period": 0x2DF, "clock": 0x2C4, "in_play": None,
         "score": 0x2D1, "goals": (0x107FE5, 0x108045), "goal_size": 3,
         # Elencos por time (não por lado): roster[0] + time x 0xB0, 22 nomes de 8 bytes.
         "roster": (0xC8504, 0), "roster_team": 0xB0, "roster_len": 22, "name_len": 8,
@@ -78,8 +81,16 @@ def cstr(ram, addr, cap):
 
 
 def engine_of(ram, scratch):
+    """(executável do motor, mapa) - pelo nome do executável ou, nos patches
+    que o renomearam (World Cup 26: "WC26_5MX2"), por dois pedaços do código
+    do motor."""
     serial = ram[SERIAL:SERIAL + 11].decode("latin-1", "replace")
     m = ENGINES.get(serial)
+    if m is None:
+        for name, eng in ENGINES.items():
+            if all(ram[a:a + 16] == bytes.fromhex(h) for a, h in eng["sig"]):
+                serial, m = name, eng
+                break
     return serial, (None if m and m["scratch"] and not scratch else m)
 
 
