@@ -169,6 +169,7 @@ class MatchWatch:
         self.armed = 0          # kick_on_run: relógio armado para o pontapé
         self.teams = None       # end_resets: os times do pontapé inicial
         self.over_since = 0     # extra: frame em que o tempo do 2º tempo acabou
+        self.extra = False      # na prorrogação (o WE2002 a joga como períodos 0 e 1 de novo)
         self.last = None        # último estado lido
         self.last_msg = None    # end_resets: o estado da amostra anterior
         self.sent_key = None    # o que mudou desde o último envio
@@ -177,6 +178,7 @@ class MatchWatch:
 
     def _start(self, mem, m, kickoff, half):
         self.active, self.kickoff, self.half, self.armed, self.over_since = True, kickoff, half, 0, 0
+        self.extra = False
         self.teams = [mem[m["team_id"]], mem[m["team_id"] + 1]]
         self.last_msg = None
 
@@ -187,6 +189,8 @@ class MatchWatch:
             for team in st["teams"]:
                 if team["id"] < len(self.names[0]):
                     team["name"], team["code"] = self.names[0][team["id"]], self.names[1][team["id"]]
+        if self.extra and not final:
+            st["period"] += 2  # prorrogação
         return {"v": 2, "engine": serial, "content": self.content, "kickoff": self.kickoff, "frame": frame,
                 "half": self.half, "final": int(final), **st}
 
@@ -208,7 +212,12 @@ class MatchWatch:
             # descendo). O WE3 arma o relógio na tela de formação: o pontapé é
             # quando ele começa a correr.
             if st["period"] == 0 and st["clock"] >= MIN_KICKOFF_CLOCK and st["clock"] >= prev["clock"] + MIN_KICKOFF_CLOCK:
-                if m["kick_on_run"]:
+                # Prorrogação: logo depois do fim do 2º tempo (período 1, relógio 0) da
+                # partida em andamento, o WE2002 começa outro "1º tempo" (período 0,
+                # relógio menor) com o placar mantido - a mesma partida, períodos 2 e 3.
+                if self.active and prev["period"] == 1 and prev["clock"] == 0:
+                    self.extra, self.half = True, st["clock"]
+                elif m["kick_on_run"]:
                     self.active, self.armed = False, st["clock"]
                 else:
                     self._start(mem, m, frame, st["clock"])
