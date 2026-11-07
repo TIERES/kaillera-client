@@ -13,6 +13,8 @@ bool p2p_StreamingEnabled();
 // The memory card of the game starting now, slot 1 and 2
 // (N02_MEMCARD_CHOICE_*, common/n02_mcchoice.h).
 void p2p_GetGameMcSlots(int slot[2]);
+// How many of the two have a confirmed WE Camp account (0-2).
+int p2p_GetGameAccountCount();
 int p2p_GetGamePlayers(char out[][32], int max);
 void p2p_ConfigureStream();
 void p2p_GetOwnerName(char* out, int cap);

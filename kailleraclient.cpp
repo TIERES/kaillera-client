@@ -178,6 +178,13 @@ static void close_recording() {
 // picks their own slot's in that dialog (kaillera_ui.cpp / p2p_ui.cpp).
 // Taken once per game, at the top of _gameCallback().
 static int g_game_mc_slots[2] = { N02_MEMCARD_CHOICE_NONE, N02_MEMCARD_CHOICE_NONE };
+// A game with 2+ confirmed WE Camp accounts counts on WE Camp (live scores,
+// the friendly's sum - and whoever leaves mid-game loses triple XP there):
+// a few seconds in, the emulator's screen asks to play it to the end (Walter,
+// 2026-11-07). Frames since the game started, -1 = no notice.
+static volatile LONG g_finish_notice_frame = -1;
+#define N02_FINISH_NOTICE_FRAME 300
+#define N02_FINISH_NOTICE "joguem ate o fim! Quem sai no meio de um jogo perde o triplo de XP no amistoso."
 static void CurrentGameMcSlots(int slot[2]) {
 	slot[0] = g_game_mc_slots[0];
 	slot[1] = g_game_mc_slots[1];
@@ -372,6 +379,11 @@ int WINAPI _gameCallback(char *game, int player, int numplayers){
 		kaillera_GetGameMcSlots(g_game_mc_slots);
 	else if (get_active_mode_index() == 0)
 		p2p_GetGameMcSlots(g_game_mc_slots);
+	{
+		int accounts = get_active_mode_index() == 1 ? kaillera_GetGameAccountCount()
+			: get_active_mode_index() == 0 ? p2p_GetGameAccountCount() : 0;
+		InterlockedExchange(&g_finish_notice_frame, accounts >= 2 ? 0 : -1);
+	}
 
 	const int noMemcard = CurrentGameNoMemcard();
 	const char* memcardMarker = noMemcard ? N02_MEMCARD_MARKER_ON : N02_MEMCARD_MARKER_OFF;
@@ -813,6 +825,12 @@ extern "C" {
 		//kaillera_core_debug("x");
 		if (KSSDFA.state==2) {
 			McFlushChat();
+			// Only on this PC's screen - not in the chat, replay or stream.
+			if (g_finish_notice_frame >= 0 && ++g_finish_notice_frame >= N02_FINISH_NOTICE_FRAME) {
+				g_finish_notice_frame = -1;
+				if (infos_copy.chatReceivedCallback)
+					infos_copy.chatReceivedCallback((char*)"WE Camp", (char*)N02_FINISH_NOTICE);
+			}
 #ifdef KAILLERA
 
 #ifdef RECORDER

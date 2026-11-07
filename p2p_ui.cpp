@@ -797,6 +797,7 @@ int p2p_GetGamePlayers(char out[][32], int max){
 // a card.
 static char g_p2p_accounts[80] = ""; // peer: the host's last list
 static bool g_p2p_accounts_known = false; // an older host never announces it
+static void p2p_UpdateStreamLock();
 static void p2p_HostAccounts(char* out, int cap){
 	out[0] = 0;
 	if (n02_wecamp_logged_in())
@@ -825,6 +826,7 @@ static void p2p_BroadcastAccounts(){
 	_snprintf(line, sizeof(line), "%s%s%s", N02_TICKET_CHAT_PREFIX, N02_TICKET_ACCOUNTS, list[0] ? list : "-");
 	line[sizeof(line) - 1] = 0;
 	p2p_send_chat(line);
+	p2p_UpdateStreamLock();
 }
 
 static bool p2p_IsPcsxGame(){
@@ -904,6 +906,16 @@ void p2p_GetGameMcSlots(int slot[2]){
 	n02_mcchoice_game_slots(names, 2, &g_p2p_mc, n >= 0 ? accounts : NULL, p2p_IsPcsxGame(), slot, &outdated);
 	if (outdated)
 		outpf("* Memory Card: o outro jogador usa uma versao antiga do DLL - partida sem memory card.");
+}
+int p2p_GetGameAccountCount(){
+	char accounts[80];
+	if (p2p_GetMcAccounts(accounts, sizeof(accounts)) <= 0)
+		return 0;
+	int n = 1;
+	for (const char* p = accounts; *p; p++)
+		if (*p == ',')
+			n++;
+	return n;
 }
 
 // Both ends: the peer's WE Camp account wasn't confirmed, so its slot goes
@@ -1246,6 +1258,7 @@ static void p2p_ResetMemcardForPeer(){
 	g_p2p_accounts[0] = 0;
 	g_p2p_accounts_known = false;
 	p2p_UpdateMemcardControls();
+	p2p_UpdateStreamLock();
 }
 void p2p_chat_callback(char * nick, char * msg){
 	if (msg != NULL && strncmp(msg, N02_STREAM_LIVE_CHAT_PREFIX, strlen(N02_STREAM_LIVE_CHAT_PREFIX)) == 0) {
@@ -1407,6 +1420,37 @@ void p2p_ConfigureStream(){
 
 static void p2p_BroadcastStreamState(bool live){
 	p2p_send_chat(live ? (char*)N02_STREAM_LIVE_CHAT_PREFIX " ativado!" : (char*)N02_STREAM_LIVE_CHAT_PREFIX " desativado.");
+}
+
+// Like the Server mode's room (kaillera_ui.cpp's kaillera_UpdateStreamLock()):
+// with both ends logged in to WE Camp - the host's own login and the peer's
+// confirmed account - "Enviar replay online!" is mandatory, so the host's box
+// is checked and disabled. When the peer leaves, it goes back to the host's
+// own choice (P2P_STREAM_LIVE), which the forced "on" never overwrites.
+static bool g_p2p_stream_forced = false;
+static void p2p_UpdateStreamLock(){
+	if (p2p_ui_connection_dlg == NULL)
+		return;
+	HWND chk = GetDlgItem(p2p_ui_connection_dlg, CHK_STREAM);
+	bool forced = HOST && n02_wecamp_logged_in() && g_p2p_peer_check == 2;
+	bool checked = SendMessage(chk, BM_GETCHECK, 0, 0) == BST_CHECKED;
+	if (forced && !checked) {
+		SendMessage(chk, BM_SETCHECK, BST_CHECKED, 0);
+		p2p_BroadcastStreamState(true);
+	} else if (!forced && g_p2p_stream_forced && HOST) {
+		bool saved = nSettings::get_int("P2P_STREAM_LIVE", 0) != 0;
+		if (saved != checked) {
+			SendMessage(chk, BM_SETCHECK, saved ? BST_CHECKED : BST_UNCHECKED, 0);
+			if (p2p_is_connected())
+				p2p_BroadcastStreamState(saved);
+		}
+	}
+	if (forced && !g_p2p_stream_forced)
+		outpf("* Voce e %s estao logados no WE Camp: o envio do replay online (Stream ao vivo) e obrigatorio. Joguem ate o "
+			"fim, mesmo faltando pouco tempo: quem sai no meio de um jogo (ou perde a conexao) perde o triplo de XP no "
+			"amistoso - se a conexao cair, voltem em ate 20 minutos e terminem outra partida antes de sair.", peername);
+	g_p2p_stream_forced = forced;
+	EnableWindow(chk, HOST && !forced);
 }
 void p2p_GetOwnerName(char* out, int cap){
 	if (cap <= 0) return;

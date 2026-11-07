@@ -1014,6 +1014,7 @@ static char g_game_accounts[N02_ACCOUNTS_LEN] = ""; // the game that started
 // An older host never announces the list: then nobody's card counts.
 static bool g_room_accounts_known = false;
 static bool g_game_accounts_known = false;
+static void kaillera_UpdateStreamLock();
 static void HostAccounts(char* out, int cap){
 	out[0] = 0;
 	if (n02_wecamp_logged_in())
@@ -1045,6 +1046,54 @@ static void BroadcastAccounts(){
 	_snprintf(line, sizeof(line), "%s%s%s", N02_TICKET_CHAT_PREFIX, N02_TICKET_ACCOUNTS, list[0] ? list : "-");
 	line[sizeof(line) - 1] = 0;
 	kaillera_game_chat_send(line);
+	kaillera_UpdateStreamLock();
+}
+
+// "Stream ao vivo!" is mandatory once 2+ players in the room have a confirmed
+// WE Camp account (HostAccounts()): the host's box is checked and disabled,
+// so every such match has its stream - WE Camp's live scores and the
+// friendly's "who left mid-game" come from it (Walter, 2026-11-07). Under 2
+// again, the box goes back to the host's own choice (KAILLERA_STREAM_LIVE),
+// which the forced "on" never overwrites. Other players follow the host's
+// announcement, as always (kaillera_game_chat_callback()).
+static bool g_stream_forced = false;
+static int CountAccounts(const char* list){
+	int n = 0;
+	for (const char* p = list; *p; p++)
+		if (*p != ',' && (p == list || p[-1] == ','))
+			n++;
+	return n;
+}
+static void kaillera_UpdateStreamLock(){
+	HWND chk = GetDlgItem(kaillera_sdlg, CHK_STREAM);
+	bool forced = false;
+	if (hosting) {
+		char list[N02_ACCOUNTS_LEN];
+		HostAccounts(list, sizeof(list));
+		forced = CountAccounts(list) >= 2;
+	}
+	bool checked = SendMessage(chk, BM_GETCHECK, 0, 0) == BST_CHECKED;
+	if (forced && !checked) {
+		SendMessage(chk, BM_SETCHECK, BST_CHECKED, 0);
+		kaillera_BroadcastStreamState(true);
+	} else if (!forced && g_stream_forced && hosting) {
+		bool saved = nSettings::get_int("KAILLERA_STREAM_LIVE", 0) != 0;
+		if (saved != checked) {
+			SendMessage(chk, BM_SETCHECK, saved ? BST_CHECKED : BST_UNCHECKED, 0);
+			kaillera_BroadcastStreamState(saved);
+		}
+	}
+	if (forced && !g_stream_forced)
+		kaillera_ui_gdebug("* 2 ou mais jogadores logados no WE Camp: o Stream ao vivo e obrigatorio. Joguem ate o fim, mesmo "
+			"faltando pouco tempo: quem sai no meio de um jogo (ou perde a conexao) perde o triplo de XP no amistoso - se a "
+			"conexao cair, voltem em ate 20 minutos e terminem outra partida antes de sair.");
+	g_stream_forced = forced;
+	EnableWindow(chk, hosting && !forced);
+}
+// The game that started: how many of its players have a confirmed WE Camp
+// account (kailleraclient.cpp's in-game "play to the end" notice).
+int kaillera_GetGameAccountCount(){
+	return g_game_accounts_known ? CountAccounts(g_game_accounts) : 0;
 }
 
 static void PostRoomChat(const char* text){
@@ -1214,6 +1263,30 @@ static int McChecksPendingWithCard(){
 	return n;
 }
 
+// Host: players who told the room they're logged in to WE Camp (their
+// "[M. Card]" line) but whose account check hasn't finished.
+static int LoginChecksPendingLoggedIn(){
+	int n = 0;
+	LoginChecksLock();
+	for (int i = 0; i < g_login_check_count; i++) {
+		int state = g_login_checks[i].state;
+		const char* nick = g_login_checks[i].nick;
+		if ((state == 0 || state == 1) && n02_mcchoices_get(&g_room_mc, nick) >= 0 && !n02_mcchoices_no_login(&g_room_mc, nick))
+			n++;
+	}
+	LoginChecksUnlock();
+	return n;
+}
+// Host: a check still running could make "Stream ao vivo!" mandatory
+// (kaillera_UpdateStreamLock()) - a game started now would go without it.
+static bool StreamLockPending(){
+	if (!hosting || g_stream_forced)
+		return false;
+	char list[N02_ACCOUNTS_LEN];
+	HostAccounts(list, sizeof(list));
+	return CountAccounts(list) + LoginChecksPendingLoggedIn() >= 2;
+}
+
 // Dialog thread: a player's answer to the check was looked at.
 static void LoginCheckResult(LoginResult* r){
 	bool confirmed = r->ok && _stricmp(r->account, r->nick) == 0;
@@ -1309,7 +1382,9 @@ void kaillera_sdlgGameMode(bool toggle = false){
 		g_mc_announced = -1;
 		g_room_accounts[0] = 0;
 		g_room_accounts_known = false;
+		g_stream_forced = false; // the box starts from the saved choice above
 	}
+	kaillera_UpdateStreamLock();
 	kaillera_UpdateMemcardControls();
 	ShowWindow(kaillera_sdlg_RE_GCHAT,SW_SHOW);
 	ShowWindow(kaillera_sdlg_TXT_GINP,SW_SHOW);
@@ -3212,6 +3287,9 @@ LRESULT CALLBACK KailleraServerDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 				} else if (hosting && McRoomIsPcsx() && McChecksPendingWithCard() > 0) {
 					kaillera_gdebug_color(N02_LOGIN_COLOR_BAD, "* Aguarde: %d jogador(es) que escolheram memory card ainda nao "
 						"confirmaram a conta WE Camp.", McChecksPendingWithCard());
+				} else if (StreamLockPending()) {
+					kaillera_gdebug_color(N02_LOGIN_COLOR_BAD, "* Aguarde: conferindo a conta WE Camp de %d jogador(es) - com 2 ou mais "
+						"logados, o Stream ao vivo e obrigatorio.", LoginChecksPendingLoggedIn());
 				} else if (hosting && IsoCheckBeforeStart()) {
 					// the answer (WM_N02_ISOCHECK) starts the game, or says why not
 				} else {
