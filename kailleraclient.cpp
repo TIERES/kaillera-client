@@ -1367,14 +1367,24 @@ extern "C" {
 		return CurrentGameMemcardMode();
 	}
 
+	/* Placar ao vivo: 1 when the frontend should read the match from the
+	   game's RAM and hand it to kailleraLiveMatch() - a match being played
+	   (P2P or Servidor, not a replay or Watch Live) with this player logged
+	   into the WE Camp account (button "Conta WE Camp"). WE Camp only shows a
+	   match whose players all sent it logged in. */
+	int KAILLERA_DLLEXP kailleraLiveEnabled(){
+		int mode = get_active_mode_index();
+		return (mode == 0 || mode == 1) && !player_is_watching() && n02_wecamp_logged_in() ? 1 : 0;
+	}
+
 	/* Placar ao vivo (common/n02_live.h): the match state the frontend read
 	   from the game's RAM (JSON) - goes to WE Camp with the game's players,
-	   our nick and the room, from a worker thread. Only a match being played
-	   (P2P or Servidor), not a replay or Watch Live. */
+	   our nick and the room, from a worker thread, with the account's token
+	   (nothing without login). */
 	void KAILLERA_DLLEXP kailleraLiveMatch(const char* stateJson){
-		int mode = get_active_mode_index();
-		if (stateJson == NULL || (mode != 0 && mode != 1) || player_is_watching())
+		if (stateJson == NULL || !kailleraLiveEnabled())
 			return;
+		int mode = get_active_mode_index();
 		char names[8][32];
 		int count = mode == 0 ? p2p_GetGamePlayers(names, 8) : kaillera_GetGamePlayers(names, 8);
 		if (numplayers < count)

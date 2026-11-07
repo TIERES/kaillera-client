@@ -58,8 +58,8 @@ static DWORD WINAPI LiveThread(LPVOID) {
 			continue;
 		for (int attempt = 0; attempt < (final ? N02_LIVE_FINAL_TRIES : 1); attempt++) {
 			int status = n02_wecamp_live_post(body, (int)strlen(body));
-			if (status == 200 || (status >= 400 && status < 500))
-				break; // sent, or refused for good (bad state, no key)
+			if (status == 200 || (status >= 400 && status < 500) || !n02_wecamp_logged_in())
+				break; // sent, refused for good (bad state, login refused) or logged out
 			Sleep(3000);
 		}
 		free(body);

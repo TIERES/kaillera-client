@@ -618,8 +618,12 @@ bool n02_wecamp_voice_join(const char* players, char* status, int statusCap, cha
 }
 
 int n02_wecamp_live_post(const char* body, int bodyLen) {
+	// Only with the account's token: WE Camp refuses the shared DLL key here
+	// (only simulations use it) and shows a match whose players all sent it.
+	if (!n02_wecamp_logged_in())
+		return 0;
 	char resp[256];
-	return AuthRequest(true, "POST", "/api/live/match", "Content-Type: application/x-www-form-urlencoded\r\n",
+	return AuthRequest(false, "POST", "/api/live/match", "Content-Type: application/x-www-form-urlencoded\r\n",
 		body, bodyLen, resp, sizeof(resp), NULL);
 }
 

@@ -141,6 +141,7 @@ bool n02_wecamp_voice_join(const char* players, char* status, int statusCap, cha
 	char* appUrl, int appUrlCap, char* errCode, int errCodeCap, char* err, int errCap);
 
 // Placar ao vivo (n02_live.cpp): POSTs one ready form body (state, players,
-// reporter, room) to /api/live/match - with our token, or the DLL's key when
-// not logged in. Returns the HTTP status (0 = no answer).
+// reporter, room) to /api/live/match - only with our token (0 without login;
+// WE Camp shows a match only when all its players sent it logged in).
+// Returns the HTTP status (0 = no answer / not sent).
 int n02_wecamp_live_post(const char* body, int bodyLen);
