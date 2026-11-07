@@ -35,7 +35,12 @@ SCORE = 0x75702
 GOALS = (0x755C4, 0x75644)
 ROSTER = (0x64570, 0x646E0)
 PADS = 0x758D9
-NAME_PTRS = 0x15DBC4
+# Só na tela de seleção de times (a partida sobrescreve): ponteiro para o
+# nome de cada time (o que a tela mostra, ex. "PAL99") e o código de 3 letras,
+# com o time 0 por último (4 bytes cada).
+SEL_NAME_PTRS = 0xBF0E8
+SEL_CODES_END = 0x800DC
+TEAMS = 128
 
 SAMPLE_FRAMES = 30       # lê a RAM a cada meio segundo
 HEARTBEAT_FRAMES = 900   # e manda pelo menos a cada 15 s (o relógio do card)
@@ -49,12 +54,23 @@ def cstr(ram, addr, cap):
     return raw.decode("latin-1") if raw and all(32 <= b < 127 for b in raw) else ""
 
 
-def team_name(ram, team_id):
-    (ptr,) = struct.unpack_from("<I", ram, NAME_PTRS + 4 * team_id)
-    if not 0x80000000 <= ptr < 0x80000000 + len(ram):
-        return ""
-    name = cstr(ram, ptr & 0x1FFFFF, 24)
-    return name if 2 <= len(name) <= 16 and name.upper() == name else ""
+def capture_names(ram):
+    """Nomes e códigos de todos os times enquanto a tela de seleção está na
+    RAM, ou None: só vale a tabela inteira, do time 0 até depois dos dois
+    times escolhidos agora."""
+    names, codes = [], []
+    for team in range(TEAMS):
+        (ptr,) = struct.unpack_from("<I", ram, SEL_NAME_PTRS + 4 * team)
+        code_at = SEL_CODES_END - 4 * team
+        if not 0x80000000 <= ptr < 0x80000000 + len(ram) or ram[code_at + 3] != 0:
+            break
+        name, code = cstr(ram, ptr & 0x1FFFFF, 24)[:16], cstr(ram, code_at, 4)
+        if not name or name.upper() != name or len(code) != 3:
+            break
+        names.append(name)
+        codes.append(code)
+    need = max(ram[TEAM_ID], ram[TEAM_ID + 1])
+    return (names, codes) if len(names) >= 8 and len(names) > need else None
 
 
 def read_state(ram):
@@ -77,7 +93,7 @@ def read_state(ram):
                 return None
             scorers.append([cstr(ram, ROSTER[side] + 16 * scorer, 16), minute,
                             cstr(ram, ROSTER[side] + 16 * assist, 16) if assist < 23 else ""])
-        teams.append({"id": team_id, "name": team_name(ram, team_id), "goals": goals, "scorers": scorers})
+        teams.append({"id": team_id, "name": "", "code": "", "goals": goals, "scorers": scorers})
     return {"period": period, "clock": clock, "pads": pads, "teams": teams}
 
 
@@ -92,9 +108,12 @@ class MatchWatch:
         self.last = None        # último estado lido
         self.sent_key = None    # o que mudou desde o último envio
         self.sent_frame = 0
+        self.names = None       # (nomes, códigos) da última tela de seleção
 
     def sample(self, frame, ram):
         """Chamado a cada SAMPLE_FRAMES; devolve o estado a mandar, ou None."""
+        if not self.active:
+            self.names = capture_names(ram) or self.names
         st = read_state(ram)
         prev, self.last = self.last, st
         if st is None:
@@ -120,7 +139,11 @@ class MatchWatch:
         if final:
             self.active = False
             st = prev  # o placar do fim (o período já voltou a 0)
-        return {"v": 1, "content": self.content, "kickoff": self.kickoff, "frame": frame, "half": self.half,
+        if self.names:
+            for team in st["teams"]:
+                if team["id"] < len(self.names[0]):
+                    team["name"], team["code"] = self.names[0][team["id"]], self.names[1][team["id"]]
+        return {"v": 2, "content": self.content, "kickoff": self.kickoff, "frame": frame, "half": self.half,
                 "final": int(final), **st}
 
 
