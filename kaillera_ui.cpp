@@ -1085,8 +1085,8 @@ static void kaillera_UpdateStreamLock(){
 	}
 	if (forced && !g_stream_forced)
 		kaillera_ui_gdebug("* 2 ou mais jogadores logados no WE Camp: o Stream ao vivo e obrigatorio. Joguem ate o fim, mesmo "
-			"faltando pouco tempo: quem sai no meio de um jogo (ou perde a conexao) perde o triplo de XP no amistoso - se a "
-			"conexao cair, voltem em ate 20 minutos e terminem outra partida antes de sair.");
+			"faltando pouco tempo: quem sai no meio de um jogo (ou perde a conexao) perde o triplo de XP, no campeonato ou no "
+			"amistoso - se a conexao cair, voltem em ate 20 minutos e terminem outra partida antes de sair.");
 	g_stream_forced = forced;
 	EnableWindow(chk, hosting && !forced);
 }

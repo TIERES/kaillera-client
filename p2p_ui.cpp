@@ -1447,8 +1447,9 @@ static void p2p_UpdateStreamLock(){
 	}
 	if (forced && !g_p2p_stream_forced)
 		outpf("* Voce e %s estao logados no WE Camp: o envio do replay online (Stream ao vivo) e obrigatorio. Joguem ate o "
-			"fim, mesmo faltando pouco tempo: quem sai no meio de um jogo (ou perde a conexao) perde o triplo de XP no "
-			"amistoso - se a conexao cair, voltem em ate 20 minutos e terminem outra partida antes de sair.", peername);
+			"fim, mesmo faltando pouco tempo: quem sai no meio de um jogo (ou perde a conexao) perde o triplo de XP, no "
+			"campeonato ou no amistoso - se a conexao cair, voltem em ate 20 minutos e terminem outra partida antes de sair.",
+			peername);
 	g_p2p_stream_forced = forced;
 	EnableWindow(chk, HOST && !forced);
 }

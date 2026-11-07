@@ -179,12 +179,13 @@ static void close_recording() {
 // Taken once per game, at the top of _gameCallback().
 static int g_game_mc_slots[2] = { N02_MEMCARD_CHOICE_NONE, N02_MEMCARD_CHOICE_NONE };
 // A game with 2+ confirmed WE Camp accounts counts on WE Camp (live scores,
-// the friendly's sum - and whoever leaves mid-game loses triple XP there):
-// a few seconds in, the emulator's screen asks to play it to the end (Walter,
-// 2026-11-07). Frames since the game started, -1 = no notice.
+// championship and friendly results - and whoever leaves mid-game loses
+// triple XP there, in either): a few seconds in, the emulator's screen asks
+// to play it to the end (Walter, 2026-11-07). Frames since the game started,
+// -1 = no notice.
 static volatile LONG g_finish_notice_frame = -1;
 #define N02_FINISH_NOTICE_FRAME 300
-#define N02_FINISH_NOTICE "joguem ate o fim! Quem sai no meio de um jogo perde o triplo de XP no amistoso."
+#define N02_FINISH_NOTICE "joguem ate o fim! Quem sai no meio de um jogo perde o triplo de XP."
 static void CurrentGameMcSlots(int slot[2]) {
 	slot[0] = g_game_mc_slots[0];
 	slot[1] = g_game_mc_slots[1];
