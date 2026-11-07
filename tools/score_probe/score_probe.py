@@ -161,6 +161,7 @@ def main():
             core.run()
             if f in wanted:
                 open(os.path.join(args.out, "ram_%06d.bin" % f), "wb").write(core.ram())
+                open(os.path.join(args.out, "scr_%06d.bin" % f), "wb").write(core.scratch())
         print("snap ok", len(wanted))
         return
 
