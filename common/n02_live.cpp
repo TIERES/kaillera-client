@@ -13,6 +13,10 @@ static HANDLE g_wake;
 static char* g_pending;
 static bool g_pending_final;
 static bool g_running;
+// The last state queued for the match being played (a copy) - until its
+// final; n02_live_left() sends it again saying the player left.
+static char* g_last;
+static void Kick();
 
 static struct LiveInit {
 	LiveInit() {
@@ -85,6 +89,8 @@ void n02_live_submit(const char* stateJson, const char* players, const char* rep
 	body[o] = 0;
 
 	EnterCriticalSection(&g_lock);
+	free(g_last);
+	g_last = final ? NULL : _strdup(body); // after the final there's nothing to leave
 	if (g_pending != NULL && g_pending_final && !final) {
 		free(body); // the end of the match still waiting to go wins
 	} else {
@@ -92,6 +98,36 @@ void n02_live_submit(const char* stateJson, const char* players, const char* rep
 		g_pending = body;
 		g_pending_final = final;
 	}
+	Kick();
+}
+
+void n02_live_left() {
+	EnterCriticalSection(&g_lock);
+	char* last = g_last;
+	g_last = NULL;
+	char* body = NULL;
+	// Not after the match's final (nor with it still waiting to go).
+	if (last != NULL && !(g_pending != NULL && g_pending_final)) {
+		size_t n = strlen(last);
+		body = (char*)malloc(n + sizeof("&left=1"));
+		if (body != NULL) {
+			memcpy(body, last, n);
+			memcpy(body + n, "&left=1", sizeof("&left=1"));
+			free(g_pending);
+			g_pending = body;
+			g_pending_final = true; // tried like a final, and never replaced
+		}
+	}
+	free(last);
+	if (body == NULL) {
+		LeaveCriticalSection(&g_lock);
+		return;
+	}
+	Kick();
+}
+
+// (g_lock held - released here) Starts the worker if it isn't running and wakes it.
+static void Kick() {
 	bool start = !g_running;
 	if (start)
 		g_running = true;

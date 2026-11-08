@@ -33,7 +33,7 @@ DEFAULT_KEY = "25dc982372ced3c0f18a53e18d9224a8ebbec36974e9f6520ea8fb3e88b0aa22"
 SERIAL = 0x9E19
 TEAMS = 128
 BASE = {"scratch": False, "goal_size": 4, "roster_team": 0, "kick_on_run": False, "end_resets": False, "extra": 0,
-        "phase": 0, "pens": 0, "kicker": 0, "touch": 0, "setpiece": 0}
+        "phase": 0, "pens": 0, "kicker": 0, "touch": 0, "setpiece": 0, "state": 0}
 ENGINES = {
     "SLPM_870.56": dict(BASE, **{  # Winning Eleven 2002 (Euro vs Copa America, CAN 2025, BR Turbo...)
         "label": "WE2002", "sig": ((0x1701C, "070040122120c0022198400221900000"), (0x1D038, "b070000c200806240c00401401000324")),
@@ -51,6 +51,9 @@ ENGINES = {
         # (posição - 1) % 11) e a cobrança em andamento (2 = pênalti, até o
         # gol dela): o autor do gol contra e os gols de pênalti.
         "touch": 0x7B841, "setpiece": 0x7B499,
+        # Estado da partida: 1 bola rolando, 7 gol, 11 comemoração, 0 saída de
+        # bola, 10 o juiz encerrou o tempo (intervalo, fim, gol de ouro, pênaltis).
+        "state": 0x75782,
     }),
     "SLPM_862.91": dict(BASE, **{  # Winning Eleven 4 (Traducida)
         "label": "WE4", "sig": ((0x17034, "60000924200008241e00072421282701"), (0x1D03C, "0100843400200524002006240780013c")),
@@ -78,6 +81,8 @@ ENGINES = {
 SAMPLE_FRAMES = 30       # lê a RAM a cada meio segundo
 PEN_FRAMES = 30          # gol logo depois do pênalti (a cobrança vale "2" até o frame do gol)
 SHOOTOUT_IDLE = 1200     # disputa de pênaltis decidida, parada no valor de um erro: acabou
+DRAW_FRAMES = 1500       # empate apitado: sem prorrogação/pênaltis em 25 s, terminou empatado
+STATE_OVER = 10
 HEARTBEAT_FRAMES = 900   # e manda pelo menos a cada 15 s (o relógio do card)
 MIN_KICKOFF_CLOCK = 1800  # um tempo de pelo menos 30 s (partidas de 2 minutos para cima)
 OVER_FRAMES = 600        # WE3: 10 s sem tempo nenhum no 2º tempo = fim
@@ -169,7 +174,8 @@ def read_state(ram, st, m, teams=None):
             "extra": u16(st, m["extra"]) if m["extra"] else None,
             "phase": ram[m["phase"]] if m["phase"] else None,
             "pens": [ram[m["pens"]], ram[m["pens"] + 1]] if m["pens"] else None,
-            "kicker": ram[m["kicker"]] if m["kicker"] else None}
+            "kicker": ram[m["kicker"]] if m["kicker"] else None,
+            "state": ram[m["state"]] if m["state"] else None}
 
 
 class MatchWatch:
@@ -200,6 +206,7 @@ class MatchWatch:
         self.et_goals, self.gg_clock = 0, 0        # prorrogação: gols vistos e o relógio + 1 do último (gol de ouro)
         self.decided = False                       # a amostra anterior: disputa decidida ou gol de ouro
         self.prev_phase, self.prev_score = 0, [0, 0]
+        self.over_frame = 0                        # estado 10 com empate no 2º tempo / prorrogação
 
     def goal_watch(self, frame, ram, scratch=b""):
         """A cada frame (como o fork): quem tocou por último e se há um
@@ -253,7 +260,10 @@ class MatchWatch:
 
     def _message(self, serial, frame, st, final):
         shootout = st["phase"] == 4
-        st = {k: v for k, v in st.items() if k not in ("in_play", "extra", "phase", "kicker", "pens")}
+        over = st.get("state")
+        st = {k: v for k, v in st.items() if k not in ("in_play", "extra", "phase", "kicker", "pens", "state")}
+        if over is not None:
+            st["over"] = int(over == STATE_OVER)  # o juiz encerrou o tempo: "Intervalo" só daí
         pens = self.last["pens"] if self.last else None
         if pens and (shootout or any(pens)):
             st["pens"] = list(pens)
@@ -325,6 +335,22 @@ class MatchWatch:
                 else:
                     self.active = False
         score = [mem[m["score"]], mem[m["score"] + 1]]
+        # WE2002: o juiz encerrou o tempo. 2º tempo / prorrogação com vencedor, gol de
+        # ouro (relógio da prorrogação andando) ou disputa decidida = fim; empate: a
+        # prorrogação ou os pênaltis vêm a seguir, ou em DRAW_FRAMES terminou empatado.
+        if self.active and m["state"] and not final and not final_before and st["state"] == STATE_OVER:
+            ph = st["phase"]
+            if ph == 4:
+                final = final or st["pens"][0] != st["pens"][1]
+            elif ph in (1, 3) or (ph == 2 and st["clock"] > 0):
+                if score[0] != score[1]:
+                    final = True
+                elif not self.over_frame:
+                    self.over_frame = frame
+                elif frame - self.over_frame >= DRAW_FRAMES:
+                    final = True
+        else:
+            self.over_frame = 0
         # WE2002, prorrogação: gol depois do qual o relógio não anda mais = gol de ouro.
         if self.active and st["phase"] in (2, 3):
             if sum(score) > self.et_goals:
@@ -341,14 +367,15 @@ class MatchWatch:
         if self.active and not m["end_resets"] and not final and not final_before and prev is not None \
                 and ([mem[m["team_id"]], mem[m["team_id"] + 1]] != self.teams
                      or score[0] < self.prev_score[0] or score[1] < self.prev_score[1]
-                     or (self.decided and st["phase"] is not None and st["phase"] != self.prev_phase)):
+                     or (self.decided and st["phase"] is not None and st["phase"] < self.prev_phase)):
             if self.decided and self.last_msg:
                 final_before = True
             else:
                 self.active = False
         self.decided = st["phase"] is not None and (
             (st["phase"] == 4 and st["pens"][0] != st["pens"][1])
-            or (st["phase"] in (2, 3) and self.gg_clock > 1 and score[0] != score[1]))
+            or (st["phase"] in (2, 3) and self.gg_clock > 1 and score[0] != score[1])
+            or (st["state"] == STATE_OVER and (st["phase"] in (1, 3, 4) or (st["phase"] == 2 and st["clock"] > 0))))
         self.prev_phase, self.prev_score = st["phase"] or 0, score
         # WE2002: a disputa acaba quando o estado dela (9 nas cobranças, 11/13 por
         # ~6 s depois de um erro) vira FF ou, decidida, fica no valor de um erro.
@@ -376,10 +403,11 @@ class MatchWatch:
         if m["end_resets"]:
             st = self.decorate(read_state(ram, mem, m, self.teams), ram, m)  # com os times do pontapé inicial
             self.last_msg = self._message(serial, frame, st, False)
-        elif st["phase"] in (2, 3, 4):  # a amostra antes do fim (gol de ouro / disputa: saiu do resultado)
+        elif st["phase"] is not None:  # a amostra antes do fim (saiu da partida decidida)
             self.last_msg = self._message(serial, frame, st, False)
         # + o relógio do tempo começando a correr (o card sai do "Intervalo").
-        key = json.dumps([st["period"], st["pads"], st["teams"], st["phase"], st["pens"], st["clock"] >= self.half])
+        key = json.dumps([st["period"], st["pads"], st["teams"], st["phase"], st["pens"], st["clock"] >= self.half,
+                          st["state"] == STATE_OVER])
         if not final and key == self.sent_key and frame - self.sent_frame < HEARTBEAT_FRAMES:
             return None
         self.sent_key, self.sent_frame = key, frame

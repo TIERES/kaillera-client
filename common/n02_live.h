@@ -20,3 +20,10 @@
 // game's nicks in 1P,2P,... order, comma separated; reporter: our nick;
 // room: the room's game name. final: the end of the match (sent with retries).
 void n02_live_submit(const char* stateJson, const char* players, const char* reporter, const char* room, bool final);
+
+// The player left the match (Leave, Drop, the Kaillera window closed - the
+// game ended without its final): the last state goes again with "left=1",
+// and WE Camp marks the match being played as interrupted right away
+// (2026-11-08). Nothing after the match's final. The worker keeps the DLL
+// loaded until it's sent (n02_thread.h), even if Kaillera is closing.
+void n02_live_left();
