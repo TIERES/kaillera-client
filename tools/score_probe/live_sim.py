@@ -33,7 +33,7 @@ DEFAULT_KEY = "25dc982372ced3c0f18a53e18d9224a8ebbec36974e9f6520ea8fb3e88b0aa22"
 SERIAL = 0x9E19
 TEAMS = 128
 BASE = {"scratch": False, "goal_size": 4, "roster_team": 0, "kick_on_run": False, "end_resets": False, "extra": 0,
-        "phase": 0, "pens": 0, "kicker": 0}
+        "phase": 0, "pens": 0, "kicker": 0, "touch": 0, "setpiece": 0}
 ENGINES = {
     "SLPM_870.56": dict(BASE, **{  # Winning Eleven 2002 (Euro vs Copa America, CAN 2025, BR Turbo...)
         "label": "WE2002", "sig": ((0x1701C, "070040122120c0022198400221900000"), (0x1D038, "b070000c200806240c00401401000324")),
@@ -46,6 +46,11 @@ ENGINES = {
         # Fase (0/1 tempos, 2/3 prorrogação, 4 pênaltis), placar dos pênaltis
         # (LOCAL, VISITA) e o batedor (FF quando a disputa acabou).
         "phase": 0x7570E, "pens": 0x7570C, "kicker": 0x7571C,
+        # Quem tocou por último na bola (posição em campo 1-22: 1-11 um lado,
+        # 12-22 o outro, trocados a cada tempo; o índice no elenco é
+        # (posição - 1) % 11) e a cobrança em andamento (2 = pênalti, até o
+        # gol dela): o autor do gol contra e os gols de pênalti.
+        "touch": 0x7B841, "setpiece": 0x7B499,
     }),
     "SLPM_862.91": dict(BASE, **{  # Winning Eleven 4 (Traducida)
         "label": "WE4", "sig": ((0x17034, "60000924200008241e00072421282701"), (0x1D03C, "0100843400200524002006240780013c")),
@@ -71,6 +76,7 @@ ENGINES = {
 }
 
 SAMPLE_FRAMES = 30       # lê a RAM a cada meio segundo
+PEN_FRAMES = 30          # gol logo depois do pênalti (a cobrança vale "2" até o frame do gol)
 HEARTBEAT_FRAMES = 900   # e manda pelo menos a cada 15 s (o relógio do card)
 MIN_KICKOFF_CLOCK = 1800  # um tempo de pelo menos 30 s (partidas de 2 minutos para cima)
 OVER_FRAMES = 600        # WE3: 10 s sem tempo nenhum no 2º tempo = fim
@@ -182,6 +188,54 @@ class MatchWatch:
         self.sent_key = None    # o que mudou desde o último envio
         self.sent_frame = 0
         self.names = None       # (nomes, códigos) da última tela de seleção
+        # goal_watch(), a cada frame: autor do gol contra e gol de pênalti.
+        self.watching = False
+        self.last_touch = 0
+        self.pen_frame = 0
+        self.goal_count = [0, 0]
+        self.goal_og = [[0] * 32, [0] * 32]   # gol contra: índice do autor + 1 (0 = não se sabe)
+        self.goal_pen = [[False] * 32, [False] * 32]
+
+    def goal_watch(self, frame, ram, scratch=b""):
+        """A cada frame (como o fork): quem tocou por último e se há um
+        pênalti sendo cobrado, para o gol que acabou de aparecer."""
+        serial, m = engine_of(ram, scratch) if self.active else (None, None)
+        if not m or not m["touch"]:
+            return
+        if 1 <= ram[m["touch"]] <= 22:
+            self.last_touch = ram[m["touch"]]
+        if m["setpiece"] and ram[m["setpiece"]] == 2:
+            self.pen_frame = frame
+        gs = m["goal_size"]
+        for side in (0, 1):
+            base = m["goals"][side]
+            n = 0
+            while n < 32 and ram[base + gs * n + 2] != 0xFF:
+                n += 1
+            for i in range(self.goal_count[side] if self.watching else n, n):
+                own = ram[base + gs * i] == 0xFF
+                self.goal_og[side][i] = (self.last_touch - 1) % 11 + 1 if own and self.last_touch else 0
+                self.goal_pen[side][i] = bool(not own and self.pen_frame and frame - self.pen_frame <= PEN_FRAMES)
+            for i in range(n, min(self.goal_count[side], 32)):
+                self.goal_og[side][i], self.goal_pen[side][i] = 0, False
+            self.goal_count[side] = n
+        self.watching = True
+
+    def decorate(self, st, ram, m):
+        """Gol contra com o autor (do elenco do outro lado) e gol de pênalti:
+        o 4º item ("og"/"pen") do estado v2."""
+        if not st or not m["touch"]:
+            return st
+        teams = [dict(t, scorers=[list(g) for g in t["scorers"]]) for t in st["teams"]]
+        for side, team in enumerate(teams):
+            for i, g in enumerate(team["scorers"]):
+                if g[0] == "Gol contra" and self.goal_og[side][i]:
+                    roster = m["roster"][1 - side]
+                    team["scorers"][i] = [cstr(ram, roster + m["name_len"] * (self.goal_og[side][i] - 1), m["name_len"]),
+                                          g[1], "", "og"]
+                elif g[0] != "Gol contra" and self.goal_pen[side][i]:
+                    team["scorers"][i] = g[:3] + ["pen"]
+        return dict(st, teams=teams)
 
     def _start(self, mem, m, kickoff, half):
         self.active, self.kickoff, self.half, self.armed, self.over_since = True, kickoff, half, 0, 0
@@ -215,7 +269,7 @@ class MatchWatch:
         mem = (scratch if m["scratch"] else ram) if m else None
         if m and not self.active:
             self.names = capture_names(ram, mem, m) or self.names
-        st = read_state(ram, mem, m) if m else None
+        st = self.decorate(read_state(ram, mem, m), ram, m) if m else None
         prev, self.last = self.last, st
         if st is None:
             self.active = False
@@ -278,9 +332,10 @@ class MatchWatch:
             self.active = False
             return dict(self.last_msg, final=1)
         if m["end_resets"]:
-            st = read_state(ram, mem, m, self.teams)  # com os times do pontapé inicial
+            st = self.decorate(read_state(ram, mem, m, self.teams), ram, m)  # com os times do pontapé inicial
             self.last_msg = self._message(serial, frame, st, False)
-        key = json.dumps([st["period"], st["pads"], st["teams"], st["phase"], st["pens"]])
+        # + o relógio do tempo começando a correr (o card sai do "Intervalo").
+        key = json.dumps([st["period"], st["pads"], st["teams"], st["phase"], st["pens"], st["clock"] >= self.half])
         if not final and key == self.sent_key and frame - self.sent_frame < HEARTBEAT_FRAMES:
             return None
         self.sent_key, self.sent_frame = key, frame
@@ -333,6 +388,8 @@ def main():
     for f in range(1, last + 1):
         core.set_input(k.frames[f - 1])
         core.run()
+        if watch.active:
+            watch.goal_watch(f, core.ram(), core.scratch())
         if f % SAMPLE_FRAMES:
             continue
         st = watch.sample(f, core.ram(), core.scratch())
@@ -345,9 +402,10 @@ def main():
         if st is None:
             continue
         t1, t2 = st["teams"]
-        line = "%6d %s per %d relogio %5d  %s %d x %d %s%s" % (
+        line = "%6d %s per %d relogio %5d  %s %d x %d %s%s  %s" % (
             f, SP.KH.fmt_time(f), st["period"], st["clock"], t1["name"] or t1["id"], t1["goals"], t2["goals"],
-            t2["name"] or t2["id"], "  FIM" if st["final"] else "")
+            t2["name"] or t2["id"], "  FIM" if st["final"] else "",
+            [[g for g in t["scorers"] if len(g) > 3] for t in st["teams"]])
         if a.dry:
             print(line, flush=True)
             continue
