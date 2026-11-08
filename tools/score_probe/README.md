@@ -53,6 +53,14 @@ memória que o pcsx_rearmed publica, e o krec_harness também
 | Controles 1-4: 0 = LOCAL, 1 = VISITA, FF = sem time (cópias em +4 e +8) | 0x800758D9 | 0x80075469 | não achado: 1P no LOCAL, 2P na VISITA (como a tela de seleção mostra) |
 | Só na tela de seleção: ponteiro para o nome de cada time | 0x800BF0E8 | 0x800A67C0 (nomes em inglês; a tela mostra em japonês) | 0x801D1B48 (a tela mostra em japonês; o patch "Camera torre TV mode" tem os nomes em português) |
 | Só na tela de seleção: código de 3 letras | os próprios códigos, 4 bytes cada, time 0 em 0x800800DC, descendo | ponteiros em 0x800A6AC0 | os próprios códigos, time 0 em 0x80189B58, descendo |
+| Estado da partida: 0 saída de bola, 1 bola rolando, 2 falta/pênalti a cobrar, 7 gol, 8 disputa de pênaltis (WE3/WE4), 11 replay/comemoração, **10 o juiz encerrou o tempo** (intervalo, fim, gol de ouro, fim dos pênaltis) | 0x80075782 | 0x80075312 | 0x1F80029A (só vale com "dentro da partida" = 1) |
+| Fase: 0/1 tempos, 2/3 prorrogação, 4 pênaltis | 0x8007570E | 0x8007529F | é o próprio período (0x1F8002DF) |
+| Placar dos pênaltis LOCAL / VISITA | 0x8007570C / 0D | 0x8007529D / 9E | 0x1F8002DB / DC |
+| Último toque na bola: posição 1-22 (1-11 LOCAL nas fases 0/2, VISITA nas 1/3); elenco = (posição - 1) % 11 - o autor do gol contra | 0x8007B841 | 0x8007B3DD | 0x1F8002AC |
+| Pênalti sendo cobrado (até o chute; o gol vem ~25-30 frames depois) | 0x8007B499 = 2 | estado 2 e 0x80075313 = 3 | estado 2 e 0x1F80029B = 3 |
+| Opções da partida: bit 0 prorrogação, bit 1 gol de ouro, bit 2 pênaltis | — | 0x80072FD2 | 0x8010A307 |
+| Dentro de uma partida (da formação até sair dela; 0 = saíram) | — | — | 0x1F800198 |
+| DEMO da tela de título (CPU x CPU) | controles FF | controles FF | 0x8010A2C2 = 1 |
 
 Pontapé inicial: com o período em 0, o relógio salta para a duração do tempo
 (de 0 ou, no WE4 depois de sair pelo menu de pausa, de onde ele seguia
@@ -60,7 +68,17 @@ descendo nos menus). No WE3 o salto é na tela de formação (e, depois de uma
 partida, antes da seleção dos times da próxima): o pontapé é quando o
 relógio começa a descer.
 
-Fim:
+Fim (desde 2026-11-08, nos três motores): o estado vai a 10 com a fase 1 ou 3
+e o relógio andado até 0 naquele tempo (vencedor = fim; empate = prorrogação
+ou pênaltis se as opções mandarem, senão fim empatado - o WE 2002, sem as
+opções na RAM, espera 25 s), com a fase 2/3 e o relógio parado no meio (gol
+de ouro, com a opção ligada) ou com a fase 4 e os pênaltis diferentes. No WE3
+e no WE4 o estado 10 aparece também entre os tempos com o próximo período já
+marcado (relógio em 0 ou recém-armado) - por isso o "relógio andado".
+Sair da partida: WE3 = "dentro da partida" vai a 0; WE4 = a bola para
+(0x800754B9) sem o estado 10 por 1 s (pela pausa o estado fica em 1).
+
+Antes (ainda vale sem o estado):
 - WE 2002: depois da tela RESULT o período volta de 1 para 0, relógio em 0.
 - WE4: o período fica em 1; a bola para (0x800754B9 de 1 para 0) com o
   relógio em 0. Parar com o relógio correndo = saíram pelo menu de pausa
@@ -89,6 +107,11 @@ divergir dos digests dos jogadores:
 O código C do fork também foi testado nesses replays inteiros, compilado numa
 DLL que o harness chama a cada 30 frames, como o RetroArch faz.
 
-Ainda não visto: prorrogação, pênaltis (placar e período), partida contra a
-CPU, gol contra (como o registro aparece) e, no WE3, sair pelo menu de pausa
-e outro arranjo de controles.
+Conferido em 2026-11-08 com partidas jogadas por um robô (`webot.py`,
+nesta pasta: liga a ISO no core, aperta os controles, salva/carrega estados e
+grava .krec) - vitória, gols contra, gols de pênalti, prorrogação, gol de ouro,
+disputa de pênaltis, empate, saída pela pausa e DEMO - no WE3 (.bin e Final
+Ver. Eng .chd) e no WE4 Traducida.
+
+Ainda não visto: partida contra a CPU, gol de ouro com a prorrogação
+desligada, morte súbita longa nos pênaltis e, no WE3, a tabela de controles.
