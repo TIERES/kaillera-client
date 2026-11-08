@@ -82,6 +82,7 @@ SAMPLE_FRAMES = 30       # lê a RAM a cada meio segundo
 PEN_FRAMES = 30          # gol logo depois do pênalti (a cobrança vale "2" até o frame do gol)
 SHOOTOUT_IDLE = 1200     # disputa de pênaltis decidida, parada no valor de um erro: acabou
 DRAW_FRAMES = 1500       # empate apitado: sem prorrogação/pênaltis em 25 s, terminou empatado
+GRACE_FRAMES = 300       # 5 s depois do apito inicial antes de mandar (sair antes não conta)
 STATE_OVER = 10
 HEARTBEAT_FRAMES = 900   # e manda pelo menos a cada 15 s (o relógio do card)
 MIN_KICKOFF_CLOCK = 1800  # um tempo de pelo menos 30 s (partidas de 2 minutos para cima)
@@ -250,6 +251,12 @@ class MatchWatch:
         return dict(st, teams=teams)
 
     def _start(self, mem, m, kickoff, half):
+        # Só partida montada pelos jogadores: um controle em cada lado (o DEMO, CPU x CPU, não tem).
+        if m["pads"]:
+            pads = self._ram[m["pads"]:m["pads"] + 4]
+            if 0 not in pads or 1 not in pads:
+                self.active = False
+                return
         self.active, self.kickoff, self.half, self.armed, self.over_since = True, kickoff, half, 0, 0
         self.extra = False
         self.teams = [mem[m["team_id"]], mem[m["team_id"] + 1]]
@@ -284,6 +291,7 @@ class MatchWatch:
     def sample(self, frame, ram, scratch=b""):
         """Chamado a cada SAMPLE_FRAMES; devolve o estado a mandar, ou None."""
         serial, m = engine_of(ram, scratch)
+        self._ram = ram
         mem = (scratch if m["scratch"] else ram) if m else None
         if m and not self.active:
             self.names = capture_names(ram, mem, m) or self.names
@@ -396,6 +404,9 @@ class MatchWatch:
             else:
                 self.over_since = 0
         if not self.active:
+            return None
+        # Os primeiros segundos depois do apito inicial: nada vai (podem sair e recomeçar).
+        if self.kickoff and frame - self.kickoff < GRACE_FRAMES and not final and not final_before:
             return None
         if final_before:
             self.active = False
