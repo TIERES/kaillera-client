@@ -77,6 +77,7 @@ ENGINES = {
 
 SAMPLE_FRAMES = 30       # lê a RAM a cada meio segundo
 PEN_FRAMES = 30          # gol logo depois do pênalti (a cobrança vale "2" até o frame do gol)
+SHOOTOUT_IDLE = 1200     # disputa de pênaltis decidida, parada no valor de um erro: acabou
 HEARTBEAT_FRAMES = 900   # e manda pelo menos a cada 15 s (o relógio do card)
 MIN_KICKOFF_CLOCK = 1800  # um tempo de pelo menos 30 s (partidas de 2 minutos para cima)
 OVER_FRAMES = 600        # WE3: 10 s sem tempo nenhum no 2º tempo = fim
@@ -195,6 +196,7 @@ class MatchWatch:
         self.goal_count = [0, 0]
         self.goal_og = [[0] * 32, [0] * 32]   # gol contra: índice do autor + 1 (0 = não se sabe)
         self.goal_pen = [[False] * 32, [False] * 32]
+        self.so_state, self.so_since = None, 0   # disputa de pênaltis: placar + estado, e desde quando
 
     def goal_watch(self, frame, ram, scratch=b""):
         """A cada frame (como o fork): quem tocou por último e se há um
@@ -284,7 +286,8 @@ class MatchWatch:
                 # Prorrogação: logo depois do fim do 2º tempo (período 1, relógio 0) da
                 # partida em andamento, o WE2002 começa outro "1º tempo" (período 0,
                 # relógio menor) com o placar mantido - a mesma partida, períodos 2 e 3.
-                if self.active and prev["period"] == 1 and prev["clock"] == 0:
+                # Na fase 2 (já marcada) a amostra pode cair no período 0 com o relógio ainda em 0.
+                if self.active and ((prev["period"] == 1 and prev["clock"] == 0) or st["phase"] in (2, 3)):
                     self.extra, self.half = True, st["clock"]
                 elif m["kick_on_run"]:
                     self.active, self.armed = False, st["clock"]
@@ -304,8 +307,9 @@ class MatchWatch:
                         self.active = False
             # WE2002, WE3: depois do 2º tempo, o período volta a 0 com o relógio zerado
             # (o WE3 zera o placar junto: o fim é a amostra anterior).
-            # WE2002: o período também volta a 0 quando o empate vai para os pênaltis (fase 4).
-            elif self.active and prev["period"] == 1 and st["period"] == 0 and st["clock"] == 0 and st["phase"] == 4:
+            # WE2002: o período também volta a 0 quando o empate vai para a prorrogação
+            # (fase 2, já marcada) ou para os pênaltis (fase 4).
+            elif self.active and prev["period"] == 1 and st["period"] == 0 and st["clock"] == 0 and st["phase"] in (2, 4):
                 pass
             elif self.active and prev["period"] == 1 and st["period"] == 0 and st["clock"] == 0:
                 if not m["end_resets"]:
@@ -314,9 +318,24 @@ class MatchWatch:
                     final_before = True
                 else:
                     self.active = False
-        # WE2002: a disputa de pênaltis acaba quando o batedor vira FF (placar decidido).
-        if self.active and st["phase"] == 4 and st["kicker"] == 0xFF and st["pens"][0] != st["pens"][1]:
-            final = True
+        # O jogo saiu da partida (menus: outros times) - a disputa de pênaltis do
+        # WE2002 acaba assim quando o estado não vira FF: o fim é a amostra
+        # anterior, com os times da partida; senão a partida foi abandonada.
+        if self.active and not m["end_resets"] and not final and not final_before and self.teams \
+                and [mem[m["team_id"]], mem[m["team_id"] + 1]] != self.teams:
+            if st["phase"] == 4 and st["pens"][0] != st["pens"][1] and self.last_msg:
+                final_before = True
+            else:
+                self.active = False
+        # WE2002: a disputa acaba quando o estado dela (9 nas cobranças, 11/13 por
+        # ~6 s depois de um erro) vira FF ou, decidida, fica no valor de um erro.
+        if self.active and not final_before and st["phase"] == 4 and st["kicker"] is not None:
+            so = (st["pens"][0], st["pens"][1], st["kicker"])
+            if so != self.so_state or not self.so_since:
+                self.so_state, self.so_since = so, frame
+            if st["pens"][0] != st["pens"][1] and (st["kicker"] == 0xFF or (
+                    st["kicker"] not in (0, 9) and frame - self.so_since >= SHOOTOUT_IDLE)):
+                final = True
         # WE3: relógio e acréscimo do 2º tempo em 0 por 10 s = fim.
         if self.active and m["extra"] and not final and not final_before:
             if st["period"] == 1 and st["clock"] == 0 and st["extra"] == 0:
@@ -333,6 +352,8 @@ class MatchWatch:
             return dict(self.last_msg, final=1)
         if m["end_resets"]:
             st = self.decorate(read_state(ram, mem, m, self.teams), ram, m)  # com os times do pontapé inicial
+            self.last_msg = self._message(serial, frame, st, False)
+        elif st["phase"] == 4:  # a amostra antes do fim da disputa (saiu da tela do resultado)
             self.last_msg = self._message(serial, frame, st, False)
         # + o relógio do tempo começando a correr (o card sai do "Intervalo").
         key = json.dumps([st["period"], st["pads"], st["teams"], st["phase"], st["pens"], st["clock"] >= self.half])
