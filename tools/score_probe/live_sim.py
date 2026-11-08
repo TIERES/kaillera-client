@@ -222,8 +222,8 @@ class MatchWatch:
         self.watching = True
 
     def decorate(self, st, ram, m):
-        """Gol contra com o autor (do elenco do outro lado) e gol de pênalti:
-        o 4º item ("og"/"pen") do estado v2."""
+        """Gol contra com o autor (do elenco do outro lado, no lugar da
+        assistência) e gol de pênalti: o 4º item ("og"/"pen") do estado v2."""
         if not st or not m["touch"]:
             return st
         teams = [dict(t, scorers=[list(g) for g in t["scorers"]]) for t in st["teams"]]
@@ -231,8 +231,8 @@ class MatchWatch:
             for i, g in enumerate(team["scorers"]):
                 if g[0] == "Gol contra" and self.goal_og[side][i]:
                     roster = m["roster"][1 - side]
-                    team["scorers"][i] = [cstr(ram, roster + m["name_len"] * (self.goal_og[side][i] - 1), m["name_len"]),
-                                          g[1], "", "og"]
+                    team["scorers"][i] = ["Gol contra", g[1],
+                                          cstr(ram, roster + m["name_len"] * (self.goal_og[side][i] - 1), m["name_len"]), "og"]
                 elif g[0] != "Gol contra" and self.goal_pen[side][i]:
                     team["scorers"][i] = g[:3] + ["pen"]
         return dict(st, teams=teams)
