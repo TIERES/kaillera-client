@@ -197,6 +197,9 @@ class MatchWatch:
         self.goal_og = [[0] * 32, [0] * 32]   # gol contra: índice do autor + 1 (0 = não se sabe)
         self.goal_pen = [[False] * 32, [False] * 32]
         self.so_state, self.so_since = None, 0   # disputa de pênaltis: placar + estado, e desde quando
+        self.et_goals, self.gg_clock = 0, 0        # prorrogação: gols vistos e o relógio + 1 do último (gol de ouro)
+        self.decided = False                       # a amostra anterior: disputa decidida ou gol de ouro
+        self.prev_phase, self.prev_score = 0, [0, 0]
 
     def goal_watch(self, frame, ram, scratch=b""):
         """A cada frame (como o fork): quem tocou por último e se há um
@@ -244,6 +247,9 @@ class MatchWatch:
         self.extra = False
         self.teams = [mem[m["team_id"]], mem[m["team_id"] + 1]]
         self.last_msg = None
+        # o placar desta partida a partir daqui (pontapé novo não é placar diminuindo)
+        self.prev_score = [mem[m["score"]], mem[m["score"] + 1]]
+        self.et_goals, self.gg_clock, self.decided, self.so_since = sum(self.prev_score), 0, False, 0
 
     def _message(self, serial, frame, st, final):
         shootout = st["phase"] == 4
@@ -318,15 +324,32 @@ class MatchWatch:
                     final_before = True
                 else:
                     self.active = False
-        # O jogo saiu da partida (menus: outros times) - a disputa de pênaltis do
-        # WE2002 acaba assim quando o estado não vira FF: o fim é a amostra
-        # anterior, com os times da partida; senão a partida foi abandonada.
-        if self.active and not m["end_resets"] and not final and not final_before and self.teams \
-                and [mem[m["team_id"]], mem[m["team_id"] + 1]] != self.teams:
-            if st["phase"] == 4 and st["pens"][0] != st["pens"][1] and self.last_msg:
+        score = [mem[m["score"]], mem[m["score"] + 1]]
+        # WE2002, prorrogação: gol depois do qual o relógio não anda mais = gol de ouro.
+        if self.active and st["phase"] in (2, 3):
+            if sum(score) > self.et_goals:
+                self.gg_clock = st["clock"] + 1
+            elif self.gg_clock and st["clock"] + 1 != self.gg_clock:
+                self.gg_clock = 0  # a partida seguiu
+            self.et_goals = sum(score)
+        elif self.active:
+            self.et_goals, self.gg_clock = sum(score), 0
+        # O jogo saiu da partida - menus (outros times), "reiniciar" (a fase volta
+        # a 0 com os mesmos times, depois o placar) ou placar diminuindo: disputa
+        # decidida ou gol de ouro acabam assim (o fim é a amostra anterior); senão
+        # a partida foi abandonada, e o placar zerado nunca vai.
+        if self.active and not m["end_resets"] and not final and not final_before and prev is not None \
+                and ([mem[m["team_id"]], mem[m["team_id"] + 1]] != self.teams
+                     or score[0] < self.prev_score[0] or score[1] < self.prev_score[1]
+                     or (self.decided and st["phase"] is not None and st["phase"] != self.prev_phase)):
+            if self.decided and self.last_msg:
                 final_before = True
             else:
                 self.active = False
+        self.decided = st["phase"] is not None and (
+            (st["phase"] == 4 and st["pens"][0] != st["pens"][1])
+            or (st["phase"] in (2, 3) and self.gg_clock > 1 and score[0] != score[1]))
+        self.prev_phase, self.prev_score = st["phase"] or 0, score
         # WE2002: a disputa acaba quando o estado dela (9 nas cobranças, 11/13 por
         # ~6 s depois de um erro) vira FF ou, decidida, fica no valor de um erro.
         if self.active and not final_before and st["phase"] == 4 and st["kicker"] is not None:
@@ -353,7 +376,7 @@ class MatchWatch:
         if m["end_resets"]:
             st = self.decorate(read_state(ram, mem, m, self.teams), ram, m)  # com os times do pontapé inicial
             self.last_msg = self._message(serial, frame, st, False)
-        elif st["phase"] == 4:  # a amostra antes do fim da disputa (saiu da tela do resultado)
+        elif st["phase"] in (2, 3, 4):  # a amostra antes do fim (gol de ouro / disputa: saiu do resultado)
             self.last_msg = self._message(serial, frame, st, False)
         # + o relógio do tempo começando a correr (o card sai do "Intervalo").
         key = json.dumps([st["period"], st["pads"], st["teams"], st["phase"], st["pens"], st["clock"] >= self.half])
