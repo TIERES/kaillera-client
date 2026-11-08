@@ -258,6 +258,7 @@ class MatchWatch:
                 self.active = False
                 return
         self.active, self.kickoff, self.half, self.armed, self.over_since = True, kickoff, half, 0, 0
+        self.whistle = 0  # o apito inicial (estado 1: bola rolando)
         self.extra = False
         self.teams = [mem[m["team_id"]], mem[m["team_id"] + 1]]
         self.last_msg = None
@@ -319,8 +320,10 @@ class MatchWatch:
                     self._start(mem, m, frame, st["clock"])
             elif self.armed and st["period"] == 0 and st["clock"] < prev["clock"]:
                 self._start(mem, m, frame, self.armed)
-            # Entrou no meio (retry-connect): o relógio já está correndo.
-            elif not self.active and 0 < st["clock"] < prev["clock"] and st["in_play"]:
+            # Entrou no meio (retry-connect): o relógio já está correndo. Não com o
+            # estado da partida (WE2002): a tela de seleção de times também tem um
+            # contador descendo (partida fantasma) - o fork só deixa logo depois do go-live.
+            elif not self.active and not m["state"] and 0 < st["clock"] < prev["clock"] and st["in_play"]:
                 self._start(mem, m, 0, 18000)
             elif self.active and m["in_play"]:
                 # WE4: a bola para depois do 2º tempo com o relógio em 0 = fim; com o relógio correndo = saiu pela pausa.
@@ -406,7 +409,12 @@ class MatchWatch:
         if not self.active:
             return None
         # Os primeiros segundos depois do apito inicial: nada vai (podem sair e recomeçar).
-        if self.kickoff and frame - self.kickoff < GRACE_FRAMES and not final and not final_before:
+        # WE2002: do apito (estado 1); os outros: do relógio armado.
+        if m["state"] and not getattr(self, "whistle", 0) and st["state"] == 1:
+            self.whistle = frame
+        if not final and not final_before and (
+                (not getattr(self, "whistle", 0) or frame - self.whistle < GRACE_FRAMES) if m["state"]
+                else (self.kickoff and frame - self.kickoff < GRACE_FRAMES)):
             return None
         if final_before:
             self.active = False
