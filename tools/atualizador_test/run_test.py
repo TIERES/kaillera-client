@@ -220,7 +220,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--wgcamp", required=True)
     parser.add_argument("--sem-build", action="store_true")
-    parser.add_argument("--cenario", default="ABCDEFGHIJ")
+    parser.add_argument("--cenario", default="ABCDEFGHIJK")
     args = parser.parse_args()
 
     trabalho = Path(os.environ.get("ATUALIZADOR_TESTE_DIR", tempfile.gettempdir())) / "atualizador_teste"
@@ -399,6 +399,32 @@ def main():
         ok(log.count("menu kaillera ignored (no menubar)") == 3, "J: o menu Kaillera foi tentado 3 vezes")
         ok("foreign msgbox Atualização | A nova versão do Kaillera foi instalada." in log,
            "J: aviso para abrir o Kaillera de novo")
+
+    if "K" in args.cenario:
+        print("K) DLL publicado so pelo canal DLL (--so-dll) mais novo que o do pacote, exe antigo:"
+              " baixa o exe e o nucleo, sem rebaixar o DLL")
+        antigo = {"retroarch.exe": v2, "kailleraclient.dll": dll098,
+                  "cores/pcsx_rearmed_libretro.dll": core2, "cores/pcsx_rearmed_libretro.dll.lck": lck}
+        srv.publicar_pacote("v.TIERES.0.98", antigo, nome="RetroArch-pacote-K")
+        srv.publicar_dll("v.TIERES.0.99", dll099)
+        pasta = montar_pasta(raiz, "K", {"retroarch.exe": v1, "kailleraclient.dll": dll099,
+                                         "cores/pcsx_rearmed_libretro.dll": core1}, srv.porta)
+        srv.pedidos.clear()
+        log = rodar(pasta, [], {"FAKE_DIALOG": "1"}, esperar_relancamento=True)
+        print("    " + log.replace("\n", "\n    "))
+        ok("Há arquivos novos do RetroArch TIERES (RetroArch-pacote-K)" in log and "v.TIERES.0.98" not in log,
+           "K: aviso de arquivos novos, sem citar a versao antiga do DLL do pacote")
+        baixados = sorted(p for p in srv.pedidos if p.startswith("/updates/pacote/arquivos/"))
+        ok(baixados == sorted("/updates/pacote/arquivos/" + sha256(f) for f in (v2, core2, lck) if f.stat().st_size > 0),
+           f"K: baixou exe e nucleo, nao o DLL ({len(baixados)} arquivo(s))")
+        ok(sha256(pasta / "kailleraclient.dll") == sha256(dll099), "K: DLL continua o 0.99")
+        ok("start v2" in log and sha256(pasta / "retroarch.exe") == sha256(v2)
+           and sha256(pasta / "cores" / "pcsx_rearmed_libretro.dll") == sha256(core2), "K: reiniciou no exe novo, nucleo novo")
+        segundo = log[log.find("start v2"):]
+        ok("msgbox Atualiza" not in segundo and "msgbox Há arquivos" not in segundo
+           and "msgbox N02 v.TIERES.0.99" in segundo, "K: o exe novo nao pergunta de novo")
+        ok(sobras(pasta) == [], f"K: sem sobras ({sobras(pasta)})")
+        srv.publicar_pacote("v.TIERES.0.99", novo)
 
     srv.http.shutdown()
     falhas = [m for passou, m in RESULTADOS if not passou]
