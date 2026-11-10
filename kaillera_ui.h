@@ -14,6 +14,8 @@ bool kaillera_MultiTapEnabled();
 // The memory card of the game that started, slot 1 and 2
 // (N02_MEMCARD_CHOICE_*, common/n02_mcchoice.h).
 void kaillera_GetGameMcSlots(int slot[2]);
+// How many players of the game that started have a confirmed WE Camp account.
+int kaillera_GetGameAccountCount();
 int kaillera_GetGamePlayers(char out[][32], int max);
 void kaillera_ConfigureStream();
 void kaillera_GetOwnerName(char* out, int cap);

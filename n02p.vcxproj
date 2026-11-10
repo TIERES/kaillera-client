@@ -137,6 +137,7 @@
   <ItemGroup>
     <ClCompile Include="common\k_framecache.cpp" />
     <ClCompile Include="common\k_socket.cpp" />
+    <ClCompile Include="common\n02_live.cpp" />
     <ClCompile Include="common\n02_mcchoice.cpp" />
     <ClCompile Include="common\n02_stream.cpp" />
     <ClCompile Include="common\n02_watch.cpp" />

@@ -23,6 +23,7 @@
 #include "common/n02_wecamp.h"
 #include "common/n02_mcchoice.h"
 #include "common/n02_thread.h"
+#include "common/n02_live.h"
 
 void __cdecl kaillera_ui_gdebug(char* arg_0, ...); // kaillera_ui.cpp - room chat line
 void __cdecl outpf(char * arg_0, ...); // p2p_ui.cpp - P2P connection window line
@@ -177,6 +178,14 @@ static void close_recording() {
 // picks their own slot's in that dialog (kaillera_ui.cpp / p2p_ui.cpp).
 // Taken once per game, at the top of _gameCallback().
 static int g_game_mc_slots[2] = { N02_MEMCARD_CHOICE_NONE, N02_MEMCARD_CHOICE_NONE };
+// A game with 2+ confirmed WE Camp accounts counts on WE Camp (live scores,
+// championship and friendly results - and whoever leaves mid-game loses
+// triple XP there, in either): a few seconds in, the emulator's screen asks
+// to play it to the end (Walter, 2026-11-07). Frames since the game started,
+// -1 = no notice.
+static volatile LONG g_finish_notice_frame = -1;
+#define N02_FINISH_NOTICE_FRAME 300
+#define N02_FINISH_NOTICE "joguem ate o fim! Quem sai no meio de um jogo perde o triplo de XP."
 static void CurrentGameMcSlots(int slot[2]) {
 	slot[0] = g_game_mc_slots[0];
 	slot[1] = g_game_mc_slots[1];
@@ -245,7 +254,7 @@ static int CurrentGameMultiTap() {
    channel is opened in the Discord app (once per channel - "Entrar" is one
    click). Each player's own DLL asks for itself - nobody can pull anybody
    else into a call. Only with "Participar da chamada de voz" checked in the
-   M. Card Online dialog (n02_wecamp_voice_enabled()); unchecked, the room
+   Conta WE Camp dialog (n02_wecamp_voice_enabled()); unchecked, the room
    is told in the chat that this player stays out of the call.
    The channel only exists once 2 players of the room asked for it: until
    then wg-camp answers "waiting" and this DLL asks again every few seconds
@@ -331,7 +340,7 @@ static void VoiceJoinStart(int numplayers) {
 		return; // playing under another nick - not this account's match
 	if (!n02_wecamp_voice_enabled()) {
 		char line[160];
-		_snprintf(line, sizeof(line) - 1, "* %s nao vai participar da chamada de voz do Discord (desativada em M. Card Online).", nick);
+		_snprintf(line, sizeof(line) - 1, "* %s nao vai participar da chamada de voz do Discord (desativada em Conta WE Camp).", nick);
 		line[sizeof(line) - 1] = 0;
 		active_mod.ChatSend(line);
 		return;
@@ -371,6 +380,11 @@ int WINAPI _gameCallback(char *game, int player, int numplayers){
 		kaillera_GetGameMcSlots(g_game_mc_slots);
 	else if (get_active_mode_index() == 0)
 		p2p_GetGameMcSlots(g_game_mc_slots);
+	{
+		int accounts = get_active_mode_index() == 1 ? kaillera_GetGameAccountCount()
+			: get_active_mode_index() == 0 ? p2p_GetGameAccountCount() : 0;
+		InterlockedExchange(&g_finish_notice_frame, accounts >= 2 ? 0 : -1);
+	}
 
 	const int noMemcard = CurrentGameNoMemcard();
 	const char* memcardMarker = noMemcard ? N02_MEMCARD_MARKER_ON : N02_MEMCARD_MARKER_OFF;
@@ -690,6 +704,8 @@ extern "C" {
 	void KAILLERA_DLLEXP kailleraMemcardFinish();
 
 	void KAILLERA_DLLEXP kailleraShutdown(){
+		// Placar ao vivo: the match being played (no final yet) is interrupted.
+		n02_live_left();
 		// Kaillera closed during a match (its window shut, so the game never
 		// ended through kailleraEndGame): stop watching the cards and send
 		// what they have now, instead of a watcher running on forever.
@@ -812,6 +828,12 @@ extern "C" {
 		//kaillera_core_debug("x");
 		if (KSSDFA.state==2) {
 			McFlushChat();
+			// Only on this PC's screen - not in the chat, replay or stream.
+			if (g_finish_notice_frame >= 0 && ++g_finish_notice_frame >= N02_FINISH_NOTICE_FRAME) {
+				g_finish_notice_frame = -1;
+				if (infos_copy.chatReceivedCallback)
+					infos_copy.chatReceivedCallback((char*)"WE Camp", (char*)N02_FINISH_NOTICE);
+			}
 #ifdef KAILLERA
 
 #ifdef RECORDER
@@ -844,6 +866,9 @@ extern "C" {
 #endif
 	}
 	void KAILLERA_DLLEXP kailleraEndGame(){
+		// Placar ao vivo: the game ended (Leave, Drop...) - a match still being
+		// played (no final yet) is interrupted on WE Camp right away.
+		n02_live_left();
 #ifdef KAILLERA
 #ifdef RECORDER
 		close_recording();
@@ -1281,7 +1306,7 @@ extern "C" {
 			// The site refused our login (the checkout went again with the
 			// DLL's key): from here on, a PC without one.
 			loggedIn = false;
-			McLog("* A sua conexao com a conta WE Camp caiu: entre de novo pelo botao \"M. Card Online\" da tela inicial do Kaillera.");
+			McLog("* A sua conexao com a conta WE Camp caiu: entre de novo pelo botao \"Conta WE Camp\" da tela inicial do Kaillera.");
 		}
 		bool multiBase = true;
 		char sha[2][65] = { "", "" };
@@ -1364,6 +1389,41 @@ extern "C" {
 
 	int KAILLERA_DLLEXP kailleraGetMemcardMode(){
 		return CurrentGameMemcardMode();
+	}
+
+	/* Placar ao vivo: 1 when the frontend should read the match from the
+	   game's RAM and hand it to kailleraLiveMatch() - a match being played
+	   (P2P or Servidor, not a replay or Watch Live) with this player logged
+	   into the WE Camp account (button "Conta WE Camp"). WE Camp only shows a
+	   match whose players all sent it logged in. */
+	int KAILLERA_DLLEXP kailleraLiveEnabled(){
+		int mode = get_active_mode_index();
+		return (mode == 0 || mode == 1) && !player_is_watching() && n02_wecamp_logged_in() ? 1 : 0;
+	}
+
+	/* Placar ao vivo (common/n02_live.h): the match state the frontend read
+	   from the game's RAM (JSON) - goes to WE Camp with the game's players,
+	   our nick and the room, from a worker thread, with the account's token
+	   (nothing without login). */
+	void KAILLERA_DLLEXP kailleraLiveMatch(const char* stateJson){
+		if (stateJson == NULL || !kailleraLiveEnabled())
+			return;
+		int mode = get_active_mode_index();
+		char names[8][32];
+		int count = mode == 0 ? p2p_GetGamePlayers(names, 8) : kaillera_GetGamePlayers(names, 8);
+		if (numplayers < count)
+			count = numplayers;
+		if (count < 1)
+			return;
+		char players[8 * 33] = "";
+		for (int i = 0; i < count; i++) {
+			if (i) strcat(players, ",");
+			strncat(players, names[i], 31);
+		}
+		char nick[32], room[256], server[256];
+		active_mod.GetOwnerName(nick, sizeof(nick));
+		McRoomInfo(room, sizeof(room), server, sizeof(server));
+		n02_live_submit(stateJson, players, nick, room, strstr(stateJson, "\"final\":1") != NULL);
 	}
 
 	/* After kailleraMemcardPrepare() returned 1: the slots the match starts

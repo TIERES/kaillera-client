@@ -189,7 +189,7 @@ static bool TokenRefused(int status, const char* resp) {
 }
 
 #define N02_WECAMP_REFUSED_TEXT "sua conexao com a conta WE Camp caiu (foi desconectada em outro RetroArch ou PC?). " \
-	"Entre de novo pelo botao \"M. Card Online\" da tela inicial do Kaillera."
+	"Entre de novo pelo botao \"Conta WE Camp\" da tela inicial do Kaillera."
 
 static void ClearSavedLogin() {
 	nSettings::set_int_in(N02_WECAMP_SECTION, (char*)"DISCORD_LINKED", 0);
@@ -615,6 +615,16 @@ bool n02_wecamp_voice_join(const char* players, char* status, int statusCap, cha
 	KvGet(resp, "url", url, urlCap);
 	KvGet(resp, "app_url", appUrl, appUrlCap);
 	return true;
+}
+
+int n02_wecamp_live_post(const char* body, int bodyLen) {
+	// Only with the account's token: WE Camp refuses the shared DLL key here
+	// (only simulations use it) and shows a match whose players all sent it.
+	if (!n02_wecamp_logged_in())
+		return 0;
+	char resp[256];
+	return AuthRequest(false, "POST", "/api/live/match", "Content-Type: application/x-www-form-urlencoded\r\n",
+		body, bodyLen, resp, sizeof(resp), NULL);
 }
 
 struct RefreshJob {

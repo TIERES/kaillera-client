@@ -1325,14 +1325,38 @@ static int AskPackageUpdate(const Package* pkg, int cmp, long long total) {
 			L"Arquivos que v\u00e3o ser atualizados (%s):\n%s\n"
 			L"Deseja baixar e atualizar agora? O RetroArch vai fechar e abrir de novo sozinho no final.",
 			N02_VERSION, pkg->version, name, size, files);
-	} else {
+	} else if (cmp == 0) {
 		_snwprintf(msg, 2048,
 			L"H\u00e1 arquivos novos do RetroArch TIERES %S%s para baixar (%s):\n\n%s\n"
 			L"Deseja baixar e atualizar agora? O RetroArch vai fechar e abrir de novo sozinho no final.",
 			pkg->version, name, size, files);
+	} else {
+		// the package's DLL is older than this one: its version means nothing here
+		_snwprintf(msg, 2048,
+			L"H\u00e1 arquivos novos do RetroArch TIERES%s para baixar (%s):\n\n%s\n"
+			L"Deseja baixar e atualizar agora? O RetroArch vai fechar e abrir de novo sozinho no final.",
+			name, size, files);
 	}
 	msg[2047] = 0;
 	return MessageBoxW(NULL, msg, L"Atualiza\u00e7\u00e3o dispon\u00edvel", MB_YESNO | MB_ICONQUESTION | MB_TOPMOST);
+}
+
+// True when this DLL's version is the one the DLL-only channel publishes
+// (/updates/latest), or older: a released DLL, not a tester's build ahead of
+// it. False when it can't be told (offline, nothing published).
+static bool IsPublishedDll(const UpdateServer* srv) {
+	char text[512];
+	MemorySink mem;
+	mem.buf = text;
+	mem.cap = sizeof(text) - 1;
+	mem.len = 0;
+	if (WinHttpGetTo(srv, L"/updates/latest?arch=" L"" N02_UPDATE_ARCH, MemorySinkWrite, &mem) != 200)
+		return false;
+	text[mem.len] = 0;
+	char version[64];
+	if (sscanf(text, "%63[^\t\r\n]", version) != 1)
+		return false;
+	return CompareVersionStrings(version, N02_VERSION) >= 0;
 }
 
 static PackageResult CheckPackageUpdate(const wchar_t* dllPath) {
@@ -1357,10 +1381,14 @@ static PackageResult CheckPackageUpdate(const wchar_t* dllPath) {
 	if (!ParseManifest(text, &pkg))
 		return PACKAGE_NOT_USED;
 
-	// Older than this build (a tester's): never offer it - the DLL-only
-	// check says the same.
+	// The package's DLL older than this one: either this DLL came out later
+	// through the DLL-only channel (publish_release.sh --so-dll - the package
+	// still carries the newer exe/core and they must still be offered, minus
+	// its older DLL), or this is a tester's build ahead of everything
+	// published (offer nothing). The DLL-only channel tells them apart: a
+	// released DLL is the one it publishes (or older).
 	int cmp = CompareVersionStrings(pkg.version, N02_VERSION);
-	if (cmp < 0)
+	if (cmp < 0 && !IsPublishedDll(&job.server))
 		return PACKAGE_NOT_USED;
 
 	bool tieres = false;
@@ -1386,8 +1414,9 @@ static PackageResult CheckPackageUpdate(const wchar_t* dllPath) {
 		if (isExe)
 			tieres = found;
 		// Same version: this DLL is the package's, whichever build of it.
+		// Older package DLL: never downgrade this one.
 		bool self = _stricmp(pf->path, N02_PACKAGE_SELF) == 0;
-		pf->download = !same && !(cmp == 0 && self);
+		pf->download = !same && !(cmp <= 0 && self);
 		if (pf->download) {
 			total += pf->size;
 			count++;

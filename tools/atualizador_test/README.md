@@ -28,7 +28,10 @@ fala com o WE Camp de produção.
   - H: a janela de progresso mostra arquivo, "n de 4" e MB;
   - I: um arquivo preso por outro programa: desfaz tudo;
   - J: só o DLL com a barra de menus desligada: o menu não reabre o Kaillera e aparece
-    o aviso para abri-lo à mão.
+    o aviso para abri-lo à mão;
+  - K: DLL publicado só pelo canal do DLL (`--so-dll`) mais novo que o do pacote, com
+    exe antigo: baixa o exe e o núcleo do pacote, sem rebaixar o DLL (antes nada era
+    oferecido - caso real de 2026-11-09: DLL 0.31 contra pacote 0.30/TIERES.0.8).
 - `servidor_local.py`: um wg-camp local com um light publicado, para testar à mão
   com o RetroArch TIERES de verdade ou a task de publicação (`--simular`).
 

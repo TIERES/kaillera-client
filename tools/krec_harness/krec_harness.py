@@ -82,6 +82,15 @@ class retro_log_callback(C.Structure):
     _fields_ = [("log", C.c_void_p)]
 
 
+class retro_memory_descriptor(C.Structure):
+    _fields_ = [("flags", C.c_uint64), ("ptr", C.c_void_p), ("offset", C.c_size_t), ("start", C.c_size_t),
+                ("select", C.c_size_t), ("disconnect", C.c_size_t), ("len", C.c_size_t), ("addrspace", C.c_char_p)]
+
+
+class retro_memory_map(C.Structure):
+    _fields_ = [("descriptors", C.POINTER(retro_memory_descriptor)), ("num_descriptors", C.c_uint)]
+
+
 ENV_T = C.CFUNCTYPE(C.c_bool, C.c_uint, C.c_void_p)
 VIDEO_T = C.CFUNCTYPE(None, C.c_void_p, C.c_uint, C.c_uint, C.c_size_t)
 AUDIO_T = C.CFUNCTYPE(None, C.c_int16, C.c_int16)
@@ -190,7 +199,14 @@ class Core:
         if cmd == 17:  # GET_VARIABLE_UPDATE
             C.cast(data, C.POINTER(C.c_bool))[0] = False
             return True
-        if cmd in (10, 11, 13, 32, 35, 36, 37, 51, 70):
+        if cmd == 36:  # SET_MEMORY_MAPS - guarda o scratchpad do PS1 (0x1F800000, 1 KB)
+            m = C.cast(data, C.POINTER(retro_memory_map))[0]
+            for i in range(m.num_descriptors):
+                d = m.descriptors[i]
+                if d.start == 0x1F800000 and d.ptr:
+                    self.scratch_ptr, self.scratch_size = d.ptr + d.offset, d.len
+            return True
+        if cmd in (10, 11, 13, 32, 35, 37, 51, 70):
             return True
         if cmd == 27:  # GET_LOG_INTERFACE
             C.cast(data, C.POINTER(retro_log_callback))[0].log = C.cast(self.log_cb, C.c_void_p).value
@@ -242,6 +258,11 @@ class Core:
 
     def ram(self):
         return C.string_at(self.ram_ptr, self.ram_size)
+
+    def scratch(self):
+        """Scratchpad do PS1 (1 KB em 0x1F800000), se o core publicou o mapa de memória."""
+        ptr = getattr(self, "scratch_ptr", None)
+        return C.string_at(ptr, self.scratch_size) if ptr else b""
 
     def serialize(self):
         buf = C.create_string_buffer(self.ss)
