@@ -77,6 +77,9 @@ ENGINES = {
         # em 2), o estado e as opções da partida.
         "phase": 0x7529F, "pens": 0x7529D, "touch": 0x7B3DD, "setpiece": 0x75313, "state": 0x75312,
         "pen_value": 3, "pen_state": 2, "settings": 0x72FD2,
+        # Os números da tela RESULT e o cartão de cada jogador, como no WE2002 (a lista de
+        # contundidos ainda não foi achada).
+        "stats": 0x75283, "cards": (0x750FF, 0x75115),
     }),
     "SLPM_861.62": dict(BASE, **{  # Winning Eleven 3 Final Version (e patches, "Camera torre TV mode")
         # team_id, period, clock, score e extra ficam no scratchpad (0x1F800000 + offset).
