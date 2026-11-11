@@ -407,17 +407,17 @@ class MatchWatch:
         # WE2002: o juiz encerrou o tempo. 2º tempo / prorrogação com vencedor, gol de
         # ouro (relógio da prorrogação andando) ou disputa decidida = fim; empate: a
         # prorrogação ou os pênaltis vêm a seguir, ou em DRAW_FRAMES terminou empatado.
-        # O WE3 também mostra o estado entre os tempos com o próximo período já marcado (relógio
-        # em 0, ou já armado por alguns frames): fim de tempo tem o relógio andado até 0 nesse
-        # período; gol de ouro, o relógio andado (abaixo do tempo), com a opção ligada.
+        # Todos os motores também mostram o estado entre os tempos com o próximo período já
+        # marcado (relógio em 0, ou já armado por alguns frames - no WE2002 por 1-2 frames: uma
+        # amostra ali era um falso fim no intervalo): fim de tempo tem o relógio andado até 0
+        # nesse período; gol de ouro, o relógio andado (abaixo do tempo), com a opção ligada.
         ph = st["phase"]
         if self.active and st["clock"] > 0:
             self.run_phase = (ph or 0) + 1
         sets = st["settings"] or 0
-        time_up = ph in (1, 3) and (not m["settings"] or (
-            st["clock"] == 0 and getattr(self, "run_phase", 0) == ph + 1))
-        golden = ph in (2, 3) and st["clock"] > 0 and (
-            bool(sets & SET_GOLDEN) and st["clock"] < self.half if m["settings"] else ph == 2)
+        time_up = ph in (1, 3) and st["clock"] == 0 and getattr(self, "run_phase", 0) == ph + 1
+        # Gol de ouro no WE2002 (sem as opções na RAM): em qualquer tempo da prorrogação.
+        golden = ph in (2, 3) and 0 < st["clock"] < self.half and (not m["settings"] or bool(sets & SET_GOLDEN))
         if self.active and m["state"] and not final and not final_before and st["state"] == STATE_OVER:
             if ph == 4:
                 final = final or st["pens"][0] != st["pens"][1]
