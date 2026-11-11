@@ -1525,8 +1525,16 @@ extern "C" __declspec(dllexport) void CALLBACK kailleraUpdateRelaunchW(HWND, HIN
 			if (waited != WAIT_TIMEOUT || elapsed >= N02_RELAUNCH_WAIT_MS)
 				break;
 			HWND ra = elapsed < N02_RELAUNCH_CLOSE_FOR_MS ? FindRetroArchWindow(pid) : NULL;
-			if (ra != NULL)
-				PostMessageW(ra, WM_CLOSE, 0, 0);
+			if (ra != NULL) {
+				// Closed while minimized, RetroArch up to TIERES 0.9 saves its
+				// taskbar icon as the window size and then opens with no client
+				// area (the fork's win32_save_position): restore it first, and
+				// close it on the next round.
+				if (IsIconic(ra))
+					ShowWindowAsync(ra, SW_RESTORE);
+				else
+					PostMessageW(ra, WM_CLOSE, 0, 0);
+			}
 		}
 		CloseHandle(process);
 		if (waited != WAIT_OBJECT_0)
