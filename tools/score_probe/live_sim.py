@@ -37,7 +37,7 @@ SCR = 0x40000000
 BASE = {"scratch": False, "goal_size": 4, "roster_team": 0, "kick_on_run": False, "end_resets": False, "extra": 0,
         "phase": 0, "pens": 0, "kicker": 0, "touch": 0, "setpiece": 0, "state": 0,
         "pen_value": 2, "pen_state": None, "in_match": 0, "demo": 0, "demo_value": 0, "settings": 0,
-        "stats": 0, "cards": None, "injuries": 0}
+        "stats": 0, "cards": None, "injuries": 0, "numbers": 0, "numbers_team": 0}
 SET_EXTRA, SET_GOLDEN, SET_PENS = 1, 2, 4  # as opções da partida (bit 0 prorrogação, 1 gol de ouro, 2 pênaltis)
 ENGINES = {
     "SLPM_870.56": dict(BASE, **{  # Winning Eleven 2002 (Euro vs Copa America, CAN 2025, BR Turbo...)
@@ -105,6 +105,9 @@ ENGINES = {
         # Os números da tela RESULT e o cartão de cada jogador, como no WE2002 - na RAM, logo
         # antes dos registros de gols (a lista de contundidos ainda não foi achada).
         "stats": 0x1085B0, "cards": (0x107F8D, 0x107FA3),
+        # Os números das camisas, 22 por time: o jogador sem nome legível (os japoneses, em
+        # Shift-JIS) vai como "#" e o número.
+        "numbers": 0x1346DC, "numbers_team": 22,
     }),
 }
 
@@ -162,6 +165,18 @@ def pointer(ram, addr):
     return ptr & 0x1FFFFF if 0x80000000 <= ptr < 0x80000000 + len(ram) else None
 
 
+def player_name(ram, m, team, side, idx):
+    """O jogador para o WE Camp: o nome do elenco ou, ilegível (os japoneses do WE3, em
+    Shift-JIS), "#" e o número da camisa - o WE Camp mostra "Número N"."""
+    roster = m["roster"][0] + m["roster_team"] * team if m["roster_team"] else m["roster"][side]
+    name = cstr(ram, roster + m["name_len"] * idx, m["name_len"])
+    if not name and m["numbers"] and m["numbers_team"] and idx < m["roster_len"] and team < TEAMS:
+        number = ram[m["numbers"] + m["numbers_team"] * team + idx]
+        if 1 <= number <= 99:
+            name = "#%d" % number
+    return name
+
+
 def capture_names(ram, st, m):
     """Nomes e códigos de todos os times enquanto a tela de seleção está na
     RAM, ou None: só vale a tabela inteira, do time 0 até depois dos dois
@@ -209,8 +224,8 @@ def read_state(ram, st, m, teams=None):
             if scorer == 0xFF:  # gol contra: na lista do time que ganhou o gol, sem o jogador
                 scorers.append(["Gol contra", minute, ""])
                 continue
-            scorers.append([cstr(ram, roster + size * scorer, size), minute,
-                            cstr(ram, roster + size * assist, size) if assist < m["roster_len"] else ""])
+            scorers.append([player_name(ram, m, team_id, side, scorer), minute,
+                            player_name(ram, m, team_id, side, assist) if assist < m["roster_len"] else ""])
         out.append({"id": team_id, "name": "", "code": "", "goals": goals, "scorers": scorers})
     return {"period": period, "clock": clock, "pads": pads, "teams": out,
             "in_play": ram[m["in_play"]] if m["in_play"] else 1,
@@ -291,9 +306,8 @@ class MatchWatch:
                 if g[0] == "Gol contra" and self.goal_og[side][i]:
                     # o WE3 tem um elenco por time, não por lado
                     other = st["teams"][1 - side]["id"]
-                    roster = m["roster"][0] + m["roster_team"] * other if m["roster_team"] else m["roster"][1 - side]
                     team["scorers"][i] = ["Gol contra", g[1],
-                                          cstr(ram, roster + m["name_len"] * (self.goal_og[side][i] - 1), m["name_len"]), "og"]
+                                          player_name(ram, m, other, 1 - side, self.goal_og[side][i] - 1), "og"]
                 elif g[0] != "Gol contra" and self.goal_pen[side][i]:
                     team["scorers"][i] = g[:3] + ["pen"]
         return dict(st, teams=teams)
@@ -348,7 +362,7 @@ class MatchWatch:
         quiet: só os dá como vistos."""
         minute = 0 if quiet else self.minute(st["phase"] or 0, st["clock"])
         for side in (0, 1) if m["cards"] else ():
-            roster = self.roster(m, st, side)
+            team = self.team_of(m, st, side)
             for i in range(min(m["roster_len"], 32)):
                 v = ram[m["cards"][side] + i]
                 want = (CARD_YELLOW if v & 3 else 0) | (v & CARD_SECOND) | (v & CARD_RED)
@@ -358,16 +372,12 @@ class MatchWatch:
                 self.card_bits[side][i] |= add
                 for k in range(3) if not quiet else ():
                     if add & (1 << k) and len(self.cards[side]) < EVENTS:
-                        self.cards[side].append([cstr(ram, roster + m["name_len"] * i, m["name_len"]), minute,
-                                                 CARD_KINDS[k]])
+                        self.cards[side].append([player_name(ram, m, team, side, i), minute, CARD_KINDS[k]])
         self.injury_events(ram, m, st, minute, quiet)
 
-    def roster(self, m, st, side):
-        """O elenco do lado: o WE3 tem um por time (os times do pontapé, com end_resets)."""
-        if not m["roster_team"]:
-            return m["roster"][side]
-        team = self.teams[side] if m["end_resets"] and self.teams else (st["teams"][side]["id"] if st else 0)
-        return m["roster"][0] + m["roster_team"] * team
+    def team_of(self, m, st, side):
+        """O time do lado (com end_resets, o do pontapé inicial), como ksync_live_team()."""
+        return self.teams[side] if m["end_resets"] and self.teams else (st["teams"][side]["id"] if st else 0)
 
     def injury_events(self, ram, m, st, minute, quiet=False):
         """Os contundidos: a lista só cresce na partida (cada registro fica até o fim; o
@@ -385,7 +395,7 @@ class MatchWatch:
             if not quiet and rec[0] < m["roster_len"] and rec[1] in teams:
                 side = 0 if rec[1] == teams[0] else 1  # o mesmo time dos dois lados: LOCAL
                 if len(self.injuries[side]) < EVENTS:
-                    self.injuries[side].append([cstr(ram, self.roster(m, st, side) + m["name_len"] * rec[0], m["name_len"]),
+                    self.injuries[side].append([player_name(ram, m, self.team_of(m, st, side), side, rec[0]),
                                                 minute, "y"])
             i += 1
         self.injury_seen = i
