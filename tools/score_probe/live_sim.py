@@ -36,7 +36,8 @@ TEAMS = 128
 SCR = 0x40000000
 BASE = {"scratch": False, "goal_size": 4, "roster_team": 0, "kick_on_run": False, "end_resets": False, "extra": 0,
         "phase": 0, "pens": 0, "kicker": 0, "touch": 0, "setpiece": 0, "state": 0,
-        "pen_value": 2, "pen_state": None, "in_match": 0, "demo": 0, "demo_value": 0, "settings": 0}
+        "pen_value": 2, "pen_state": None, "in_match": 0, "demo": 0, "demo_value": 0, "settings": 0,
+        "stats": 0, "cards": None, "injuries": 0}
 SET_EXTRA, SET_GOLDEN, SET_PENS = 1, 2, 4  # as opções da partida (bit 0 prorrogação, 1 gol de ouro, 2 pênaltis)
 ENGINES = {
     "SLPM_870.56": dict(BASE, **{  # Winning Eleven 2002 (Euro vs Copa America, CAN 2025, BR Turbo...)
@@ -58,6 +59,12 @@ ENGINES = {
         # Estado da partida: 1 bola rolando, 7 gol, 11 comemoração, 0 saída de
         # bola, 10 o juiz encerrou o tempo (intervalo, fim, gol de ouro, pênaltis).
         "state": 0x75782,
+        # A tela RESULT do fim: pares LOCAL/VISITA a partir daqui - chutes, impedimentos,
+        # faltas, vermelhos (o 2º amarelo não conta), amarelos, escanteios (depois faltas
+        # cobradas e pênaltis, que não vão); o cartão de cada jogador, um byte por índice
+        # do elenco (1 amarelo, 2 o 2º amarelo - expulso -, 4 vermelho direto); e os
+        # contundidos: registros {índice, time, 0, 0}, FF = o fim da lista.
+        "stats": 0x756F2, "cards": (0x75568, 0x7557F), "injuries": 0x73968,
     }),
     "SLPM_862.91": dict(BASE, **{  # Winning Eleven 4 (Traducida)
         "label": "WE4", "sig": ((0x17034, "60000924200008241e00072421282701"), (0x1D03C, "0100843400200524002006240780013c")),
@@ -106,6 +113,10 @@ HEARTBEAT_FRAMES = 900   # e manda pelo menos a cada 15 s (o relógio do card)
 MIN_KICKOFF_CLOCK = 1800  # um tempo de pelo menos 30 s (partidas de 2 minutos para cima)
 OVER_FRAMES = 600        # WE3: 10 s sem tempo nenhum no 2º tempo = fim
 NO_PADS = [0, 1, 0xFF, 0xFF]
+EVENTS = 24              # cartões / contusões guardados por lado
+INJURY_RECORDS = 10      # da lista de contundidos do WE2002: os que ele limpa ao carregar a partida
+CARD_YELLOW, CARD_SECOND, CARD_RED = 1, 2, 4
+CARD_KINDS = ("y", "y2", "r")
 
 
 def cstr(ram, addr, cap):
@@ -303,6 +314,68 @@ class MatchWatch:
         # o placar desta partida a partir daqui (pontapé novo não é placar diminuindo)
         self.prev_score = [mem[m["score"]], mem[m["score"] + 1]]
         self.et_goals, self.gg_clock, self.decided, self.so_since = sum(self.prev_score), 0, False, 0
+        self.card_bits = [[0] * 32, [0] * 32]  # por índice do elenco: os cartões já listados
+        self.cards, self.injuries = [[], []], [[], []]
+        self.injury_seen = 0
+        # Pontapé inicial: os cartões e contusões que o jogo ainda tem (partida reiniciada)
+        # são de antes dele - só a partida em que se entrou no meio os lista.
+        if kickoff and (m["cards"] or m["injuries"]):
+            self.events(self._ram, m, None, quiet=True)
+
+    def minute(self, phase, clock):
+        """O minuto como o jogo grava nos gols: 0-44 o 1º tempo, 45-89 o 2º, 90-104 e
+        105-119 a prorrogação (os acréscimos ficam no último minuto do tempo). Os tempos
+        da prorrogação são um terço dos da partida (self.half depois de ver o pontapé dela)."""
+        half = self.half or 18000
+        if phase >= 2 and not self.extra:
+            half = half // 3 or 1
+        span = 15 if phase >= 2 else 45
+        if phase >= 4:
+            return 120
+        base = 90 + 15 * (phase - 2) if phase >= 2 else 45 * phase
+        run = half - clock if clock < half else 0
+        return base + ((span * run - 1) // half if run else 0)
+
+    def events(self, ram, m, st, quiet=False):
+        """A cada amostra da partida: os cartões e contusões que apareceram desde a
+        anterior, neste minuto - a RAM só tem o cartão atual de cada jogador.
+        quiet: só os dá como vistos."""
+        minute = 0 if quiet else self.minute(st["phase"] or 0, st["clock"])
+        for side in (0, 1) if m["cards"] else ():
+            roster = m["roster"][side]
+            for i in range(min(m["roster_len"], 32)):
+                v = ram[m["cards"][side] + i]
+                want = (CARD_YELLOW if v & 3 else 0) | (v & CARD_SECOND) | (v & CARD_RED)
+                add = want & ~self.card_bits[side][i]
+                if not add or v > 7:  # outros bits: não são os cartões (fora de uma partida)
+                    continue
+                self.card_bits[side][i] |= add
+                for k in range(3) if not quiet else ():
+                    if add & (1 << k) and len(self.cards[side]) < EVENTS:
+                        self.cards[side].append([cstr(ram, roster + m["name_len"] * i, m["name_len"]), minute,
+                                                 CARD_KINDS[k]])
+        self.injury_events(ram, m, st, minute, quiet)
+
+    def injury_events(self, ram, m, st, minute, quiet=False):
+        """Os contundidos: a lista só cresce na partida (cada registro fica até o fim; o
+        jogo a limpa ao carregar a partida e depois do fim). O registro é {índice no
+        elenco, time, 0, 0} na cruz amarela - a vermelha (o jogador sai de campo) ainda
+        não foi vista: todas vão como cruz amarela por ora."""
+        if not m["injuries"]:
+            return
+        teams = [t["id"] for t in st["teams"]] if st else []
+        i = self.injury_seen
+        while i < INJURY_RECORDS:
+            rec = ram[m["injuries"] + 4 * i:m["injuries"] + 4 + 4 * i]
+            if rec[0] == 0xFF:
+                break  # o fim da lista
+            if not quiet and rec[0] < m["roster_len"] and rec[1] in teams:
+                side = 0 if rec[1] == teams[0] else 1  # o mesmo time dos dois lados: LOCAL
+                if len(self.injuries[side]) < EVENTS:
+                    self.injuries[side].append([cstr(ram, m["roster"][side] + m["name_len"] * rec[0], m["name_len"]),
+                                                minute, "y"])
+            i += 1
+        self.injury_seen = i
 
     def _message(self, serial, frame, st, final):
         shootout = st["phase"] == 4
@@ -314,6 +387,17 @@ class MatchWatch:
         if pens and (shootout or getattr(self, "so_seen", False)):
             st["pens"] = list(pens)
         st["teams"] = [dict(t) for t in st["teams"]]
+        m = ENGINES[serial]
+        for side, team in enumerate(st["teams"]):
+            # WE2002: os números da tela RESULT (o WE Camp mostra no fim), cartões e contusões.
+            if m["stats"]:
+                s = [self._ram[m["stats"] + side + 2 * i] for i in range(6)]
+                team["stats"] = {"shots": s[0], "offsides": s[1], "fouls": s[2], "yellow": s[4], "red": s[3],
+                                 "corners": s[5]}
+            if m["cards"]:
+                team["cards"] = [list(e) for e in self.cards[side]]
+            if m["injuries"]:
+                team["injuries"] = [list(e) for e in self.injuries[side]]
         if self.names:
             for team in st["teams"]:
                 if team["id"] < len(self.names[0]):
@@ -486,6 +570,8 @@ class MatchWatch:
                 self.over_since = 0
         if not self.active:
             return None
+        if m["cards"] or m["injuries"]:
+            self.events(ram, m, st)
         # Os primeiros segundos depois do apito inicial: nada vai (podem sair e recomeçar).
         # WE2002: do apito (estado 1); os outros: do relógio armado.
         if m["state"] and not getattr(self, "whistle", 0) and st["state"] == 1:
@@ -503,8 +589,10 @@ class MatchWatch:
         elif st["phase"] is not None:  # a amostra antes do fim (saiu da partida decidida)
             self.last_msg = self._message(serial, frame, st, False)
         # + o relógio do tempo começando a correr (o card sai do "Intervalo").
+        # + um cartão / uma contusão novos (as estatísticas só vão junto).
         key = json.dumps([st["period"], st["pads"], st["teams"], st["phase"], st["pens"], st["clock"] >= self.half,
-                          st["state"] == STATE_OVER])
+                          st["state"] == STATE_OVER, [len(x) for x in getattr(self, "cards", [[], []])],
+                          [len(x) for x in getattr(self, "injuries", [[], []])]])
         if not final and key == self.sent_key and frame - self.sent_frame < HEARTBEAT_FRAMES:
             return None
         self.sent_key, self.sent_frame = key, frame

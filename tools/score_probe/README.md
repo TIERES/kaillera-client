@@ -61,6 +61,10 @@ memória que o pcsx_rearmed publica, e o krec_harness também
 | Opções da partida: bit 0 prorrogação, bit 1 gol de ouro, bit 2 pênaltis | — | 0x80072FD2 | 0x8010A307 |
 | Dentro de uma partida (da formação até sair dela; 0 = saíram) | — | — | 0x1F800198 |
 | DEMO da tela de título (CPU x CPU) | controles FF | controles FF | 0x8010A2C2 = 1 |
+| Números da tela RESULT, pares LOCAL / VISITA: chutes, impedimentos, faltas, vermelhos (o 2º amarelo não conta), amarelos, escanteios, faltas cobradas, pênaltis | a partir de 0x800756F2 (até 0x80075701; o placar vem logo depois) | não procurado | não procurado |
+| Cartão de cada jogador, um byte por índice do elenco: 1 amarelo, 2 o 2º amarelo (expulso), 4 vermelho direto; zera depois do fim da partida | LOCAL 0x80075568 / VISITA 0x8007557F (+ índice) | não procurado | não procurado |
+| Chutes de cada jogador (somam os chutes da tela RESULT) | LOCAL 0x80075596 / VISITA 0x800755AD (+ índice) | — | — |
+| Contundidos: registros de 4 bytes `índice no elenco, ID do time, 0, 0` (cruz amarela), FF = o fim da lista; só cresce na partida, o jogo limpa 10 registros ao carregar a partida e depois do fim (0x80073966 foi a 1 no PW26 e ficou em 0 no Euro: não é a quantidade) | 0x80073968 | não procurado | não procurado |
 
 Pontapé inicial: com o período em 0, o relógio salta para a duração do tempo
 (de 0 ou, no WE4 depois de sair pelo menu de pausa, de onde ele seguia
@@ -115,3 +119,16 @@ Ver. Eng .chd) e no WE4 Traducida.
 
 Ainda não visto: partida contra a CPU, gol de ouro com a prorrogação
 desligada, morte súbita longa nos pênaltis e, no WE3, a tabela de controles.
+
+Estatísticas, cartões e contusões do WE 2002 (2026-11-11): a tela RESULT do
+replay de teste no PW26 (232-1794366234, Brasil 0 x 5 Argentina, com 2
+amarelos no Casemiro e 2 vermelhos diretos) e a do Euro 2004 em espanhol
+bateram com a RAM; cartões em 12 replays de produção (só 1, 1→2 e 0→4; fora
+de partida os bytes podem ter lixo, por isso só valem 0-7); contusões de cruz
+amarela no PW26 (Enzo Fdez.) e no Euro (7160, uma em cada partida). O minuto
+de um cartão/contusão é o da amostra, calculado como o jogo grava nos gols:
+`base + (span x tempo andado - 1) / duração do tempo`, com base 0/45 e span 45
+nos tempos normais, base 90/105 e span 15 na prorrogação (cujos tempos são
+um terço dos normais); nos acréscimos fica no último minuto (44, 89).
+A cruz vermelha (o jogador sai e não volta) ainda não foi vista: o fork manda
+toda contusão como cruz amarela.
