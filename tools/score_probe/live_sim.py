@@ -102,6 +102,9 @@ ENGINES = {
         # 1 dentro de uma partida (da formação até sair dela); o DEMO da tela de título
         # marca 1 em 0x10A2C2; as opções da partida em 0x10A307.
         "in_match": SCR | 0x198, "demo": 0x10A2C2, "demo_value": 1, "settings": 0x10A307,
+        # Os números da tela RESULT e o cartão de cada jogador, como no WE2002 - na RAM, logo
+        # antes dos registros de gols (a lista de contundidos ainda não foi achada).
+        "stats": 0x1085B0, "cards": (0x107F8D, 0x107FA3),
     }),
 }
 
@@ -345,7 +348,7 @@ class MatchWatch:
         quiet: só os dá como vistos."""
         minute = 0 if quiet else self.minute(st["phase"] or 0, st["clock"])
         for side in (0, 1) if m["cards"] else ():
-            roster = m["roster"][side]
+            roster = self.roster(m, st, side)
             for i in range(min(m["roster_len"], 32)):
                 v = ram[m["cards"][side] + i]
                 want = (CARD_YELLOW if v & 3 else 0) | (v & CARD_SECOND) | (v & CARD_RED)
@@ -358,6 +361,13 @@ class MatchWatch:
                         self.cards[side].append([cstr(ram, roster + m["name_len"] * i, m["name_len"]), minute,
                                                  CARD_KINDS[k]])
         self.injury_events(ram, m, st, minute, quiet)
+
+    def roster(self, m, st, side):
+        """O elenco do lado: o WE3 tem um por time (os times do pontapé, com end_resets)."""
+        if not m["roster_team"]:
+            return m["roster"][side]
+        team = self.teams[side] if m["end_resets"] and self.teams else (st["teams"][side]["id"] if st else 0)
+        return m["roster"][0] + m["roster_team"] * team
 
     def injury_events(self, ram, m, st, minute, quiet=False):
         """Os contundidos: a lista só cresce na partida (cada registro fica até o fim; o
@@ -375,7 +385,7 @@ class MatchWatch:
             if not quiet and rec[0] < m["roster_len"] and rec[1] in teams:
                 side = 0 if rec[1] == teams[0] else 1  # o mesmo time dos dois lados: LOCAL
                 if len(self.injuries[side]) < EVENTS:
-                    self.injuries[side].append([cstr(ram, m["roster"][side] + m["name_len"] * rec[0], m["name_len"]),
+                    self.injuries[side].append([cstr(ram, self.roster(m, st, side) + m["name_len"] * rec[0], m["name_len"]),
                                                 minute, "y"])
             i += 1
         self.injury_seen = i
@@ -489,7 +499,7 @@ class MatchWatch:
                 self.drop_frame, self.active = 0, False  # saíram da partida
             # WE3, prorrogação: períodos 2 e 3, um terço do tempo - o "half" do card acompanha.
             if self.active and st["period"] in (2, 3) and st["clock"] >= prev["clock"] + MIN_KICKOFF_CLOCK:
-                self.half = st["clock"]
+                self.half, self.extra = st["clock"], True  # (e o minuto dos cartões: minute())
         score = [mem[m["score"]], mem[m["score"] + 1]]
         # WE2002: o juiz encerrou o tempo. 2º tempo / prorrogação com vencedor, gol de
         # ouro (relógio da prorrogação andando) ou disputa decidida = fim; empate: a
