@@ -697,10 +697,21 @@ extern "C" {
 
 #endif
 
+		#if !defined(WECAMP_BROADCASTER)
+
 		n02_update_check_and_prompt();
+
+		#endif
 
 		return 0;
 	}
+	// Direct Watch Live entry point for the WE Camp broadcaster process.
+	// sessionId is resolved by the backend; no lobby lookup or UI is opened.
+	int KAILLERA_DLLEXP kailleraWatchSession(const char* sessionId, const char* roomName){
+		if (!sessionId || !*sessionId) return 0;
+		return player_watch_begin(sessionId, roomName ? roomName : "WE Camp") ? 1 : 0;
+	}
+
 	void KAILLERA_DLLEXP kailleraMemcardFinish();
 
 	void KAILLERA_DLLEXP kailleraShutdown(){
@@ -762,13 +773,30 @@ extern "C" {
 		KSSDFA.state = 0;
 		KSSDFA.input = 0;
 
-		gui_thread.st(parent);
+#ifdef WECAMP_BROADCASTER
+		char broadcaster[8] = {0};
+		char sessionId[256] = {0};
+		char roomName[256] = "WE Camp";
+		bool headlessWatch = GetEnvironmentVariableA("WECAMP_BROADCASTER", broadcaster, sizeof(broadcaster))
+			&& GetEnvironmentVariableA("WECAMP_WATCH_SESSION_ID", sessionId, sizeof(sessionId));
+		if (headlessWatch) {
+			if (!GetEnvironmentVariableA("WECAMP_WATCH_ROOM", roomName, sizeof(roomName)))
+				strcpy(roomName, "WE Camp");
+			if (!player_watch_begin(sessionId, roomName))
+				KSSDFA.input = KSSDFA_END_GAME;
+		} else
+#endif
+			gui_thread.st(parent);
 
 		nThread game_thread;
 		game_thread.capture();
 		game_thread.sleep(1);
 
+#ifdef WECAMP_BROADCASTER
+		if (gui_thread.running || headlessWatch) {
+#else
 		if (gui_thread.running) {
+#endif
 			do {
 				__try {
 					while (KSSDFA.state != 3) {

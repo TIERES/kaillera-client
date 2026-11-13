@@ -105,8 +105,8 @@ REM git -C: this script's own repo, whatever folder it is run from (from
 REM another repo it would embed that repo's tag).
 set GIT_REVISION=
 for /f "usebackq tokens=*" %%g in (`git -C "%~dp0." describe --tags --always 2^>nul`) do set GIT_REVISION=%%g
-set EXTRADEFINES=
-if defined GIT_REVISION set EXTRADEFINES=/p:ExtraDefines="GIT_REVISION=%GIT_REVISION%"
+set EXTRADEFINES=/p:ExtraDefines=WECAMP_BROADCASTER
+REM Broadcaster builds omit the network update check.
 
 echo Building n02 (64-bit Release)...
 %MSBUILD% %PROJECT% /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0 /p:PlatformToolset=%TOOLSET% %EXTRADEFINES%

@@ -99,3 +99,32 @@ GitHub Actions workflow (`.github/workflows/build.yml`) builds on push to tags `
 
 Header: `KRC0` magic + app name (128) + game name (128) + timestamp (4) + player (4) + numplayers (4)
 Records: Type byte + data (0x12=input frame, 0x08=chat, 0x14=player drop)
+
+## WE Camp Broadcaster Branch
+
+Branch: `feature/wecamp-broadcaster` (paired with the same branch in `retroarch-k3-ffw`). This variant is for a headless spectator worker that watches a WE Camp live-input session and supplies its playback video to an external capture/streaming process.
+
+### Current changes
+
+- `build.bat` builds x64 Release with `WECAMP_BROADCASTER`; this disables the online update check in `kailleraInit()`.
+- `kailleraclient.cpp` exports `kailleraWatchSession(sessionId, roomName)` for direct Watch Live startup.
+- In broadcaster mode, `kailleraSelectServerDialog()` skips creating the Kaillera lobby window, starts `player_watch_begin()` from the environment, then continues pumping the existing `KSSDFA` game-start state machine without UI.
+- This DLL was successfully built on the original development machine with VS2026/MSVC v145. Output: `x64\Release\kailleraclient.dll`.
+
+### Runtime contract
+
+Launch the paired RetroArch process with:
+
+- `WECAMP_BROADCASTER=1`
+- `WECAMP_WATCH_SESSION_ID=<live session id from WE Camp>`
+- optionally `WECAMP_WATCH_ROOM=<room display name>`
+
+RetroArch must already be started with the PlayStation core and matching game content. Its `core_run()` hook detects these variables, loads this DLL once, and lets the DLL's headless state pump start Watch Live. The exported `kailleraWatchSession()` is available to other direct callers too.
+
+The RetroArch branch also hides its replay toolbar while `WECAMP_BROADCASTER` is set. The external Xvfb/FFmpeg/YouTube process is not started by this DLL; YouTube broadcast creation and end-to-end server automation remain separate work.
+
+### Build and handoff status
+
+Build this DLL with `./build.bat` or the manual x64 Release MSBuild command above. The paired RetroArch branch has source changes in `kaillera/kaillera.c`, `kaillera/kaillera.h`, and `runloop.c`; its build did not complete on the original machine because MinGW GCC exited with code 1 without diagnostics, including on an unchanged `version_git.c`. Compile it on the other machine and inspect any diagnostics before runtime testing.
+
+Do not discard the existing untracked `.claude/` directory in this repository; it contains local user material.
