@@ -515,6 +515,7 @@ void player_play(char * fn){
 		return;
 	}
 
+#ifndef WECAMP_BROADCASTER
 	if (strcmp(APP, g_playback_reader.appName) != 0) {
 		char wdr[2000];
 		// No accented letters: this project compiles as MultiByte from UTF-8
@@ -525,6 +526,7 @@ void player_play(char * fn){
 			return;
 		}
 	}
+#endif
 
 	if (!ValidateGameBeforePlay(g_playback_reader.gameName)) {
 		g_playback_reader.close();

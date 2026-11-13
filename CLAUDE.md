@@ -111,6 +111,8 @@ Branch: `feature/wecamp-broadcaster` (paired with the same branch in `retroarch-
 - In broadcaster mode, `kailleraSelectServerDialog()` skips creating the Kaillera lobby window, starts `player_watch_begin()` from the environment, then continues pumping the existing `KSSDFA` game-start state machine without UI.
 - This DLL was successfully built on the original development machine with VS2026/MSVC v145. Output: `x64\Release\kailleraclient.dll`.
 
+- Broadcaster builds skip the local KREC emulator-version mismatch prompt in player.cpp; standard builds retain the warning.
+
 ### Runtime contract
 
 Launch the paired RetroArch process with:
