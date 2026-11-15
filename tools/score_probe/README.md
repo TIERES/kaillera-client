@@ -255,5 +255,11 @@ Gol de ouro no replay 25008-1794779900 (opções 7): Espanha 4 x 3 Inglaterra,
 Raul 115' no 2º tempo da prorrogação (fase 3, relógio em 845). O estado vai
 a 7 no gol, 11 na comemoração e 10 no apito (~430 frames depois), com o
 relógio parado: o fork manda o fim ali, pela regra do gol de ouro com a
-opção ligada. Tela FINAL conferida (gols, minutos e números). Ainda não
-vistos: partida contra a CPU, DEMO.
+opção ligada. Tela FINAL conferida (gols, minutos e números).
+
+DEMO e partida contra a CPU no replay 25008-1794784085: o DEMO da tela de
+título (Japão x Brasil) tem os 4 controles em FF; a partida contra a CPU
+(Nigéria x República Tcheca), só o controle 1 no LOCAL (`00 FF FF FF`). Nos
+dois o relógio salta para 9000 e o fork vê o pontapé, mas não abre a partida
+(ksync_live_start exige um controle em cada lado): 0 estados no replay
+inteiro, também nos menus e na seleção de times.
