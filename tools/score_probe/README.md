@@ -249,4 +249,11 @@ O shim C do fork deu, nos dois replays, os placares, os 8 gols da primeira
 partida com a assistência, o gol contra e o pênalti, a prorrogação, cada
 cobrança das disputas e o fim no apito (60600 e 42300), os cartões, a
 contusão e os números da tela FINAL; o live_sim.py manda o mesmo (83 e 50
-estados iguais). Ainda não vistos: gol de ouro, partida contra a CPU, DEMO.
+estados iguais).
+
+Gol de ouro no replay 25008-1794779900 (opções 7): Espanha 4 x 3 Inglaterra,
+Raul 115' no 2º tempo da prorrogação (fase 3, relógio em 845). O estado vai
+a 7 no gol, 11 na comemoração e 10 no apito (~430 frames depois), com o
+relógio parado: o fork manda o fim ali, pela regra do gol de ouro com a
+opção ligada. Tela FINAL conferida (gols, minutos e números). Ainda não
+vistos: partida contra a CPU, DEMO.
