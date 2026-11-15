@@ -27,10 +27,12 @@ grava no cartão durante a partida: restaure o original antes de cada execução
 O jogo é reconhecido pelo nome do executável que o kernel do PS1 guarda em
 **0x80009E19** (o mesmo endereço em todos os jogos; os patches mantêm o do
 motor): `SLPM_870.56` = Winning Eleven 2002, `SLPM_862.91` = Winning Eleven 4,
-`SLPM_861.62` = Winning Eleven 3 Final Version. O formato do arquivo (.bin,
+`SLPM_861.62` = Winning Eleven 3 Final Version, `SLPM_868.35` = J.League
+Jikkyou Winning Eleven 2001 (mapa no fim deste arquivo; o WE2000 U-23 é
+`SLPM_866.00`, ainda sem mapa). O formato do arquivo (.bin,
 .chd) não muda nada. Patch que renomeou o executável (World Cup 26 PepeWE:
 `WC26_5MX2`) é reconhecido por dois pedaços de 16 bytes do código do motor
-(WE 2002: 0x8001701C e 0x8001D038; WE4: 0x80017034 e 0x8001D03C; WE3:
+(WE 2002 e J.League 2001: 0x8001701C e 0x8001D038; WE4: 0x80017034 e 0x8001D03C; WE3:
 0x8001714C e 0x8001D19C - os bytes estão no fork e no live_sim.py), iguais
 em todas as ISOs conferidas, nos menus e na partida. Lado 0 = LOCAL do jogo (não necessariamente o mandante
 do campeonato).
@@ -146,3 +148,46 @@ amarelo, Leonardo amarelo e 2º amarelo, Cafu vermelho direto, conferidos na
 tela; amarelos 6 x 4 e vermelhos 0 x 2 batem. O elenco do Japão está em
 Shift-JIS (a tela mostra os nomes em inglês): os cartões dele saem sem nome,
 como os gols. Contusão não saiu (lista não achada).
+
+## J.League Jikkyou Winning Eleven 2001 (`SLPM_868.35`)
+
+O motor do WE 2002 um ano antes: as mesmas estruturas e os mesmos valores,
+em outros endereços, com **26 jogadores por time** (o WE 2002 tem 23). Achado
+em 2026-11-15 no replay 14340-1794770038 (TIERES_ART x TIERES, sem M. Card,
+"J.League Jikkyou Winning Eleven 2001 (Japan-Eng).chd", conteúdo
+40353FBD:CF0CE77): Kashima Antlers 2 x 4 Yokohama FC, partida de 5 minutos
+(9000 frames por tempo), com dois gols de pênalti, um gol contra, 7 cartões
+(dois 2º amarelos e três vermelhos diretos) e duas contusões - tudo
+conferido na tela e na tela RESULT.
+
+| O quê | Endereço |
+|---|---|
+| ID do time LOCAL / VISITA | 0x80070F9C / 9D |
+| Período | 0x80070F9E |
+| Relógio (u16, como o do WE 2002) | 0x800713A4 |
+| Gols LOCAL / VISITA | 0x8007114C / 4D (gols de cada tempo nos 4 bytes seguintes de cada lado: 0x7114E LOCAL, 0x71152 VISITA) |
+| Gols: 32 registros de 4 bytes, como no WE 2002 | 0x80071008 / 0x80071088 |
+| Elencos: 26 x 16 bytes (nome até 11 letras + NUL; depois do NUL sobra lixo) | 0x80060D40 / 0x80060EE0 |
+| Controles 1-4 (0 LOCAL, 1 VISITA, FF sem time; cópias em +4 e +8) | 0x80071325 |
+| Nome curto de cada time em inglês ("ANTLERS", "YOKOHAM"; sem código de 3 letras): ponteiros, time 0 primeiro - só da tela de formação até o 1º tempo | 0x80159F50 |
+| Estado da partida (os valores do WE 2002; 10 no intervalo e no fim) | 0x800711CE |
+| Fase / placar dos pênaltis (onde o WE 2002 os tem, junto do placar - ainda não vistos) | 0x80071158 / 0x80071156 |
+| Último toque (posição 1-22, como no WE 2002) | 0x800772C9 |
+| Pênalti sendo cobrado (2 até o gol; também estado 2 com 0x800711CF = 3) | 0x80076F21 |
+| Números da tela RESULT (a mesma ordem do WE 2002; o placar vem logo depois) | 0x8007113C |
+| Cartão de cada jogador (1, 2, 4) | LOCAL 0x80070FA0 / VISITA 0x80070FBA |
+| Chutes de cada jogador | LOCAL 0x80070FD4 / VISITA 0x80070FEE |
+| Contundidos: registros `índice, ID do time, ?, 0`, `FF FF` = fim; 10 registros | 0x800701E6 |
+
+No 3º byte de um contundido, o primeiro (Nakata K.) passou a 1 quando o
+segundo se machucou; não se sabe o que é (o fork o ignora, como no WE 2002).
+As opções da partida (prorrogação, gol de ouro, pênaltis) não foram achadas:
+como no WE 2002, um empate apitado espera 25 s. Ainda não vistos: prorrogação,
+gol de ouro, disputa de pênaltis (e o byte do estado dela, o 0x7571C do WE
+2002), partida contra a CPU, DEMO da tela de título (os controles devem estar
+em FF, como no WE 2002).
+
+O shim C do fork deu, nesse replay: pontapé no frame 6720, os 6 gols com os
+dois pênaltis (Goto 29', Bismark 44') e o gol contra do Takakuwa (88'), os
+cartões e as contusões, e o fim no frame 38100 (o apito em 38080); o
+live_sim.py manda o mesmo (46 estados iguais).

@@ -109,6 +109,24 @@ ENGINES = {
         # Shift-JIS) vai como "#" e o número.
         "numbers": 0x1346DC, "numbers_team": 22,
     }),
+    "SLPM_868.35": dict(BASE, **{  # J.League Jikkyou Winning Eleven 2001 (Japan-Eng)
+        # O motor do WE2002 um ano antes: as mesmas estruturas e valores, em outros
+        # endereços, com 26 jogadores por time.
+        "label": "JWE2001", "sig": ((0x1701C, "802e033c808063341800023cff804234"),
+                                    (0x1D038, "21104500801002002110450080100200")),
+        "team_id": 0x70F9C, "period": 0x70F9E, "clock": 0x713A4, "in_play": None,
+        "score": 0x7114C, "goals": (0x71008, 0x71088), "roster": (0x60D40, 0x60EE0), "roster_len": 26,
+        "name_len": 16, "pads": 0x71325,
+        # Nomes curtos em inglês ("ANTLERS"), sem código de 3 letras: a tabela de
+        # ponteiros fica na RAM da tela de formação até o 1º tempo.
+        "sel_names": 0x159F50, "sel_codes": 0, "code_ptrs": False, "mixed_case": False,
+        # Fase e placar dos pênaltis onde o WE2002 os tem (junto do placar) - ainda não
+        # vistos (prorrogação, gol de ouro e pênaltis); o estado da disputa não achado.
+        "phase": 0x71158, "pens": 0x71156,
+        "touch": 0x772C9, "setpiece": 0x76F21, "state": 0x711CE,
+        # O 3º byte de um contundido foi a 1 quando outro se machucou (não se sabe o que é).
+        "stats": 0x7113C, "cards": (0x70FA0, 0x70FBA), "injuries": 0x701E6,
+    }),
 }
 
 SAMPLE_FRAMES = 30       # lê a RAM a cada meio segundo
@@ -178,17 +196,21 @@ def player_name(ram, m, team, side, idx):
 
 
 def capture_names(ram, st, m):
-    """Nomes e códigos de todos os times enquanto a tela de seleção está na
-    RAM, ou None: só vale a tabela inteira, do time 0 até depois dos dois
-    times escolhidos agora."""
+    """Nomes e códigos de todos os times enquanto a tela de seleção (J.League
+    2001: a de formação, antes do pontapé) está na RAM, ou None: só vale a
+    tabela inteira, do time 0 até depois dos dois times escolhidos agora."""
     names, codes = [], []
     for team in range(TEAMS):
         name_at = pointer(ram, m["sel_names"] + 4 * team)
-        code_at = pointer(ram, m["sel_codes"] + 4 * team) if m["code_ptrs"] else m["sel_codes"] - 4 * team
-        if name_at is None or code_at is None or (not m["code_ptrs"] and ram[code_at + 3] != 0):
+        if not m["sel_codes"]:  # motor sem os códigos de 3 letras
+            code_at = None
+        else:
+            code_at = pointer(ram, m["sel_codes"] + 4 * team) if m["code_ptrs"] else m["sel_codes"] - 4 * team
+        if name_at is None or (m["sel_codes"] and (code_at is None
+                                                   or (not m["code_ptrs"] and ram[code_at + 3] != 0))):
             break
-        name, code = cstr(ram, name_at, 24)[:16], cstr(ram, code_at, 4)
-        if not name or (not m["mixed_case"] and name.upper() != name) or len(code) != 3:
+        name, code = cstr(ram, name_at, 24)[:16], cstr(ram, code_at, 4) if m["sel_codes"] else ""
+        if not name or (not m["mixed_case"] and name.upper() != name) or (m["sel_codes"] and len(code) != 3):
             break
         names.append(name)
         codes.append(code)
