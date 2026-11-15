@@ -169,9 +169,10 @@ conferido na tela e na tela RESULT.
 | Gols: 32 registros de 4 bytes, como no WE 2002 | 0x80071008 / 0x80071088 |
 | Elencos: 26 x 16 bytes (nome até 11 letras + NUL; depois do NUL sobra lixo) | 0x80060D40 / 0x80060EE0 |
 | Controles 1-4 (0 LOCAL, 1 VISITA, FF sem time; cópias em +4 e +8) | 0x80071325 |
-| Nome curto de cada time em inglês ("ANTLERS", "YOKOHAM"; sem código de 3 letras): ponteiros, time 0 primeiro - só da tela de formação até o 1º tempo | 0x80159F50 |
+| Nome curto de cada time em inglês ("ANTLERS", "YOKOHAM"; sem código de 3 letras): ponteiros, time 0 primeiro - só se abrirem a tela de formação, e dali até o 1º tempo (sem ela, o fork usa os 41 nomes do jogo, os mesmos) | 0x80159F50 |
+| Opções da partida, 3 bytes de 0 ou 1: prorrogação, gol de ouro, pênaltis (gravados ao carregar a partida; antes vem a duração em minutos, 0x80070F98) | 0x80070F99 / 9A / 9B |
 | Estado da partida (os valores do WE 2002; 10 no intervalo e no fim) | 0x800711CE |
-| Fase / placar dos pênaltis (onde o WE 2002 os tem, junto do placar - ainda não vistos) | 0x80071158 / 0x80071156 |
+| Fase (0/1 tempos, 2/3 prorrogação, 4 pênaltis) / placar dos pênaltis, como no WE 2002 | 0x80071158 / 0x80071156 |
 | Último toque (posição 1-22, como no WE 2002) | 0x800772C9 |
 | Pênalti sendo cobrado (2 até o gol; também estado 2 com 0x800711CF = 3) | 0x80076F21 |
 | Números da tela RESULT (a mesma ordem do WE 2002; o placar vem logo depois) | 0x8007113C |
@@ -181,13 +182,25 @@ conferido na tela e na tela RESULT.
 
 No 3º byte de um contundido, o primeiro (Nakata K.) passou a 1 quando o
 segundo se machucou; não se sabe o que é (o fork o ignora, como no WE 2002).
-As opções da partida (prorrogação, gol de ouro, pênaltis) não foram achadas:
-como no WE 2002, um empate apitado espera 25 s. Ainda não vistos: prorrogação,
-gol de ouro, disputa de pênaltis (e o byte do estado dela, o 0x7571C do WE
-2002), partida contra a CPU, DEMO da tela de título (os controles devem estar
-em FF, como no WE 2002).
+Prorrogação e pênaltis conferidos no replay 25008-1794776316 (TIERES_ART x
+TIERES, mesma ISO, prorrogação e pênaltis ligados, gol de ouro desligado):
+S-Pulse 0 x 0 Sagan Tosu, pênaltis 4 x 5. A prorrogação é como a do WE 2002
+(fase 2/3, tempos de um terço do normal: 3000 frames); a disputa, fase 4
+com o placar dos pênaltis, e o estado vai a 10 no fim dela. As opções foram
+achadas nessa tela de ajustes, que eles ligaram e desligaram várias vezes:
+no menu ficam em 0x800EDF70/74/78 (palavras), apagadas quando a partida
+carrega; na partida, os 3 bytes antes dos IDs dos times. Nessa partida
+ninguém abriu a tela de formação: a tabela de nomes nunca esteve na RAM (por
+isso o fork tem os nomes do jogo).
+Ainda não vistos: gol de ouro (o byte do meio, pela ordem da tela), o byte
+do estado da disputa (o 0x7571C do WE 2002 - não faz falta: o estado do juiz
+a encerra), partida contra a CPU, DEMO da tela de título (os controles devem
+estar em FF, como no WE 2002).
 
-O shim C do fork deu, nesse replay: pontapé no frame 6720, os 6 gols com os
-dois pênaltis (Goto 29', Bismark 44') e o gol contra do Takakuwa (88'), os
-cartões e as contusões, e o fim no frame 38100 (o apito em 38080); o
-live_sim.py manda o mesmo (46 estados iguais).
+O shim C do fork deu, no replay 14340-1794770038: pontapé no frame 6720, os
+6 gols com os dois pênaltis (Goto 29', Bismark 44') e o gol contra do
+Takakuwa (88'), os cartões e as contusões, e o fim no frame 38100 (o apito em
+38080); no 25008-1794776316: os dois tempos, a prorrogação, cada cobrança da
+disputa e o fim no frame 47550 com os pênaltis 4 x 5, os cartões (Tominaga
+amarelo e 2º amarelo, Koishi vermelho) e os números da tela RESULT. O
+live_sim.py manda o mesmo nos dois (46 e 59 estados iguais).

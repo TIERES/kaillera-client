@@ -37,8 +37,17 @@ SCR = 0x40000000
 BASE = {"scratch": False, "goal_size": 4, "roster_team": 0, "kick_on_run": False, "end_resets": False, "extra": 0,
         "phase": 0, "pens": 0, "kicker": 0, "touch": 0, "setpiece": 0, "state": 0,
         "pen_value": 2, "pen_state": None, "in_match": 0, "demo": 0, "demo_value": 0, "settings": 0,
-        "stats": 0, "cards": None, "injuries": 0, "numbers": 0, "numbers_team": 0}
+        "stats": 0, "cards": None, "injuries": 0, "numbers": 0, "numbers_team": 0,
+        "settings_bytes": False, "fixed_names": None}
 SET_EXTRA, SET_GOLDEN, SET_PENS = 1, 2, 4  # as opções da partida (bit 0 prorrogação, 1 gol de ouro, 2 pênaltis)
+# Os nomes curtos dos times do J.League WE 2001 (a tabela da tela de formação, 0x80159F50), por ID.
+JWE2001_NAMES = (
+    "CONSADO", "ANTLERS", "URAWA R", "JEF UTD", "K.REYSO", "FCTOKYO", "VERDY", "F-MARIN",
+    "S-PULSE", "JUBILO", "GRAMPUS", "GAMBA O", "CEREZO", "VISSEL", "SANFREC", "AVISPA",
+    "VEGALTA", "MONTEDI", "HOLLY H", "OM.ARDIJA", "K.FRONT", "YOKOHAM", "S.BELLM", "VENTFORET K",
+    "ALBIREX NI.", "PURPLE", "SAGAN T", "OITA T.", "J1 EAST", "J1 WEST", "J2 EAST", "J2 WEST",
+    "JAP.DREAMS", "WORLD DR.", "MANCHES", "ARSENAL", "MIL", "JUVENTU", "ROM", "BARCELO",
+    "REAL M.")
 ENGINES = {
     "SLPM_870.56": dict(BASE, **{  # Winning Eleven 2002 (Euro vs Copa America, CAN 2025, BR Turbo...)
         "label": "WE2002", "sig": ((0x1701C, "070040122120c0022198400221900000"), (0x1D038, "b070000c200806240c00401401000324")),
@@ -118,11 +127,16 @@ ENGINES = {
         "score": 0x7114C, "goals": (0x71008, 0x71088), "roster": (0x60D40, 0x60EE0), "roster_len": 26,
         "name_len": 16, "pads": 0x71325,
         # Nomes curtos em inglês ("ANTLERS"), sem código de 3 letras: a tabela de
-        # ponteiros fica na RAM da tela de formação até o 1º tempo.
+        # ponteiros só fica na RAM se abrirem a tela de formação (até o 1º tempo); sem
+        # ela, os nomes do próprio jogo (um nome lido da RAM vale mais: patch).
         "sel_names": 0x159F50, "sel_codes": 0, "code_ptrs": False, "mixed_case": False,
-        # Fase e placar dos pênaltis onde o WE2002 os tem (junto do placar) - ainda não
-        # vistos (prorrogação, gol de ouro e pênaltis); o estado da disputa não achado.
+        "fixed_names": JWE2001_NAMES,
+        # Fase e placar dos pênaltis onde o WE2002 os tem (junto do placar); o estado da
+        # disputa não achado (o estado do juiz a encerra).
         "phase": 0x71158, "pens": 0x71156,
+        # As opções da partida: 3 bytes (prorrogação, gol de ouro, pênaltis), 0 ou 1,
+        # logo antes dos IDs dos times - o do gol de ouro ainda não visto ligado.
+        "settings": 0x70F99, "settings_bytes": True,
         "touch": 0x772C9, "setpiece": 0x76F21, "state": 0x711CE,
         # O 3º byte de um contundido foi a 1 quando outro se machucou (não se sabe o que é).
         "stats": 0x7113C, "cards": (0x70FA0, 0x70FBA), "injuries": 0x701E6,
@@ -257,7 +271,17 @@ def read_state(ram, st, m, teams=None):
             "kicker": b(ram, st, m["kicker"]) if m["kicker"] else None,
             "state": b(ram, st, m["state"]) if m["state"] else None,
             "in_match": b(ram, st, m["in_match"]) if m["in_match"] else 1,
-            "settings": ram[m["settings"]] if m["settings"] else None}
+            "settings": settings_of(ram, m)}
+
+
+def settings_of(ram, m):
+    """As opções da partida em bits SET_* (None: motor sem elas)."""
+    if not m["settings"]:
+        return None
+    if not m["settings_bytes"]:
+        return ram[m["settings"]]
+    s = ram[m["settings"]:m["settings"] + 3]
+    return (SET_EXTRA if s[0] else 0) | (SET_GOLDEN if s[1] else 0) | (SET_PENS if s[2] else 0)
 
 
 class MatchWatch:
@@ -447,6 +471,9 @@ class MatchWatch:
             for team in st["teams"]:
                 if team["id"] < len(self.names[0]):
                     team["name"], team["code"] = self.names[0][team["id"]], self.names[1][team["id"]]
+        for team in st["teams"]:  # sem nome lido da RAM: o do próprio jogo
+            if not team["name"] and m["fixed_names"] and team["id"] < len(m["fixed_names"]):
+                team["name"] = m["fixed_names"][team["id"]]
         if final:
             st["period"] = 4 if shootout else st["period"]
         elif self.last and self.last["phase"] is not None:
