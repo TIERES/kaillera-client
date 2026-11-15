@@ -28,11 +28,11 @@ O jogo é reconhecido pelo nome do executável que o kernel do PS1 guarda em
 **0x80009E19** (o mesmo endereço em todos os jogos; os patches mantêm o do
 motor): `SLPM_870.56` = Winning Eleven 2002, `SLPM_862.91` = Winning Eleven 4,
 `SLPM_861.62` = Winning Eleven 3 Final Version, `SLPM_868.35` = J.League
-Jikkyou Winning Eleven 2001 (mapa no fim deste arquivo; o WE2000 U-23 é
-`SLPM_866.00`, ainda sem mapa). O formato do arquivo (.bin,
+Jikkyou Winning Eleven 2001 e `SLPM_866.00` = Winning Eleven 2000 U-23 (os
+dois últimos com o mapa no fim deste arquivo). O formato do arquivo (.bin,
 .chd) não muda nada. Patch que renomeou o executável (World Cup 26 PepeWE:
 `WC26_5MX2`) é reconhecido por dois pedaços de 16 bytes do código do motor
-(WE 2002 e J.League 2001: 0x8001701C e 0x8001D038; WE4: 0x80017034 e 0x8001D03C; WE3:
+(WE 2002, J.League 2001 e WE2000 U-23: 0x8001701C e 0x8001D038; WE4: 0x80017034 e 0x8001D03C; WE3:
 0x8001714C e 0x8001D19C - os bytes estão no fork e no live_sim.py), iguais
 em todas as ISOs conferidas, nos menus e na partida. Lado 0 = LOCAL do jogo (não necessariamente o mandante
 do campeonato).
@@ -170,7 +170,7 @@ conferido na tela e na tela RESULT.
 | Elencos: 26 x 16 bytes (nome até 11 letras + NUL; depois do NUL sobra lixo) | 0x80060D40 / 0x80060EE0 |
 | Controles 1-4 (0 LOCAL, 1 VISITA, FF sem time; cópias em +4 e +8) | 0x80071325 |
 | Nome curto de cada time em inglês ("ANTLERS", "YOKOHAM"; sem código de 3 letras): ponteiros, time 0 primeiro - só se abrirem a tela de formação, e dali até o 1º tempo (sem ela, o fork usa os 41 nomes do jogo, os mesmos) | 0x80159F50 |
-| Opções da partida, 3 bytes de 0 ou 1: prorrogação, gol de ouro, pênaltis (gravados ao carregar a partida; antes vem a duração em minutos, 0x80070F98) | 0x80070F99 / 9A / 9B |
+| Opções da partida, 3 bytes de 0 ou 1: prorrogação, gol de ouro, pênaltis, na ordem da tela de ajustes (gravados ao carregar a partida; antes vem a duração em minutos, 0x80070F98). O do meio é o gol de ouro em qualquer ordem; prorrogação e pênaltis só foram vistos ligados juntos | 0x80070F99 / 9A / 9B |
 | Estado da partida (os valores do WE 2002; 10 no intervalo e no fim) | 0x800711CE |
 | Fase (0/1 tempos, 2/3 prorrogação, 4 pênaltis) / placar dos pênaltis, como no WE 2002 | 0x80071158 / 0x80071156 |
 | Último toque (posição 1-22, como no WE 2002) | 0x800772C9 |
@@ -204,3 +204,49 @@ Takakuwa (88'), os cartões e as contusões, e o fim no frame 38100 (o apito em
 disputa e o fim no frame 47550 com os pênaltis 4 x 5, os cartões (Tominaga
 amarelo e 2º amarelo, Koishi vermelho) e os números da tela RESULT. O
 live_sim.py manda o mesmo nos dois (46 e 59 estados iguais).
+
+## Winning Eleven 2000 U-23 (`SLPM_866.00`)
+
+O motor do WE 2002 dois anos antes: as mesmas estruturas e os mesmos valores,
+em outros endereços, com **22 jogadores por time**. Achado em 2026-11-15 em
+dois replays do Walter (TIERES_ART x TIERES, sem M. Card, "WE2000 - U-23
+(Japan-Ptbr).chd", patch "Desafio U-23" em português, conteúdo
+3016A56C:11149CA5), conferidos na tela FINAL:
+- 25008-1794777311: Paraguai 4 x 4 EUA, prorrogação e pênaltis 6 x 5, um
+  gol contra (Caniza, que o jogo mostra depois do gol), um gol de pênalti
+  (McBride 36'), 6 amarelos e 1 vermelho para cada lado;
+- 25008-1794778410: Japão 0 x 0 Brasil, pênaltis 0 x 3 sem prorrogação,
+  expulsões e a contusão do Zé Roberto (falta do Nanami, 2º amarelo).
+
+| O quê | Endereço |
+|---|---|
+| ID do time LOCAL / VISITA | 0x800750AC / AD |
+| Período | 0x800750AE |
+| Relógio (u16; 9000 por tempo numa partida de 5 minutos, 3000 na prorrogação) | 0x80075460 |
+| Gols LOCAL / VISITA | 0x80075244 / 45 (gols de cada tempo nos 4 bytes seguintes de cada lado) |
+| Gols: 32 registros de 4 bytes, como no WE 2002 | 0x80075108 / 0x80075188 |
+| Elencos: 22 x 16 bytes | 0x80064518 / 0x80064678 |
+| Controles 1-4 (0 LOCAL, 1 VISITA, FF sem time; cópias em +4 e +8) | 0x8007541D |
+| Só na tela de seleção: ponteiro para o nome de cada time (em português, "ESTADOS UNIDOS") | 0x800BD590 |
+| Só na tela de seleção: código de 3 letras, 4 bytes cada, time 0 aqui, descendo | 0x8007FAA0 |
+| Estado da partida (os valores do WE 2002) | 0x800752C6 |
+| Fase / placar dos pênaltis | 0x80075250 / 0x8007524E |
+| Último toque (posição 1-22, como no WE 2002) | 0x8007B385 |
+| Pênalti sendo cobrado (2 até o gol) | 0x8007AFDD |
+| Opções da partida, bits como no WE3/WE4 (bit 0 prorrogação, 1 gol de ouro, 2 pênaltis), gravadas ao carregar a partida; os IDs dos times vêm 4 bytes depois (cópia em 0x8007B5C1) | 0x80072A90 |
+| Números da tela FINAL (a mesma ordem do WE 2002; o placar vem logo depois) | 0x80075234 |
+| Cartão de cada jogador (1, 2, 4) | LOCAL 0x800750B0 / VISITA 0x800750C6 |
+| Chutes de cada jogador | LOCAL 0x800750DC / VISITA 0x800750F2 |
+| Contundidos: registros `índice, ID do time, 0, 0`, `FF FF` = fim; 10 registros (o WE 2002 menos 0x102) | 0x80073866 |
+
+As opções da tela de ajustes ficam em 0x80112D88 / 8C / 90 (palavras, até a
+partida carregar). Trocá-las no harness logo antes da carga (frame 4250 do
+primeiro replay) deu 1, 2, 4, 3, 5, 0 e 7 em 0x72A90 - assim os bits foram
+conferidos. No J.League a mesma troca não mudou nada (os valores daquela tela
+são só o que ela desenha).
+
+O shim C do fork deu, nos dois replays, os placares, os 8 gols da primeira
+partida com a assistência, o gol contra e o pênalti, a prorrogação, cada
+cobrança das disputas e o fim no apito (60600 e 42300), os cartões, a
+contusão e os números da tela FINAL; o live_sim.py manda o mesmo (83 e 50
+estados iguais). Ainda não vistos: gol de ouro, partida contra a CPU, DEMO.

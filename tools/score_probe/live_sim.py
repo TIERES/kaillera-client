@@ -141,6 +141,22 @@ ENGINES = {
         # O 3º byte de um contundido foi a 1 quando outro se machucou (não se sabe o que é).
         "stats": 0x7113C, "cards": (0x70FA0, 0x70FBA), "injuries": 0x701E6,
     }),
+    "SLPM_866.00": dict(BASE, **{  # Winning Eleven 2000 U-23 (e o patch "Desafio U-23" em português)
+        # O motor do WE2002 dois anos antes: as mesmas estruturas e valores, em outros
+        # endereços, com 22 jogadores por time; nomes e códigos da tela de seleção como no
+        # WE2002.
+        "label": "WE2000", "sig": ((0x1701C, "0300601600000000070040122120c002"),
+                                   (0x1D038, "000000000000a2930800bd270800e003")),
+        "team_id": 0x750AC, "period": 0x750AE, "clock": 0x75460, "in_play": None,
+        "score": 0x75244, "goals": (0x75108, 0x75188), "roster": (0x64518, 0x64678), "roster_len": 22,
+        "name_len": 16, "pads": 0x7541D,
+        "sel_names": 0xBD590, "sel_codes": 0x7FAA0, "code_ptrs": False, "mixed_case": False,
+        "phase": 0x75250, "pens": 0x7524E, "touch": 0x7B385, "setpiece": 0x7AFDD, "state": 0x752C6,
+        # As opções em bits, como no WE3/WE4 (conferido trocando as do menu antes de a
+        # partida carregar), num bloco junto dos IDs dos times.
+        "settings": 0x72A90,
+        "stats": 0x75234, "cards": (0x750B0, 0x750C6), "injuries": 0x73866,
+    }),
 }
 
 SAMPLE_FRAMES = 30       # lê a RAM a cada meio segundo
