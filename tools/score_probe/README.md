@@ -198,13 +198,16 @@ isso o fork tem os nomes do jogo).
 Replay 25008-1794784942 (tudo ligado, 5 minutos): o DEMO da tela de título
 (controles em FF), duas partidas contra a CPU seguidas - a segunda pelo
 "reiniciar", com prorrogação e pênaltis - (só o controle 1 no LOCAL) e
-Cerezo 1 x 0 Montedio entre os dois, com o gol do Morishima aos 119' nos
-acréscimos do 2º tempo da prorrogação (relógio já em 0: não foi gol de ouro;
-o fim veio no apito, pela regra do tempo esgotado com vencedor). O fork não
+Cerezo 1 x 0 Montedio entre os dois, decidida pelo gol de ouro do
+Morishima aos 119' - nos acréscimos do 2º tempo da prorrogação (a tela
+mostra LOSS TIME; o relógio chegou a 0 em 124200, o gol veio em 125180):
+estado 7, 11 e 10 no apito (126240). Com o relógio em 0, o fork fecha pela
+regra do tempo esgotado com vencedor, no mesmo apito em que fecharia pela do
+gol de ouro (que exige o relógio correndo - vista no WE2000). O fork não
 manda nada no DEMO nem contra a CPU; a partida dos dois sai inteira, com a
 tela RESULT conferida (números, cartões, a contusão do Tasaka).
-Ainda não vistos: um gol de ouro de verdade (relógio da prorrogação correndo)
-e o byte do estado da disputa (o 0x7571C do WE 2002 - não faz falta: o
+Ainda não vistos: um gol de ouro com o relógio da prorrogação ainda correndo
+(a mesma regra do WE2000) e o byte do estado da disputa (o 0x7571C do WE 2002 - não faz falta: o
 estado do juiz a encerra).
 
 O shim C do fork deu, no replay 14340-1794770038: pontapé no frame 6720, os
