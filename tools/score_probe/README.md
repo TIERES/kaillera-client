@@ -170,7 +170,7 @@ conferido na tela e na tela RESULT.
 | Elencos: 26 x 16 bytes (nome até 11 letras + NUL; depois do NUL sobra lixo) | 0x80060D40 / 0x80060EE0 |
 | Controles 1-4 (0 LOCAL, 1 VISITA, FF sem time; cópias em +4 e +8) | 0x80071325 |
 | Nome curto de cada time em inglês ("ANTLERS", "YOKOHAM"; sem código de 3 letras): ponteiros, time 0 primeiro - só se abrirem a tela de formação, e dali até o 1º tempo (sem ela, o fork usa os 41 nomes do jogo, os mesmos) | 0x80159F50 |
-| Opções da partida, 3 bytes de 0 ou 1: prorrogação, gol de ouro, pênaltis, na ordem da tela de ajustes (gravados ao carregar a partida; antes vem a duração em minutos, 0x80070F98). O do meio é o gol de ouro em qualquer ordem; prorrogação e pênaltis só foram vistos ligados juntos | 0x80070F99 / 9A / 9B |
+| Opções da partida, bits como no WE3/WE4 (bit 0 prorrogação, 1 gol de ouro, 2 pênaltis), gravadas ao carregar a partida; os IDs dos times vêm 4 bytes depois (cópia em 0x80077511) - o mesmo bloco do WE2000 | 0x8006F288 |
 | Estado da partida (os valores do WE 2002; 10 no intervalo e no fim) | 0x800711CE |
 | Fase (0/1 tempos, 2/3 prorrogação, 4 pênaltis) / placar dos pênaltis, como no WE 2002 | 0x80071158 / 0x80071156 |
 | Último toque (posição 1-22, como no WE 2002) | 0x800772C9 |
@@ -189,13 +189,23 @@ S-Pulse 0 x 0 Sagan Tosu, pênaltis 4 x 5. A prorrogação é como a do WE 2002
 com o placar dos pênaltis, e o estado vai a 10 no fim dela. As opções foram
 achadas nessa tela de ajustes, que eles ligaram e desligaram várias vezes:
 no menu ficam em 0x800EDF70/74/78 (palavras), apagadas quando a partida
-carrega; na partida, os 3 bytes antes dos IDs dos times. Nessa partida
+carrega; na partida, o byte de bits 0x8006F288 (0, 5 e 7 nas três sessões;
+trocar as do menu no harness no frame 7500 deu 0 a 7, como no WE2000). Os 3
+bytes antes dos IDs dos times (0x70F99..9B), tomados antes pelas opções, não
+são elas: deram 0 0 1 com tudo ligado no replay 25008-1794784942. Nessa partida
 ninguém abriu a tela de formação: a tabela de nomes nunca esteve na RAM (por
 isso o fork tem os nomes do jogo).
-Ainda não vistos: gol de ouro (o byte do meio, pela ordem da tela), o byte
-do estado da disputa (o 0x7571C do WE 2002 - não faz falta: o estado do juiz
-a encerra), partida contra a CPU, DEMO da tela de título (os controles devem
-estar em FF, como no WE 2002).
+Replay 25008-1794784942 (tudo ligado, 5 minutos): o DEMO da tela de título
+(controles em FF), duas partidas contra a CPU seguidas - a segunda pelo
+"reiniciar", com prorrogação e pênaltis - (só o controle 1 no LOCAL) e
+Cerezo 1 x 0 Montedio entre os dois, com o gol do Morishima aos 119' nos
+acréscimos do 2º tempo da prorrogação (relógio já em 0: não foi gol de ouro;
+o fim veio no apito, pela regra do tempo esgotado com vencedor). O fork não
+manda nada no DEMO nem contra a CPU; a partida dos dois sai inteira, com a
+tela RESULT conferida (números, cartões, a contusão do Tasaka).
+Ainda não vistos: um gol de ouro de verdade (relógio da prorrogação correndo)
+e o byte do estado da disputa (o 0x7571C do WE 2002 - não faz falta: o
+estado do juiz a encerra).
 
 O shim C do fork deu, no replay 14340-1794770038: pontapé no frame 6720, os
 6 gols com os dois pênaltis (Goto 29', Bismark 44') e o gol contra do
@@ -203,7 +213,7 @@ Takakuwa (88'), os cartões e as contusões, e o fim no frame 38100 (o apito em
 38080); no 25008-1794776316: os dois tempos, a prorrogação, cada cobrança da
 disputa e o fim no frame 47550 com os pênaltis 4 x 5, os cartões (Tominaga
 amarelo e 2º amarelo, Koishi vermelho) e os números da tela RESULT. O
-live_sim.py manda o mesmo nos dois (46 e 59 estados iguais).
+live_sim.py manda o mesmo nos três (46, 59 e 56 estados iguais).
 
 ## Winning Eleven 2000 U-23 (`SLPM_866.00`)
 
@@ -242,8 +252,8 @@ dois replays do Walter (TIERES_ART x TIERES, sem M. Card, "WE2000 - U-23
 As opções da tela de ajustes ficam em 0x80112D88 / 8C / 90 (palavras, até a
 partida carregar). Trocá-las no harness logo antes da carga (frame 4250 do
 primeiro replay) deu 1, 2, 4, 3, 5, 0 e 7 em 0x72A90 - assim os bits foram
-conferidos. No J.League a mesma troca não mudou nada (os valores daquela tela
-são só o que ela desenha).
+conferidos. No J.League a mesma troca (0x800EDF70/74/78, frame 7500 do
+replay 25008-1794776316) deu 0 a 7 em 0x6F288: os mesmos bits.
 
 O shim C do fork deu, nos dois replays, os placares, os 8 gols da primeira
 partida com a assistência, o gol contra e o pênalti, a prorrogação, cada

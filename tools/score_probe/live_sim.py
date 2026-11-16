@@ -38,7 +38,7 @@ BASE = {"scratch": False, "goal_size": 4, "roster_team": 0, "kick_on_run": False
         "phase": 0, "pens": 0, "kicker": 0, "touch": 0, "setpiece": 0, "state": 0,
         "pen_value": 2, "pen_state": None, "in_match": 0, "demo": 0, "demo_value": 0, "settings": 0,
         "stats": 0, "cards": None, "injuries": 0, "numbers": 0, "numbers_team": 0,
-        "settings_bytes": False, "fixed_names": None}
+        "fixed_names": None}
 SET_EXTRA, SET_GOLDEN, SET_PENS = 1, 2, 4  # as opções da partida (bit 0 prorrogação, 1 gol de ouro, 2 pênaltis)
 # Os nomes curtos dos times do J.League WE 2001 (a tabela da tela de formação, 0x80159F50), por ID.
 JWE2001_NAMES = (
@@ -134,9 +134,9 @@ ENGINES = {
         # Fase e placar dos pênaltis onde o WE2002 os tem (junto do placar); o estado da
         # disputa não achado (o estado do juiz a encerra).
         "phase": 0x71158, "pens": 0x71156,
-        # As opções da partida: 3 bytes (prorrogação, gol de ouro, pênaltis), 0 ou 1,
-        # logo antes dos IDs dos times - o do gol de ouro ainda não visto ligado.
-        "settings": 0x70F99, "settings_bytes": True,
+        # As opções em bits, como no WE3/WE4 (conferido trocando as do menu antes de a
+        # partida carregar), num bloco junto dos IDs dos times - como no WE2000.
+        "settings": 0x6F288,
         "touch": 0x772C9, "setpiece": 0x76F21, "state": 0x711CE,
         # O 3º byte de um contundido foi a 1 quando outro se machucou (não se sabe o que é).
         "stats": 0x7113C, "cards": (0x70FA0, 0x70FBA), "injuries": 0x701E6,
@@ -287,17 +287,7 @@ def read_state(ram, st, m, teams=None):
             "kicker": b(ram, st, m["kicker"]) if m["kicker"] else None,
             "state": b(ram, st, m["state"]) if m["state"] else None,
             "in_match": b(ram, st, m["in_match"]) if m["in_match"] else 1,
-            "settings": settings_of(ram, m)}
-
-
-def settings_of(ram, m):
-    """As opções da partida em bits SET_* (None: motor sem elas)."""
-    if not m["settings"]:
-        return None
-    if not m["settings_bytes"]:
-        return ram[m["settings"]]
-    s = ram[m["settings"]:m["settings"] + 3]
-    return (SET_EXTRA if s[0] else 0) | (SET_GOLDEN if s[1] else 0) | (SET_PENS if s[2] else 0)
+            "settings": ram[m["settings"]] if m["settings"] else None}
 
 
 class MatchWatch:
