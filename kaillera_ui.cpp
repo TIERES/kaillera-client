@@ -40,7 +40,10 @@ bool ValidateGameBeforePlay(const char* gameName) {
 
 	if (!foundInList) {
 		if (infos.findOrBrowseGameCallback == NULL || !infos.findOrBrowseGameCallback((char*)gameName)) {
-			kaillera_error_callback("The rom '%s' is not in your list.", gameName);
+			// The emulator's own find/browse already said why (RetroArch TIERES:
+			// the ISO's old path, then a file picker) - this is the red line in the chat.
+			kaillera_error_callback("* A ISO do jogo \"%s\" nao esta no seu PC (nem no Historico do RetroArch): sem ela a partida "
+				"nao abre. Coloque o arquivo de volta ou abra o jogo pelo \"Carregar conteudo\" e tente de novo.", gameName);
 			return false;
 		}
 	}

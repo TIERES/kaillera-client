@@ -2516,10 +2516,10 @@ void p2p_hosted_game_callback(char * game){
 		}
 	}
 	
-	outpf("ERROR: Game not found on your local list");
-	outpf("ERROR: Game not found on your local list");
-	outpf("ERROR: Game not found on your local list");
-	outpf("ERROR: Game not found on your local list");
+	// Not in the list = the ISO isn't on this PC (RetroArch TIERES leaves out the
+	// content-history entries whose file was deleted, moved or renamed).
+	outpf("ERRO: a ISO do jogo desta sala nao esta no seu PC: %s", game);
+	outpf("Sem ela a partida nao abre. Coloque o arquivo de volta ou abra o jogo pelo \"Carregar conteudo\" do RetroArch e conecte de novo.");
 }
 
 /////////////////////////////////////////
