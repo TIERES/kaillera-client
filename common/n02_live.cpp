@@ -16,6 +16,9 @@ static bool g_running;
 // The last state queued for the match being played (a copy) - until its
 // final; n02_live_left() sends it again saying the player left.
 static char* g_last;
+// Reconectar: the replay being resumed (session id, "" = none) - sent with
+// every state as "resume" (n02_live_set_resume()).
+static char g_resume[64];
 static void Kick();
 
 static struct LiveInit {
@@ -73,7 +76,11 @@ static DWORD WINAPI LiveThread(LPVOID) {
 void n02_live_submit(const char* stateJson, const char* players, const char* reporter, const char* room, bool final) {
 	if (stateJson == NULL || players == NULL || reporter == NULL)
 		return;
-	size_t cap = 3 * (strlen(stateJson) + strlen(players) + strlen(reporter) + (room ? strlen(room) : 0)) + 64;
+	char resume[sizeof(g_resume)];
+	EnterCriticalSection(&g_lock);
+	memcpy(resume, g_resume, sizeof(resume));
+	LeaveCriticalSection(&g_lock);
+	size_t cap = 3 * (strlen(stateJson) + strlen(players) + strlen(reporter) + (room ? strlen(room) : 0) + strlen(resume)) + 80;
 	char* body = (char*)malloc(cap);
 	if (body == NULL)
 		return;
@@ -86,6 +93,10 @@ void n02_live_submit(const char* stateJson, const char* players, const char* rep
 	UrlEncodeTo(body, &o, reporter);
 	memcpy(body + o, "&room=", 6); o += 6;
 	UrlEncodeTo(body, &o, room ? room : "");
+	if (resume[0]) {
+		memcpy(body + o, "&resume=", 8); o += 8;
+		UrlEncodeTo(body, &o, resume);
+	}
 	body[o] = 0;
 
 	EnterCriticalSection(&g_lock);
@@ -124,6 +135,50 @@ void n02_live_left() {
 		return;
 	}
 	Kick();
+}
+
+void n02_live_set_resume(const char* sessionId) {
+	EnterCriticalSection(&g_lock);
+	strncpy(g_resume, sessionId ? sessionId : "", sizeof(g_resume) - 1);
+	g_resume[sizeof(g_resume) - 1] = 0;
+	LeaveCriticalSection(&g_lock);
+}
+
+// A Reconectar notice (malloc'd form body), its own short-lived thread: a
+// few tries, then it's gone - "start"/"cancel" are rare and must not be
+// replaced by the states the live worker queues.
+#define N02_LIVE_RECONNECT_TRIES 3
+
+static DWORD WINAPI ReconnectThread(LPVOID param) {
+	char* body = (char*)param;
+	for (int attempt = 0; attempt < N02_LIVE_RECONNECT_TRIES; attempt++) {
+		int status = n02_wecamp_live_reconnect_post(body, (int)strlen(body));
+		if (status == 200 || (status >= 400 && status < 500) || !n02_wecamp_logged_in())
+			break; // sent, refused for good or logged out
+		Sleep(3000);
+	}
+	free(body);
+	return 0;
+}
+
+void n02_live_reconnect(const char* sessionId, const char* phase) {
+	if (sessionId == NULL || !sessionId[0] || phase == NULL || !n02_wecamp_logged_in())
+		return;
+	size_t cap = 3 * (strlen(sessionId) + strlen(phase)) + 32;
+	char* body = (char*)malloc(cap);
+	if (body == NULL)
+		return;
+	size_t o = 0;
+	memcpy(body + o, "session=", 8); o += 8;
+	UrlEncodeTo(body, &o, sessionId);
+	memcpy(body + o, "&phase=", 7); o += 7;
+	UrlEncodeTo(body, &o, phase);
+	body[o] = 0;
+	HANDLE t = n02_create_thread(ReconnectThread, body);
+	if (t)
+		CloseHandle(t);
+	else
+		free(body);
 }
 
 // (g_lock held - released here) Starts the worker if it isn't running and wakes it.
