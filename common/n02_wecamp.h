@@ -145,3 +145,8 @@ bool n02_wecamp_voice_join(const char* players, char* status, int statusCap, cha
 // WE Camp shows a match only when all its players sent it logged in).
 // Returns the HTTP status (0 = no answer / not sent).
 int n02_wecamp_live_post(const char* body, int bodyLen);
+
+// Reconectar (n02_live.cpp): POSTs one ready form body (session, phase) to
+// /api/live/reconnect - only with our token. Returns the HTTP status (0 = no
+// answer / not sent).
+int n02_wecamp_live_reconnect_post(const char* body, int bodyLen);

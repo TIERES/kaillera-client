@@ -27,3 +27,18 @@ void n02_live_submit(const char* stateJson, const char* players, const char* rep
 // (2026-11-08). Nothing after the match's final. The worker keeps the DLL
 // loaded until it's sent (n02_thread.h), even if Kaillera is closing.
 void n02_live_left();
+
+// Reconectar (2026-11-16, kcore/kaillera_retryconnect.cpp): the match being
+// resumed from a Stream ao vivo replay. sessionId = that replay's session id
+// (NULL = none - the game ended): every state sent while it's set carries
+// "resume=<id>", and WE Camp continues the interrupted match of that replay
+// on the same card (the resumed match's frames restart at 1, its kickoff is
+// 0 - it can't be found by the usual key).
+void n02_live_set_resume(const char* sessionId);
+
+// Tells WE Camp about the Reconectar, from a worker thread (a few tries):
+// phase "start" right after the host picked the replay - the interrupted
+// match goes back to the top of "Ao vivo" as "Reconectando" until the
+// resumed match's first state; "cancel" when the game ended before the host
+// released the controls (it goes back to being the interrupted match).
+void n02_live_reconnect(const char* sessionId, const char* phase);

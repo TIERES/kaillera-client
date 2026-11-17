@@ -24,6 +24,7 @@
 #include "common/n02_mcchoice.h"
 #include "common/n02_thread.h"
 #include "common/n02_live.h"
+#include "common/n02_isocheck.h"
 
 void __cdecl kaillera_ui_gdebug(char* arg_0, ...); // kaillera_ui.cpp - room chat line
 void __cdecl outpf(char * arg_0, ...); // p2p_ui.cpp - P2P connection window line
@@ -706,6 +707,7 @@ extern "C" {
 	void KAILLERA_DLLEXP kailleraShutdown(){
 		// Placar ao vivo: the match being played (no final yet) is interrupted.
 		n02_live_left();
+		kaillera_retryconnect_game_ended();
 		// Kaillera closed during a match (its window shut, so the game never
 		// ended through kailleraEndGame): stop watching the cards and send
 		// what they have now, instead of a watcher running on forever.
@@ -869,6 +871,9 @@ extern "C" {
 		// Placar ao vivo: the game ended (Leave, Drop...) - a match still being
 		// played (no final yet) is interrupted on WE Camp right away.
 		n02_live_left();
+		// Reconectar: the resumed match is over - or, if the host never
+		// released the controls, the attempt is cancelled on WE Camp.
+		kaillera_retryconnect_game_ended();
 #ifdef KAILLERA
 #ifdef RECORDER
 		close_recording();
@@ -1389,6 +1394,13 @@ extern "C" {
 
 	int KAILLERA_DLLEXP kailleraGetMemcardMode(){
 		return CurrentGameMemcardMode();
+	}
+
+	/* The room's ISO check (common/n02_isocheck.h): RetroArch TIERES hands
+	   over, right after kailleraSetInfos(), how to get a game's "CRC32:SIZE".
+	   Other emulators and older RetroArch never call this - no check then. */
+	void KAILLERA_DLLEXP kailleraSetContentIdCallback(n02_content_id_fn callback){
+		n02_content_id_cb = callback;
 	}
 
 	/* Placar ao vivo: 1 when the frontend should read the match from the

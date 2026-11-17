@@ -1,0 +1,4 @@
+*.exe
+*.obj
+popups.txt
+__pycache__/
