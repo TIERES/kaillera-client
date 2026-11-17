@@ -706,6 +706,7 @@ extern "C" {
 	void KAILLERA_DLLEXP kailleraShutdown(){
 		// Placar ao vivo: the match being played (no final yet) is interrupted.
 		n02_live_left();
+		kaillera_retryconnect_game_ended();
 		// Kaillera closed during a match (its window shut, so the game never
 		// ended through kailleraEndGame): stop watching the cards and send
 		// what they have now, instead of a watcher running on forever.
@@ -869,6 +870,9 @@ extern "C" {
 		// Placar ao vivo: the game ended (Leave, Drop...) - a match still being
 		// played (no final yet) is interrupted on WE Camp right away.
 		n02_live_left();
+		// Reconectar: the resumed match is over - or, if the host never
+		// released the controls, the attempt is cancelled on WE Camp.
+		kaillera_retryconnect_game_ended();
 #ifdef KAILLERA
 #ifdef RECORDER
 		close_recording();
