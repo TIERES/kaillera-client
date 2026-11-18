@@ -105,6 +105,9 @@ static bool InList(const char* list, const char* nick) {
 	}
 	return false;
 }
+bool n02_mcchoice_account_listed(const char* accounts, const char* nick) {
+	return InList(accounts, nick);
+}
 
 void n02_mcchoice_game_slots(const char names[][32], int count, const n02_mcchoices* t,
 	const char* accounts, bool pcsx, int slot[2], bool* outdated) {

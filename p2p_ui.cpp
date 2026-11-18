@@ -907,15 +907,10 @@ void p2p_GetGameMcSlots(int slot[2]){
 	if (outdated)
 		outpf("* Memory Card: o outro jogador usa uma versao antiga do DLL - partida sem memory card.");
 }
-int p2p_GetGameAccountCount(){
-	char accounts[80];
-	if (p2p_GetMcAccounts(accounts, sizeof(accounts)) <= 0)
-		return 0;
-	int n = 1;
-	for (const char* p = accounts; *p; p++)
-		if (*p == ',')
-			n++;
-	return n;
+// The game starting now: the confirmed WE Camp accounts (nicks, comma
+// separated) - false when the host never told them (an older DLL).
+bool p2p_GetGameAccounts(char* out, int cap){
+	return p2p_GetMcAccounts(out, cap) >= 0;
 }
 
 // Both ends: the peer's WE Camp account wasn't confirmed, so its slot goes
