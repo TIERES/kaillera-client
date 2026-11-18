@@ -143,6 +143,12 @@ int kaillera_retryconnect_multitap();
 // The resumed match reuses them read-only - its saves aren't sent back.
 bool kaillera_retryconnect_mconline(char sha[2][65]);
 
+// The game ended (kailleraEndGame()/kailleraShutdown()): the resumed match
+// stops sending "resume" to WE Camp, and an attempt that never went live
+// (the host didn't release the controls) is cancelled there - the match goes
+// back to being the interrupted one (common/n02_live.h).
+void kaillera_retryconnect_game_ended();
+
 // Current position in the replay - for a caller-side progress bar and to
 // compute rewind targets relative to "right now". -1 if no session active.
 int kaillera_retryconnect_get_frame_index();

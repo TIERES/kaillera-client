@@ -37,8 +37,17 @@ SCR = 0x40000000
 BASE = {"scratch": False, "goal_size": 4, "roster_team": 0, "kick_on_run": False, "end_resets": False, "extra": 0,
         "phase": 0, "pens": 0, "kicker": 0, "touch": 0, "setpiece": 0, "state": 0,
         "pen_value": 2, "pen_state": None, "in_match": 0, "demo": 0, "demo_value": 0, "settings": 0,
-        "stats": 0, "cards": None, "injuries": 0, "numbers": 0, "numbers_team": 0}
+        "stats": 0, "cards": None, "injuries": 0, "numbers": 0, "numbers_team": 0,
+        "fixed_names": None}
 SET_EXTRA, SET_GOLDEN, SET_PENS = 1, 2, 4  # as opções da partida (bit 0 prorrogação, 1 gol de ouro, 2 pênaltis)
+# Os nomes curtos dos times do J.League WE 2001 (a tabela da tela de formação, 0x80159F50), por ID.
+JWE2001_NAMES = (
+    "CONSADO", "ANTLERS", "URAWA R", "JEF UTD", "K.REYSO", "FCTOKYO", "VERDY", "F-MARIN",
+    "S-PULSE", "JUBILO", "GRAMPUS", "GAMBA O", "CEREZO", "VISSEL", "SANFREC", "AVISPA",
+    "VEGALTA", "MONTEDI", "HOLLY H", "OM.ARDIJA", "K.FRONT", "YOKOHAM", "S.BELLM", "VENTFORET K",
+    "ALBIREX NI.", "PURPLE", "SAGAN T", "OITA T.", "J1 EAST", "J1 WEST", "J2 EAST", "J2 WEST",
+    "JAP.DREAMS", "WORLD DR.", "MANCHES", "ARSENAL", "MIL", "JUVENTU", "ROM", "BARCELO",
+    "REAL M.")
 ENGINES = {
     "SLPM_870.56": dict(BASE, **{  # Winning Eleven 2002 (Euro vs Copa America, CAN 2025, BR Turbo...)
         "label": "WE2002", "sig": ((0x1701C, "070040122120c0022198400221900000"), (0x1D038, "b070000c200806240c00401401000324")),
@@ -65,6 +74,10 @@ ENGINES = {
         # do elenco (1 amarelo, 2 o 2º amarelo - expulso -, 4 vermelho direto); e os
         # contundidos: registros {índice, time, 0, 0}, FF = o fim da lista.
         "stats": 0x756F2, "cards": (0x75568, 0x7557F), "injuries": 0x73968,
+        # As opções da tela de ajustes (T.EXTRA / G.OURO / PN em 0x8010D460/64/68, palavras,
+        # até a partida carregar), copiadas aqui nos bits dos outros motores; os IDs dos
+        # times 6 bytes depois (conferido em todas as combinações do menu, 2026-11-17).
+        "settings": 0x72B30,
     }),
     "SLPM_862.91": dict(BASE, **{  # Winning Eleven 4 (Traducida)
         "label": "WE4", "sig": ((0x17034, "60000924200008241e00072421282701"), (0x1D03C, "0100843400200524002006240780013c")),
@@ -109,12 +122,51 @@ ENGINES = {
         # Shift-JIS) vai como "#" e o número.
         "numbers": 0x1346DC, "numbers_team": 22,
     }),
+    "SLPM_868.35": dict(BASE, **{  # J.League Jikkyou Winning Eleven 2001 (Japan-Eng)
+        # O motor do WE2002 um ano antes: as mesmas estruturas e valores, em outros
+        # endereços, com 26 jogadores por time.
+        "label": "JWE2001", "sig": ((0x1701C, "802e033c808063341800023cff804234"),
+                                    (0x1D038, "21104500801002002110450080100200")),
+        "team_id": 0x70F9C, "period": 0x70F9E, "clock": 0x713A4, "in_play": None,
+        "score": 0x7114C, "goals": (0x71008, 0x71088), "roster": (0x60D40, 0x60EE0), "roster_len": 26,
+        "name_len": 16, "pads": 0x71325,
+        # Nomes curtos em inglês ("ANTLERS"), sem código de 3 letras: a tabela de
+        # ponteiros só fica na RAM se abrirem a tela de formação (até o 1º tempo); sem
+        # ela, os nomes do próprio jogo (um nome lido da RAM vale mais: patch).
+        "sel_names": 0x159F50, "sel_codes": 0, "code_ptrs": False, "mixed_case": False,
+        "fixed_names": JWE2001_NAMES,
+        # Fase e placar dos pênaltis onde o WE2002 os tem (junto do placar); o estado da
+        # disputa não achado (o estado do juiz a encerra).
+        "phase": 0x71158, "pens": 0x71156,
+        # As opções em bits, como no WE3/WE4 (conferido trocando as do menu antes de a
+        # partida carregar), num bloco junto dos IDs dos times - como no WE2000.
+        "settings": 0x6F288,
+        "touch": 0x772C9, "setpiece": 0x76F21, "state": 0x711CE,
+        # O 3º byte de um contundido foi a 1 quando outro se machucou (não se sabe o que é).
+        "stats": 0x7113C, "cards": (0x70FA0, 0x70FBA), "injuries": 0x701E6,
+    }),
+    "SLPM_866.00": dict(BASE, **{  # Winning Eleven 2000 U-23 (e o patch "Desafio U-23" em português)
+        # O motor do WE2002 dois anos antes: as mesmas estruturas e valores, em outros
+        # endereços, com 22 jogadores por time; nomes e códigos da tela de seleção como no
+        # WE2002.
+        "label": "WE2000", "sig": ((0x1701C, "0300601600000000070040122120c002"),
+                                   (0x1D038, "000000000000a2930800bd270800e003")),
+        "team_id": 0x750AC, "period": 0x750AE, "clock": 0x75460, "in_play": None,
+        "score": 0x75244, "goals": (0x75108, 0x75188), "roster": (0x64518, 0x64678), "roster_len": 22,
+        "name_len": 16, "pads": 0x7541D,
+        "sel_names": 0xBD590, "sel_codes": 0x7FAA0, "code_ptrs": False, "mixed_case": False,
+        "phase": 0x75250, "pens": 0x7524E, "touch": 0x7B385, "setpiece": 0x7AFDD, "state": 0x752C6,
+        # As opções em bits, como no WE3/WE4 (conferido trocando as do menu antes de a
+        # partida carregar), num bloco junto dos IDs dos times.
+        "settings": 0x72A90,
+        "stats": 0x75234, "cards": (0x750B0, 0x750C6), "injuries": 0x73866,
+    }),
 }
 
 SAMPLE_FRAMES = 30       # lê a RAM a cada meio segundo
 PEN_FRAMES = 90          # gol logo depois do pênalti (WE2002: a cobrança vale "2" até o gol; WE3: só até o chute)
 SHOOTOUT_IDLE = 1200     # disputa de pênaltis decidida, parada no valor de um erro: acabou
-DRAW_FRAMES = 1500       # empate apitado: sem prorrogação/pênaltis em 25 s, terminou empatado
+DRAW_FRAMES = 1500       # motor sem as opções na RAM: empate apitado sem prorrogação/pênaltis em 25 s = empate
 GRACE_FRAMES = 300       # 5 s depois do apito inicial antes de mandar (sair antes não conta)
 LEFT_FRAMES = 60         # WE4: a bola parada sem o juiz encerrar o tempo = saíram pela pausa
 STATE_OVER = 10
@@ -178,17 +230,21 @@ def player_name(ram, m, team, side, idx):
 
 
 def capture_names(ram, st, m):
-    """Nomes e códigos de todos os times enquanto a tela de seleção está na
-    RAM, ou None: só vale a tabela inteira, do time 0 até depois dos dois
-    times escolhidos agora."""
+    """Nomes e códigos de todos os times enquanto a tela de seleção (J.League
+    2001: a de formação, antes do pontapé) está na RAM, ou None: só vale a
+    tabela inteira, do time 0 até depois dos dois times escolhidos agora."""
     names, codes = [], []
     for team in range(TEAMS):
         name_at = pointer(ram, m["sel_names"] + 4 * team)
-        code_at = pointer(ram, m["sel_codes"] + 4 * team) if m["code_ptrs"] else m["sel_codes"] - 4 * team
-        if name_at is None or code_at is None or (not m["code_ptrs"] and ram[code_at + 3] != 0):
+        if not m["sel_codes"]:  # motor sem os códigos de 3 letras
+            code_at = None
+        else:
+            code_at = pointer(ram, m["sel_codes"] + 4 * team) if m["code_ptrs"] else m["sel_codes"] - 4 * team
+        if name_at is None or (m["sel_codes"] and (code_at is None
+                                                   or (not m["code_ptrs"] and ram[code_at + 3] != 0))):
             break
-        name, code = cstr(ram, name_at, 24)[:16], cstr(ram, code_at, 4)
-        if not name or (not m["mixed_case"] and name.upper() != name) or len(code) != 3:
+        name, code = cstr(ram, name_at, 24)[:16], cstr(ram, code_at, 4) if m["sel_codes"] else ""
+        if not name or (not m["mixed_case"] and name.upper() != name) or (m["sel_codes"] and len(code) != 3):
             break
         names.append(name)
         codes.append(code)
@@ -425,6 +481,9 @@ class MatchWatch:
             for team in st["teams"]:
                 if team["id"] < len(self.names[0]):
                     team["name"], team["code"] = self.names[0][team["id"]], self.names[1][team["id"]]
+        for team in st["teams"]:  # sem nome lido da RAM: o do próprio jogo
+            if not team["name"] and m["fixed_names"] and team["id"] < len(m["fixed_names"]):
+                team["name"] = m["fixed_names"][team["id"]]
         if final:
             st["period"] = 4 if shootout else st["period"]
         elif self.last and self.last["phase"] is not None:
@@ -511,9 +570,10 @@ class MatchWatch:
             if self.active and st["period"] in (2, 3) and st["clock"] >= prev["clock"] + MIN_KICKOFF_CLOCK:
                 self.half, self.extra = st["clock"], True  # (e o minuto dos cartões: minute())
         score = [mem[m["score"]], mem[m["score"] + 1]]
-        # WE2002: o juiz encerrou o tempo. 2º tempo / prorrogação com vencedor, gol de
-        # ouro (relógio da prorrogação andando) ou disputa decidida = fim; empate: a
-        # prorrogação ou os pênaltis vêm a seguir, ou em DRAW_FRAMES terminou empatado.
+        # O juiz encerrou o tempo. 2º tempo / prorrogação com vencedor, gol de ouro
+        # (relógio da prorrogação andando) ou disputa decidida = fim; empate: as opções
+        # dizem se a prorrogação ou os pênaltis vêm a seguir - nenhum = fim empatado já
+        # no apito (sem as opções na RAM: em DRAW_FRAMES sem nada, terminou empatado).
         # Todos os motores também mostram o estado entre os tempos com o próximo período já
         # marcado (relógio em 0, ou já armado por alguns frames - no WE2002 por 1-2 frames: uma
         # amostra ali era um falso fim no intervalo): fim de tempo tem o relógio andado até 0
@@ -523,13 +583,13 @@ class MatchWatch:
             self.run_phase = (ph or 0) + 1
         sets = st["settings"] or 0
         time_up = ph in (1, 3) and st["clock"] == 0 and getattr(self, "run_phase", 0) == ph + 1
-        # Gol de ouro no WE2002 (sem as opções na RAM): em qualquer tempo da prorrogação.
+        # Gol de ouro (sem as opções na RAM: em qualquer tempo da prorrogação).
         golden = ph in (2, 3) and 0 < st["clock"] < self.half and (not m["settings"] or bool(sets & SET_GOLDEN))
         if self.active and m["state"] and not final and not final_before and st["state"] == STATE_OVER:
             if ph == 4:
                 final = final or st["pens"][0] != st["pens"][1]
             else:
-                # Empate: o WE3 sabe pelas opções o que vem.
+                # Empate: as opções dizem o que vem.
                 if time_up or golden:
                     if score[0] != score[1]:
                         final = True
@@ -570,7 +630,8 @@ class MatchWatch:
                 self.active = False
         self.decided = st["phase"] is not None and (
             (st["phase"] == 4 and st["pens"][0] != st["pens"][1])
-            or (st["phase"] in (2, 3) and self.gg_clock > 1 and score[0] != score[1])
+            or (st["phase"] in (2, 3) and self.gg_clock > 1 and (not m["settings"] or bool(sets & SET_GOLDEN))
+                and score[0] != score[1])
             or (st["state"] == STATE_OVER and (st["phase"] == 4 or time_up or golden)))
         self.prev_phase, self.prev_score = st["phase"] or 0, score
         # WE2002: a disputa acaba quando o estado dela (9 nas cobranças, 11/13 por

@@ -27,10 +27,12 @@ grava no cartão durante a partida: restaure o original antes de cada execução
 O jogo é reconhecido pelo nome do executável que o kernel do PS1 guarda em
 **0x80009E19** (o mesmo endereço em todos os jogos; os patches mantêm o do
 motor): `SLPM_870.56` = Winning Eleven 2002, `SLPM_862.91` = Winning Eleven 4,
-`SLPM_861.62` = Winning Eleven 3 Final Version. O formato do arquivo (.bin,
+`SLPM_861.62` = Winning Eleven 3 Final Version, `SLPM_868.35` = J.League
+Jikkyou Winning Eleven 2001 e `SLPM_866.00` = Winning Eleven 2000 U-23 (os
+dois últimos com o mapa no fim deste arquivo). O formato do arquivo (.bin,
 .chd) não muda nada. Patch que renomeou o executável (World Cup 26 PepeWE:
 `WC26_5MX2`) é reconhecido por dois pedaços de 16 bytes do código do motor
-(WE 2002: 0x8001701C e 0x8001D038; WE4: 0x80017034 e 0x8001D03C; WE3:
+(WE 2002, J.League 2001 e WE2000 U-23: 0x8001701C e 0x8001D038; WE4: 0x80017034 e 0x8001D03C; WE3:
 0x8001714C e 0x8001D19C - os bytes estão no fork e no live_sim.py), iguais
 em todas as ISOs conferidas, nos menus e na partida. Lado 0 = LOCAL do jogo (não necessariamente o mandante
 do campeonato).
@@ -58,7 +60,7 @@ memória que o pcsx_rearmed publica, e o krec_harness também
 | Placar dos pênaltis LOCAL / VISITA | 0x8007570C / 0D | 0x8007529D / 9E | 0x1F8002DB / DC |
 | Último toque na bola: posição 1-22 (1-11 LOCAL nas fases 0/2, VISITA nas 1/3); elenco = (posição - 1) % 11 - o autor do gol contra | 0x8007B841 | 0x8007B3DD | 0x1F8002AC |
 | Pênalti sendo cobrado (até o chute; o gol vem ~25-30 frames depois) | 0x8007B499 = 2 | estado 2 e 0x80075313 = 3 | estado 2 e 0x1F80029B = 3 |
-| Opções da partida: bit 0 prorrogação, bit 1 gol de ouro, bit 2 pênaltis | — | 0x80072FD2 | 0x8010A307 |
+| Opções da partida: bit 0 prorrogação, bit 1 gol de ouro, bit 2 pênaltis (copiadas da tela de ajustes quando a partida carrega; ficam numa revanche) | 0x80072B30 (na tela de ajustes: 0x8010D460 / 64 / 68, palavras) | 0x80072FD2 | 0x8010A307 |
 | Dentro de uma partida (da formação até sair dela; 0 = saíram) | — | — | 0x1F800198 |
 | DEMO da tela de título (CPU x CPU) | controles FF | controles FF | 0x8010A2C2 = 1 |
 | Números da tela RESULT, pares LOCAL / VISITA: chutes, impedimentos, faltas, vermelhos (o 2º amarelo não conta), amarelos, escanteios, faltas cobradas, pênaltis | a partir de 0x800756F2 (até 0x80075701; o placar vem logo depois) | a partir de 0x80075283 (até 0x80075292; o placar vem logo depois) | a partir de 0x801085B0 (na RAM; o placar fica no scratchpad) |
@@ -74,8 +76,9 @@ relógio começa a descer.
 
 Fim (desde 2026-11-08, nos três motores): o estado vai a 10 com a fase 1 ou 3
 e o relógio andado até 0 naquele tempo (vencedor = fim; empate = prorrogação
-ou pênaltis se as opções mandarem, senão fim empatado - o WE 2002, sem as
-opções na RAM, espera 25 s), com a fase 2/3 e o relógio parado no meio (gol
+ou pênaltis se as opções mandarem, senão fim empatado já no apito; até
+2026-11-17 o WE 2002, sem as opções mapeadas, esperava 25 s - quem fechava o
+jogo antes deixava o empate "Interrompido"), com a fase 2/3 e o relógio parado no meio (gol
 de ouro, com a opção ligada) ou com a fase 4 e os pênaltis diferentes. No WE3
 e no WE4 o estado 10 aparece também entre os tempos com o próximo período já
 marcado (relógio em 0 ou recém-armado) - por isso o "relógio andado".
@@ -120,6 +123,21 @@ Ver. Eng .chd) e no WE4 Traducida.
 Ainda não visto: partida contra a CPU, gol de ouro com a prorrogação
 desligada, morte súbita longa nos pênaltis e, no WE3, a tabela de controles.
 
+Opções da partida nos 5 motores (2026-11-17), na tela de ajustes de um
+amistoso (1P x CPU), jogada no krec_harness com o controle "na mão" (liga a
+ISO, aperta os botões, tira screenshots, salva o state): as combinações 0, 1,
+2, 3, 4, 5 e 7 ligadas no menu, depois a partida carregada, deram o byte de
+bits igual em todos - WE 2002 (o "WE2002.bin" Clássicos Mundiais) 0x80072B30,
+WE4 Traducida 0x80072FD2, WE3 Final Ver. (Eng) 0x8010A307, J.League 2001
+0x8006F288 e WE2000 U-23 0x80072A90. Ligar só o gol de ouro liga a
+prorrogação junto (dá 3); no WE 2002, desligar a prorrogação apaga o gol de
+ouro. No WE 2002 os IDs dos times 6 bytes depois (0x80072B36/37) vão a FF no
+fim da partida, mas as opções ficam: numa partida até o fim seguida de
+revanche (sem passar pela tela de ajustes) o byte seguiu em 7. No replay da
+Copa 9152-1794954103 (ProfOneTwo x UelberLWS, ISO oficial da Copa, 379
+janelas iguais às dos jogadores) eles desligaram as três no menu (0x8010D460..68
+de 1 para 0) e o byte ficou em 0 nos dois jogos - o 2º pela revanche.
+
 Estatísticas, cartões e contusões do WE 2002 (2026-11-11): a tela RESULT do
 replay de teste no PW26 (232-1794366234, Brasil 0 x 5 Argentina, com 2
 amarelos no Casemiro e 2 vermelhos diretos) e a do Euro 2004 em espanhol
@@ -146,3 +164,131 @@ amarelo, Leonardo amarelo e 2º amarelo, Cafu vermelho direto, conferidos na
 tela; amarelos 6 x 4 e vermelhos 0 x 2 batem. O elenco do Japão está em
 Shift-JIS (a tela mostra os nomes em inglês): os cartões dele saem sem nome,
 como os gols. Contusão não saiu (lista não achada).
+
+## J.League Jikkyou Winning Eleven 2001 (`SLPM_868.35`)
+
+O motor do WE 2002 um ano antes: as mesmas estruturas e os mesmos valores,
+em outros endereços, com **26 jogadores por time** (o WE 2002 tem 23). Achado
+em 2026-11-15 no replay 14340-1794770038 (TIERES_ART x TIERES, sem M. Card,
+"J.League Jikkyou Winning Eleven 2001 (Japan-Eng).chd", conteúdo
+40353FBD:CF0CE77): Kashima Antlers 2 x 4 Yokohama FC, partida de 5 minutos
+(9000 frames por tempo), com dois gols de pênalti, um gol contra, 7 cartões
+(dois 2º amarelos e três vermelhos diretos) e duas contusões - tudo
+conferido na tela e na tela RESULT.
+
+| O quê | Endereço |
+|---|---|
+| ID do time LOCAL / VISITA | 0x80070F9C / 9D |
+| Período | 0x80070F9E |
+| Relógio (u16, como o do WE 2002) | 0x800713A4 |
+| Gols LOCAL / VISITA | 0x8007114C / 4D (gols de cada tempo nos 4 bytes seguintes de cada lado: 0x7114E LOCAL, 0x71152 VISITA) |
+| Gols: 32 registros de 4 bytes, como no WE 2002 | 0x80071008 / 0x80071088 |
+| Elencos: 26 x 16 bytes (nome até 11 letras + NUL; depois do NUL sobra lixo) | 0x80060D40 / 0x80060EE0 |
+| Controles 1-4 (0 LOCAL, 1 VISITA, FF sem time; cópias em +4 e +8) | 0x80071325 |
+| Nome curto de cada time em inglês ("ANTLERS", "YOKOHAM"; sem código de 3 letras): ponteiros, time 0 primeiro - só se abrirem a tela de formação, e dali até o 1º tempo (sem ela, o fork usa os 41 nomes do jogo, os mesmos) | 0x80159F50 |
+| Opções da partida, bits como no WE3/WE4 (bit 0 prorrogação, 1 gol de ouro, 2 pênaltis), gravadas ao carregar a partida; os IDs dos times vêm 4 bytes depois (cópia em 0x80077511) - o mesmo bloco do WE2000 | 0x8006F288 |
+| Estado da partida (os valores do WE 2002; 10 no intervalo e no fim) | 0x800711CE |
+| Fase (0/1 tempos, 2/3 prorrogação, 4 pênaltis) / placar dos pênaltis, como no WE 2002 | 0x80071158 / 0x80071156 |
+| Último toque (posição 1-22, como no WE 2002) | 0x800772C9 |
+| Pênalti sendo cobrado (2 até o gol; também estado 2 com 0x800711CF = 3) | 0x80076F21 |
+| Números da tela RESULT (a mesma ordem do WE 2002; o placar vem logo depois) | 0x8007113C |
+| Cartão de cada jogador (1, 2, 4) | LOCAL 0x80070FA0 / VISITA 0x80070FBA |
+| Chutes de cada jogador | LOCAL 0x80070FD4 / VISITA 0x80070FEE |
+| Contundidos: registros `índice, ID do time, ?, 0`, `FF FF` = fim; 10 registros | 0x800701E6 |
+
+No 3º byte de um contundido, o primeiro (Nakata K.) passou a 1 quando o
+segundo se machucou; não se sabe o que é (o fork o ignora, como no WE 2002).
+Prorrogação e pênaltis conferidos no replay 25008-1794776316 (TIERES_ART x
+TIERES, mesma ISO, prorrogação e pênaltis ligados, gol de ouro desligado):
+S-Pulse 0 x 0 Sagan Tosu, pênaltis 4 x 5. A prorrogação é como a do WE 2002
+(fase 2/3, tempos de um terço do normal: 3000 frames); a disputa, fase 4
+com o placar dos pênaltis, e o estado vai a 10 no fim dela. As opções foram
+achadas nessa tela de ajustes, que eles ligaram e desligaram várias vezes:
+no menu ficam em 0x800EDF70/74/78 (palavras), apagadas quando a partida
+carrega; na partida, o byte de bits 0x8006F288 (0, 5 e 7 nas três sessões;
+trocar as do menu no harness no frame 7500 deu 0 a 7, como no WE2000). Os 3
+bytes antes dos IDs dos times (0x70F99..9B), tomados antes pelas opções, não
+são elas: deram 0 0 1 com tudo ligado no replay 25008-1794784942. Nessa partida
+ninguém abriu a tela de formação: a tabela de nomes nunca esteve na RAM (por
+isso o fork tem os nomes do jogo).
+Replay 25008-1794784942 (tudo ligado, 5 minutos): o DEMO da tela de título
+(controles em FF), duas partidas contra a CPU seguidas - a segunda pelo
+"reiniciar", com prorrogação e pênaltis - (só o controle 1 no LOCAL) e
+Cerezo 1 x 0 Montedio entre os dois, decidida pelo gol de ouro do
+Morishima aos 119' - nos acréscimos do 2º tempo da prorrogação (a tela
+mostra LOSS TIME; o relógio chegou a 0 em 124200, o gol veio em 125180):
+estado 7, 11 e 10 no apito (126240). Com o relógio em 0, o fork fecha pela
+regra do tempo esgotado com vencedor, no mesmo apito em que fecharia pela do
+gol de ouro (que exige o relógio correndo - vista no WE2000). O fork não
+manda nada no DEMO nem contra a CPU; a partida dos dois sai inteira, com a
+tela RESULT conferida (números, cartões, a contusão do Tasaka).
+Ainda não vistos: um gol de ouro com o relógio da prorrogação ainda correndo
+(a mesma regra do WE2000) e o byte do estado da disputa (o 0x7571C do WE 2002 - não faz falta: o
+estado do juiz a encerra).
+
+O shim C do fork deu, no replay 14340-1794770038: pontapé no frame 6720, os
+6 gols com os dois pênaltis (Goto 29', Bismark 44') e o gol contra do
+Takakuwa (88'), os cartões e as contusões, e o fim no frame 38100 (o apito em
+38080); no 25008-1794776316: os dois tempos, a prorrogação, cada cobrança da
+disputa e o fim no frame 47550 com os pênaltis 4 x 5, os cartões (Tominaga
+amarelo e 2º amarelo, Koishi vermelho) e os números da tela RESULT. O
+live_sim.py manda o mesmo nos três (46, 59 e 56 estados iguais).
+
+## Winning Eleven 2000 U-23 (`SLPM_866.00`)
+
+O motor do WE 2002 dois anos antes: as mesmas estruturas e os mesmos valores,
+em outros endereços, com **22 jogadores por time**. Achado em 2026-11-15 em
+dois replays do Walter (TIERES_ART x TIERES, sem M. Card, "WE2000 - U-23
+(Japan-Ptbr).chd", patch "Desafio U-23" em português, conteúdo
+3016A56C:11149CA5), conferidos na tela FINAL:
+- 25008-1794777311: Paraguai 4 x 4 EUA, prorrogação e pênaltis 6 x 5, um
+  gol contra (Caniza, que o jogo mostra depois do gol), um gol de pênalti
+  (McBride 36'), 6 amarelos e 1 vermelho para cada lado;
+- 25008-1794778410: Japão 0 x 0 Brasil, pênaltis 0 x 3 sem prorrogação,
+  expulsões e a contusão do Zé Roberto (falta do Nanami, 2º amarelo).
+
+| O quê | Endereço |
+|---|---|
+| ID do time LOCAL / VISITA | 0x800750AC / AD |
+| Período | 0x800750AE |
+| Relógio (u16; 9000 por tempo numa partida de 5 minutos, 3000 na prorrogação) | 0x80075460 |
+| Gols LOCAL / VISITA | 0x80075244 / 45 (gols de cada tempo nos 4 bytes seguintes de cada lado) |
+| Gols: 32 registros de 4 bytes, como no WE 2002 | 0x80075108 / 0x80075188 |
+| Elencos: 22 x 16 bytes | 0x80064518 / 0x80064678 |
+| Controles 1-4 (0 LOCAL, 1 VISITA, FF sem time; cópias em +4 e +8) | 0x8007541D |
+| Só na tela de seleção: ponteiro para o nome de cada time (em português, "ESTADOS UNIDOS") | 0x800BD590 |
+| Só na tela de seleção: código de 3 letras, 4 bytes cada, time 0 aqui, descendo | 0x8007FAA0 |
+| Estado da partida (os valores do WE 2002) | 0x800752C6 |
+| Fase / placar dos pênaltis | 0x80075250 / 0x8007524E |
+| Último toque (posição 1-22, como no WE 2002) | 0x8007B385 |
+| Pênalti sendo cobrado (2 até o gol) | 0x8007AFDD |
+| Opções da partida, bits como no WE3/WE4 (bit 0 prorrogação, 1 gol de ouro, 2 pênaltis), gravadas ao carregar a partida; os IDs dos times vêm 4 bytes depois (cópia em 0x8007B5C1) | 0x80072A90 |
+| Números da tela FINAL (a mesma ordem do WE 2002; o placar vem logo depois) | 0x80075234 |
+| Cartão de cada jogador (1, 2, 4) | LOCAL 0x800750B0 / VISITA 0x800750C6 |
+| Chutes de cada jogador | LOCAL 0x800750DC / VISITA 0x800750F2 |
+| Contundidos: registros `índice, ID do time, 0, 0`, `FF FF` = fim; 10 registros (o WE 2002 menos 0x102) | 0x80073866 |
+
+As opções da tela de ajustes ficam em 0x80112D88 / 8C / 90 (palavras, até a
+partida carregar). Trocá-las no harness logo antes da carga (frame 4250 do
+primeiro replay) deu 1, 2, 4, 3, 5, 0 e 7 em 0x72A90 - assim os bits foram
+conferidos. No J.League a mesma troca (0x800EDF70/74/78, frame 7500 do
+replay 25008-1794776316) deu 0 a 7 em 0x6F288: os mesmos bits.
+
+O shim C do fork deu, nos dois replays, os placares, os 8 gols da primeira
+partida com a assistência, o gol contra e o pênalti, a prorrogação, cada
+cobrança das disputas e o fim no apito (60600 e 42300), os cartões, a
+contusão e os números da tela FINAL; o live_sim.py manda o mesmo (83 e 50
+estados iguais).
+
+Gol de ouro no replay 25008-1794779900 (opções 7): Espanha 4 x 3 Inglaterra,
+Raul 115' no 2º tempo da prorrogação (fase 3, relógio em 845). O estado vai
+a 7 no gol, 11 na comemoração e 10 no apito (~430 frames depois), com o
+relógio parado: o fork manda o fim ali, pela regra do gol de ouro com a
+opção ligada. Tela FINAL conferida (gols, minutos e números).
+
+DEMO e partida contra a CPU no replay 25008-1794784085: o DEMO da tela de
+título (Japão x Brasil) tem os 4 controles em FF; a partida contra a CPU
+(Nigéria x República Tcheca), só o controle 1 no LOCAL (`00 FF FF FF`). Nos
+dois o relógio salta para 9000 e o fork vê o pontapé, mas não abre a partida
+(ksync_live_start exige um controle em cada lado): 0 estados no replay
+inteiro, também nos menus e na seleção de times.

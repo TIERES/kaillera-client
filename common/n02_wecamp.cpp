@@ -627,6 +627,14 @@ int n02_wecamp_live_post(const char* body, int bodyLen) {
 		body, bodyLen, resp, sizeof(resp), NULL);
 }
 
+int n02_wecamp_live_reconnect_post(const char* body, int bodyLen) {
+	if (!n02_wecamp_logged_in())
+		return 0;
+	char resp[256];
+	return AuthRequest(false, "POST", "/api/live/reconnect", "Content-Type: application/x-www-form-urlencoded\r\n",
+		body, bodyLen, resp, sizeof(resp), NULL);
+}
+
 struct RefreshJob {
 	HWND notify;
 	UINT msg;

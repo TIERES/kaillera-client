@@ -58,3 +58,5 @@ bool n02_mcchoice_is_pcsx(const char* game);
 // announced a choice (an older DLL) - then both are "Sem M. Card".
 void n02_mcchoice_game_slots(const char names[][32], int count, const n02_mcchoices* t,
 	const char* accounts, bool pcsx, int slot[2], bool* outdated);
+// Whether nick is in accounts (comma separated, case ignored; NULL = none).
+bool n02_mcchoice_account_listed(const char* accounts, const char* nick);

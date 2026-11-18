@@ -7,6 +7,7 @@
 #include "kaillera_core.h"
 #include "k_instruction.h"
 #include "../common/n02_replays.h"
+#include "../common/n02_live.h"
 #include "../common/krec_reader.h"
 #include "../kaillera_ui.h"
 
@@ -74,6 +75,27 @@ static bool DownloadReplay(const char* session_id, char* dest_path_out, size_t d
 	return n02_replays_download(session_id, dest_path_out);
 }
 
+// Placar ao vivo (common/n02_live.h): the replay was picked - WE Camp shows
+// its interrupted match as "Reconectando", and every state the resumed match
+// sends carries the replay's session id, so it continues that same card.
+static bool g_announced = false; // "start" sent, no "cancel" yet
+
+static void AnnounceReconnect(const char* session_id) {
+	n02_live_set_resume(session_id);
+	n02_live_reconnect(session_id, "start");
+	g_announced = true;
+}
+
+// The attempt ended before the host released the controls (a NAK, the game
+// ended): the match goes back to being the interrupted one on WE Camp. After
+// the go-live (g_active false) the resumed match just stops sending "resume".
+static void CancelReconnect() {
+	if (g_announced && g_active)
+		n02_live_reconnect(g_session_id, "cancel");
+	g_announced = false;
+	n02_live_set_resume(NULL);
+}
+
 static void ResetSession() {
 	g_active = false;
 	g_reader.close();
@@ -104,6 +126,7 @@ bool kaillera_retryconnect_host_select(const char* session_id, const char* when)
 	g_last_frame_len = 0;
 	g_pending_action = 0;
 	g_total_frames = g_reader.count_total_frames();
+	AnnounceReconnect(session_id);
 
 	unsigned short len = (unsigned short)strlen(session_id);
 	kaillera_retryconnect_send_select(session_id, len);
@@ -159,6 +182,7 @@ void kaillera_retryconnect_select_callback(char* fromUser, char* session_id) {
 	g_last_frame_len = 0;
 	g_pending_action = 0;
 	g_total_frames = g_reader.count_total_frames();
+	AnnounceReconnect(session_id);
 
 	// No local debug/announce line here - the host's own deferred
 	// "CONTINUANDO PARTIDA: ..." (kaillera_retryconnect_host_select() above)
@@ -223,7 +247,13 @@ bool kaillera_retryconnect_poll(int* out_action, int* out_frame_index) {
 
 void kaillera_retryconnect_nak_callback(char* fromUser) {
 	kaillera_error_callback("retry-connect: %s nao conseguiu retomar a partir do replay escolhido.", fromUser);
+	CancelReconnect();
 	ResetSession();
+}
+
+void kaillera_retryconnect_game_ended() {
+	// Still serving the replay = the host never released the controls.
+	CancelReconnect();
 }
 
 int kaillera_retryconnect_modify_play_values(void* values, int size) {

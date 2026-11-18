@@ -15,6 +15,7 @@
 #include "common/n02_replays.h"
 #include "common/n02_wecamp.h"
 #include "common/n02_mcchoice.h"
+#include "common/n02_isocheck.h"
 #include "common/n02_thread.h"
 #include "kcore/kaillera_retryconnect.h"
 #include "player.h"
@@ -40,7 +41,10 @@ bool ValidateGameBeforePlay(const char* gameName) {
 
 	if (!foundInList) {
 		if (infos.findOrBrowseGameCallback == NULL || !infos.findOrBrowseGameCallback((char*)gameName)) {
-			kaillera_error_callback("The rom '%s' is not in your list.", gameName);
+			// The emulator's own find/browse already said why (RetroArch TIERES:
+			// the ISO's old path, then a file picker) - this is the red line in the chat.
+			kaillera_error_callback("* A ISO do jogo \"%s\" nao esta no seu PC (nem no Historico do RetroArch): sem ela a partida "
+				"nao abre. Coloque o arquivo de volta ou abra o jogo pelo \"Carregar conteudo\" e tente de novo.", gameName);
 			return false;
 		}
 	}
@@ -1090,10 +1094,17 @@ static void kaillera_UpdateStreamLock(){
 	g_stream_forced = forced;
 	EnableWindow(chk, hosting && !forced);
 }
-// The game that started: how many of its players have a confirmed WE Camp
-// account (kailleraclient.cpp's in-game "play to the end" notice).
-int kaillera_GetGameAccountCount(){
-	return g_game_accounts_known ? CountAccounts(g_game_accounts) : 0;
+// The game that started: its confirmed WE Camp accounts (nicks, comma
+// separated, the host's list at the start) - false when the host never told
+// them (an older DLL): nobody's counts then. kailleraclient.cpp's notice of
+// who isn't logged in / "play to the end" (PrepareAccountNotice()).
+bool kaillera_GetGameAccounts(char* out, int cap){
+	out[0] = 0;
+	if (!g_game_accounts_known)
+		return false;
+	strncpy(out, g_game_accounts, cap - 1);
+	out[cap - 1] = 0;
+	return true;
 }
 
 static void PostRoomChat(const char* text){
@@ -1704,7 +1715,13 @@ void kaillera_chat_callback(char*name, char * msg){
 		return;
 	kaillera_outpf("<%s> %s", name, msg);
 }
+static void IsoChatReceived(const char* name, const char* text);
 void kaillera_game_chat_callback(char*name, char * msg){
+	if (msg != NULL && strncmp(msg, N02_ISO_CHAT_PREFIX, strlen(N02_ISO_CHAT_PREFIX)) == 0) {
+		// The room's ISO check - nobody shows its lines.
+		IsoChatReceived(name, msg + strlen(N02_ISO_CHAT_PREFIX));
+		return;
+	}
 	if (msg != NULL && strncmp(msg, N02_STREAM_LIVE_CHAT_PREFIX, strlen(N02_STREAM_LIVE_CHAT_PREFIX)) == 0) {
 		// "desativado" contains "ativado" as a substring, so it must be
 		// checked first, or the "off" message would also match as "on".
@@ -1996,6 +2013,265 @@ static void IsoCheckDone(IsoCheckResult* r){
 	StartButtonPressed();
 }
 
+// The room's ISO check (common/n02_isocheck.h): everybody's id of the room's
+// game, ours too (the server sends our line back as well). RetroArch hashes
+// ours as we enter the room (n02_content_id_cb - never blocks, polled once a
+// second); the room learns it then, and again whenever somebody enters.
+#define WM_N02_ISOWARN (WM_APP + 83)
+#define N02_ISO_SETTLE_MS 8000 // a player who never announces (an older DLL): the chat line waits this long
+static n02_isoids g_room_iso;
+static int g_iso_own_state = -1;        // 1 RetroArch hashing, 2 known, -1 none (no RetroArch TIERES, lobby, unreadable)
+static char g_iso_own[N02_ISOID_LEN];
+static bool g_iso_announce_pending = false;
+static char g_iso_room_game[128];       // the game of the ids above
+static char g_iso_noticed[1024];        // the verdict the chat last got ("" = same ISOs)
+static DWORD g_iso_changed_tick;        // the table's last change
+static volatile LONG g_iso_host_popup = 0;   // the host's "start anyway?" is up
+static volatile LONG g_iso_player_popup = 0; // a player's warning is up
+static unsigned int g_iso_popup_room;        // the room the host's popup is about
+
+static int IsoRoomPlayers(char names[][32], int cap){
+	int count = kaillera_sdlg_LV_GULIST.RowsCount();
+	if (count > cap)
+		count = cap;
+	for (int i = 0; i < count; i++) {
+		kaillera_sdlg_LV_GULIST.CheckRow(names[i], 31, 0, i);
+		names[i][31] = 0;
+	}
+	return count;
+}
+
+static void IsoTableChanged(){
+	g_iso_changed_tick = GetTickCount();
+}
+
+// Entering a room - ours or somebody else's: a new table, and RetroArch
+// starts on our ISO of its game.
+static void IsoRoomEnter(){
+	n02_isoids_clear(&g_room_iso);
+	g_iso_own[0] = 0;
+	g_iso_noticed[0] = 0;
+	g_iso_announce_pending = false;
+	IsoTableChanged();
+	strncpy(g_iso_room_game, GAME, sizeof(g_iso_room_game) - 1);
+	g_iso_room_game[sizeof(g_iso_room_game) - 1] = 0;
+	g_iso_own_state = -1;
+	if (n02_content_id_cb == NULL || !g_iso_room_game[0] || IsNonGameLobbyName(g_iso_room_game))
+		return;
+	char id[N02_ISOID_LEN + 8];
+	int r = n02_content_id_cb(g_iso_room_game, 1, id, sizeof(id));
+	g_iso_own_state = 1;
+	if (r != 0) {
+		// Known already (the same file, hashed for an earlier room): the
+		// announcement goes on the next tick, once we're surely in the room.
+		g_iso_own_state = r > 0 && n02_isoid_valid(id) ? 2 : -1;
+		if (g_iso_own_state == 2) {
+			strncpy(g_iso_own, id, sizeof(g_iso_own) - 1);
+			g_iso_own[sizeof(g_iso_own) - 1] = 0;
+			g_iso_announce_pending = true;
+		}
+	}
+}
+
+static void IsoRoomLeave(){
+	n02_isoids_clear(&g_room_iso);
+	g_iso_own_state = -1;
+	g_iso_announce_pending = false;
+	g_iso_noticed[0] = 0;
+}
+
+// To the room: "[ISO] <id>" - on knowing it, and to whoever enters after us.
+static void IsoAnnounceOwn(){
+	if (g_iso_own_state != 2 || !inGame || kaillera_sdlg_MODE != 0 || kaillera_is_game_running())
+		return;
+	char me[32];
+	kaillera_get_username(me, sizeof(me));
+	if (n02_isoids_set(&g_room_iso, me, g_iso_own))
+		IsoTableChanged();
+	char line[64];
+	_snprintf(line, sizeof(line) - 1, N02_ISO_CHAT_PREFIX "%s", g_iso_own);
+	line[sizeof(line) - 1] = 0;
+	kaillera_game_chat_send(line);
+	g_iso_announce_pending = false;
+}
+
+// Every player's chat: somebody's id, or the host's Start with different ISOs.
+static void IsoShowPopup(bool host);
+static void IsoChatReceived(const char* name, const char* text){
+	if (name == NULL || text == NULL)
+		return;
+	if (strcmp(text, N02_ISO_WARN) == 0) {
+		if (!hosting && IsRoomOwner(name))
+			IsoShowPopup(false);
+		return;
+	}
+	if (n02_isoid_valid(text) && n02_isoids_set(&g_room_iso, name, text))
+		IsoTableChanged();
+}
+
+// The popup runs on a thread of its own, so the room keeps going (chat,
+// joins, the server's keepalive) while it's up; the host's answer comes back
+// as WM_N02_ISOWARN.
+struct IsoPopup {
+	wchar_t text[3000];
+	bool host;
+};
+// MB_TOPMOST alone didn't always stick (the local room test saw popups
+// without WS_EX_TOPMOST), and a player whose Kaillera window is behind the
+// browser must still see it: the box's own thread puts it back on top while
+// it is up (the box's modal loop runs this thread timer).
+static BOOL CALLBACK IsoPopupRaise(HWND w, LPARAM){
+	if (IsWindowVisible(w) && !(GetWindowLongA(w, GWL_EXSTYLE) & WS_EX_TOPMOST))
+		SetWindowPos(w, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+	return TRUE;
+}
+static VOID CALLBACK IsoPopupKeepOnTop(HWND, UINT, UINT_PTR, DWORD){
+	EnumThreadWindows(GetCurrentThreadId(), IsoPopupRaise, 0);
+}
+static DWORD WINAPI IsoPopupThread(LPVOID param){
+	IsoPopup* p = (IsoPopup*)param;
+	bool host = p->host;
+	UINT_PTR onTop = SetTimer(NULL, 0, 250, IsoPopupKeepOnTop);
+	int answer = MessageBoxW(NULL, p->text, N02_ISO_POPUP_TITLE,
+		(host ? MB_YESNO | MB_DEFBUTTON2 : MB_OK) | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND);
+	if (onTop)
+		KillTimer(NULL, onTop);
+	delete p;
+	if (!host)
+		InterlockedExchange(&g_iso_player_popup, 0);
+	else if (!PostMessage(kaillera_sdlg, WM_N02_ISOWARN, answer == IDYES ? 1 : 0, 0))
+		InterlockedExchange(&g_iso_host_popup, 0);
+	return 0;
+}
+static void IsoShowPopup(bool host){
+	char names[N02_ISOIDS_MAX][32];
+	int count = IsoRoomPlayers(names, N02_ISOIDS_MAX);
+	n02_isoverdict v;
+	if (!n02_iso_verdict(&g_room_iso, names, count, &v))
+		return; // this PC doesn't know of a difference (yet) - nothing to show
+	volatile LONG* open = host ? &g_iso_host_popup : &g_iso_player_popup;
+	if (InterlockedCompareExchange(open, 1, 0) != 0)
+		return; // one is up already
+	IsoPopup* p = new IsoPopup;
+	char me[32];
+	kaillera_get_username(me, sizeof(me));
+	n02_iso_popup_text(&v, me, g_iso_room_game, host, p->text, sizeof(p->text) / sizeof(p->text[0]));
+	p->host = host;
+	HANDLE t = n02_create_thread(IsoPopupThread, p);
+	if (t == NULL) {
+		delete p;
+		InterlockedExchange(open, 0);
+		return;
+	}
+	CloseHandle(t);
+}
+
+// Dialog thread, once a second: RetroArch's answer for our id, and the red
+// line in the chat when the room's ISOs turn out different - once everybody
+// announced (or nothing new came for a while), and once per verdict. Back to
+// the same ISOs (the one with another file left): nothing to say.
+static void IsoTick(){
+	if (!inGame || kaillera_sdlg_MODE != 0)
+		return;
+	if (g_iso_own_state == 1 && n02_content_id_cb != NULL) {
+		char id[N02_ISOID_LEN + 8];
+		int r = n02_content_id_cb(g_iso_room_game, 0, id, sizeof(id));
+		if (r > 0 && n02_isoid_valid(id)) {
+			strncpy(g_iso_own, id, sizeof(g_iso_own) - 1);
+			g_iso_own[sizeof(g_iso_own) - 1] = 0;
+			g_iso_own_state = 2;
+			g_iso_announce_pending = true;
+		} else if (r != 0) {
+			g_iso_own_state = -1;
+		}
+	}
+	if (kaillera_is_game_running() || KSSDFA.state != 0)
+		return;
+	if (g_iso_announce_pending)
+		IsoAnnounceOwn();
+
+	char names[N02_ISOIDS_MAX][32];
+	int count = IsoRoomPlayers(names, N02_ISOIDS_MAX);
+	n02_isoverdict v;
+	bool differs = n02_iso_verdict(&g_room_iso, names, count, &v);
+	char sig[sizeof(g_iso_noticed)];
+	n02_iso_signature(&v, sig, sizeof(sig));
+	if (strcmp(sig, g_iso_noticed) == 0)
+		return;
+	if (differs && v.unknown > 0 && GetTickCount() - g_iso_changed_tick < N02_ISO_SETTLE_MS)
+		return;
+	strncpy(g_iso_noticed, sig, sizeof(g_iso_noticed) - 1);
+	g_iso_noticed[sizeof(g_iso_noticed) - 1] = 0;
+	if (!differs)
+		return;
+	char line[1024];
+	n02_iso_chat_line(&v, line, sizeof(line));
+	kaillera_gdebug_color(N02_LOGIN_COLOR_BAD, (char*)"%s", line);
+}
+
+// Start pressed by the host with different ISOs in the room: every PC shows
+// its popup (N02_ISO_WARN) and ours asks whether to start anyway - true when
+// it waits for that answer instead of starting.
+static bool IsoDiffBeforeStart(){
+	if (g_iso_host_popup)
+		return true; // asking already
+	char names[N02_ISOIDS_MAX][32];
+	int count = IsoRoomPlayers(names, N02_ISOIDS_MAX);
+	n02_isoverdict v;
+	if (!n02_iso_verdict(&g_room_iso, names, count, &v))
+		return false;
+	kaillera_game_chat_send((char*)N02_ISO_CHAT_PREFIX N02_ISO_WARN);
+	g_iso_popup_room = kaillera_get_game_id();
+	IsoShowPopup(true);
+	if (!g_iso_host_popup)
+		return false; // no popup (no thread) - don't hold the Start
+	EnableWindow(kaillera_sdlg_BTN_START, FALSE);
+	kaillera_gdebug_color(N02_LOGIN_COLOR_BAD, (char*)"* As ISOs da sala sao diferentes - avisei todos os jogadores. Confirme na janela se quer iniciar mesmo assim.");
+	return true;
+}
+
+static void StartPressed(bool isoConfirmed);
+// Dialog thread: the host's answer.
+static void IsoWarnAnswered(bool startAnyway){
+	InterlockedExchange(&g_iso_host_popup, 0);
+	if (!hosting || !inGame || kaillera_sdlg_MODE != 0 || kaillera_is_game_running() || KSSDFA.state != 0)
+		return; // left the room (or a game began) meanwhile
+	if (kaillera_get_game_id() != g_iso_popup_room) {
+		// Another room of ours by now - that answer was about the old one.
+		EnableWindow(kaillera_sdlg_BTN_START, !IsNonGameLobbyName(GAME));
+		return;
+	}
+	if (!startAnyway) {
+		kaillera_gdebug_color(N02_LOGIN_COLOR_BAD, (char*)"* Partida nao iniciada: as ISOs da sala sao diferentes.");
+		EnableWindow(kaillera_sdlg_BTN_START, !IsNonGameLobbyName(GAME));
+		return;
+	}
+	kaillera_gdebug("* Iniciando mesmo com ISOs diferentes (confirmado pelo host).");
+	StartPressed(true);
+}
+
+// The Start button: what has to be settled first, then the game.
+static void StartPressed(bool isoConfirmed){
+	if (IsNonGameLobbyName(GAME)) {
+		kaillera_error_callback("This lobby has no game to start.");
+	} else if (hosting && McRoomIsPcsx() && McChecksPendingWithCard() > 0) {
+		kaillera_gdebug_color(N02_LOGIN_COLOR_BAD, "* Aguarde: %d jogador(es) que escolheram memory card ainda nao "
+			"confirmaram a conta WE Camp.", McChecksPendingWithCard());
+	} else if (StreamLockPending()) {
+		kaillera_gdebug_color(N02_LOGIN_COLOR_BAD, "* Aguarde: conferindo a conta WE Camp de %d jogador(es) - com 2 ou mais "
+			"logados, o Stream ao vivo e obrigatorio.", LoginChecksPendingLoggedIn());
+	} else if (hosting && !isoConfirmed && IsoDiffBeforeStart()) {
+		// the host's answer (WM_N02_ISOWARN) starts the game, or not
+	} else if (hosting && IsoCheckBeforeStart()) {
+		// the answer (WM_N02_ISOCHECK) starts the game, or says why not
+	} else {
+		kaillera_start_game();
+		StartButtonPressed();
+	}
+	if (isoConfirmed && !g_start_sent_tick && !g_iso_check_running)
+		EnableWindow(kaillera_sdlg_BTN_START, !IsNonGameLobbyName(GAME)); // held by a "wait" above
+}
+
 void kaillera_user_game_create_callback(){
 	inGame = true;
 	SwitchJoinMessageContext(true);
@@ -2006,6 +2282,7 @@ void kaillera_user_game_create_callback(){
 	SetWindowText(kaillera_sdlg_RE_GCHAT, "");
 	EnableWindow(kaillera_sdlg_BTN_KICK, TRUE);
 	EnableWindow(kaillera_sdlg_BTN_START, !IsNonGameLobbyName(GAME));
+	IsoRoomEnter();
 
 	ExecuteOptions();
 }
@@ -2014,6 +2291,7 @@ void kaillera_user_game_closed_callback(){
 	SwitchJoinMessageContext(false);
 	hosting = false;
 	StartButtonReset();
+	IsoRoomLeave();
 	kaillera_sdlgNormalMode();
 }
 
@@ -2027,6 +2305,7 @@ void kaillera_user_game_joined_callback(){
 	SetWindowText(kaillera_sdlg_RE_GCHAT, "");
 	EnableWindow(kaillera_sdlg_BTN_KICK, FALSE);
 	EnableWindow(kaillera_sdlg_BTN_START, FALSE);
+	IsoRoomEnter();
 }
 
 void kaillera_player_add_callback(char *name, int ping, unsigned short id, char conn){
@@ -2072,9 +2351,12 @@ void kaillera_player_joined_callback(char * username, int ping, unsigned short u
 		}
 	}
 	// Everybody: our memory card choice - to the room as we enter, and again
-	// to whoever enters after us.
-	if (!kaillera_is_game_running())
+	// to whoever enters after us. The same for our ISO's id, once known.
+	if (!kaillera_is_game_running()) {
 		McAnnounceOwn(true);
+		if (!IsOwnNick(username))
+			IsoAnnounceOwn();
+	}
 	if (g_beep_on_user_join)
 		MessageBeep(MB_OK);
 	FlashKailleraDialogIfNotFocused();
@@ -2086,6 +2368,8 @@ void kaillera_player_left_callback(char * user, unsigned short id){
 	kaillera_sdlg_LV_GULIST.DeleteRow (kaillera_sdlg_LV_GULIST.Find(id));
 	LoginCheckRemove(id);
 	n02_mcchoices_remove(&g_room_mc, user);
+	n02_isoids_remove(&g_room_iso, user);
+	IsoTableChanged();
 	kaillera_UpdateMultiTapForPlayers();
 	BroadcastAccounts();
 }
@@ -3166,10 +3450,14 @@ LRESULT CALLBACK KailleraServerDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 			}
 		}
 		return 0;
+	case WM_N02_ISOWARN:
+		IsoWarnAnswered(wParam != 0);
+		return 0;
 	case WM_TIMER:
 		{
 			LoginChecksTick();
 			StartButtonTick();
+			IsoTick();
 			// The memory card list after a game, and a login the site refused.
 			EnableWindow(GetDlgItem(hDlg, CMB_MEMCARD), McCanChoose());
 			McAnnounceOwn(false);
@@ -3282,20 +3570,7 @@ LRESULT CALLBACK KailleraServerDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
 				kaillera_game_drop();
 				break;
 			case BTN_START:
-				if (IsNonGameLobbyName(GAME)) {
-					kaillera_error_callback("This lobby has no game to start.");
-				} else if (hosting && McRoomIsPcsx() && McChecksPendingWithCard() > 0) {
-					kaillera_gdebug_color(N02_LOGIN_COLOR_BAD, "* Aguarde: %d jogador(es) que escolheram memory card ainda nao "
-						"confirmaram a conta WE Camp.", McChecksPendingWithCard());
-				} else if (StreamLockPending()) {
-					kaillera_gdebug_color(N02_LOGIN_COLOR_BAD, "* Aguarde: conferindo a conta WE Camp de %d jogador(es) - com 2 ou mais "
-						"logados, o Stream ao vivo e obrigatorio.", LoginChecksPendingLoggedIn());
-				} else if (hosting && IsoCheckBeforeStart()) {
-					// the answer (WM_N02_ISOCHECK) starts the game, or says why not
-				} else {
-					kaillera_start_game();
-					StartButtonPressed();
-				}
+				StartPressed(false);
 				break;
 			case BTN_RETRYCONNECT:
 				RetryConnect_ShowSelectDialog(hDlg);
