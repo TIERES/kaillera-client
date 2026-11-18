@@ -179,14 +179,23 @@ static void close_recording() {
 // picks their own slot's in that dialog (kaillera_ui.cpp / p2p_ui.cpp).
 // Taken once per game, at the top of _gameCallback().
 static int g_game_mc_slots[2] = { N02_MEMCARD_CHOICE_NONE, N02_MEMCARD_CHOICE_NONE };
-// A game with 2+ confirmed WE Camp accounts counts on WE Camp (live scores,
-// championship and friendly results - and whoever leaves mid-game loses
-// triple XP there, in either): a few seconds in, the emulator's screen asks
-// to play it to the end (Walter, 2026-11-07). Frames since the game started,
-// -1 = no notice.
-static volatile LONG g_finish_notice_frame = -1;
-#define N02_FINISH_NOTICE_FRAME 300
+// A game of 2+ players (Servidor or P2P), a few seconds in, on this PC's
+// screen - and in the room / P2P window at the start: whether WE Camp will
+// show it live (Walter, 2026-11-18). Every player with a confirmed WE Camp
+// account: "Contas verificadas"; otherwise each one who isn't, with their
+// player number, and that the match won't count. WE Camp only shows a match
+// whose players all sent it logged in (kailleraLiveEnabled()), so only then
+// the "play to the end" notice follows: live scores, championship and
+// friendly results come from it, and whoever leaves mid-game loses triple XP
+// there (Walter, 2026-11-07). Frames since the game started, -1 = no notice.
+static volatile LONG g_game_notice_frame = -1;
+#define N02_ACCOUNT_NOTICE_FRAME 300
+#define N02_FINISH_NOTICE_FRAME 480
 #define N02_FINISH_NOTICE "joguem ate o fim! Quem sai no meio de um jogo perde o triplo de XP."
+#define N02_ACCOUNT_NOTICE_MAX 9 // 8 players + the last line
+static char g_account_notice[N02_ACCOUNT_NOTICE_MAX][96];
+static int g_account_notice_lines = 0;
+static bool g_account_notice_all = false; // every player confirmed
 static void CurrentGameMcSlots(int slot[2]) {
 	slot[0] = g_game_mc_slots[0];
 	slot[1] = g_game_mc_slots[1];
@@ -365,6 +374,47 @@ static void VoiceJoinStart(int numplayers) {
 		delete job;
 }
 
+// The WE Camp accounts notice of the game starting now (g_game_notice_frame):
+// worked out here and shown in the room / P2P window at once, on the
+// emulator's screen a few seconds in. Servidor and P2P, 2+ players.
+static void PrepareAccountNotice(int players) {
+	InterlockedExchange(&g_game_notice_frame, -1);
+	g_account_notice_lines = 0;
+	g_account_notice_all = false;
+	int mode = get_active_mode_index();
+	if ((mode != 0 && mode != 1) || player_is_watching())
+		return;
+	char names[8][32];
+	int count = mode == 0 ? p2p_GetGamePlayers(names, 8) : kaillera_GetGamePlayers(names, 8);
+	if (players < count)
+		count = players;
+	if (count < 2)
+		return;
+	char accounts[16 * 32 + 16];
+	bool known = mode == 0 ? p2p_GetGameAccounts(accounts, sizeof(accounts))
+		: kaillera_GetGameAccounts(accounts, sizeof(accounts));
+	bool all = true;
+	for (int i = 0; i < count; i++) {
+		if (known && n02_mcchoice_account_listed(accounts, names[i]))
+			continue;
+		all = false;
+		char* line = g_account_notice[g_account_notice_lines++];
+		_snprintf(line, sizeof(g_account_notice[0]) - 1, "%s (Player %d) Conta NAO logada em WE Camp", names[i], i + 1);
+		line[sizeof(g_account_notice[0]) - 1] = 0;
+	}
+	strcpy(g_account_notice[g_account_notice_lines++], all
+		? "Contas verificadas, os lances dessa partida serao exibidos Ao vivo no portal WE Camp!"
+		: "Os lances dessa partida NAO serao registrados no portal WE Camp!");
+	g_account_notice_all = all;
+	for (int i = 0; i < g_account_notice_lines; i++) {
+		if (mode == 0)
+			outpf((char*)"* %s", g_account_notice[i]);
+		else
+			kaillera_ui_gdebug((char*)"* %s", g_account_notice[i]);
+	}
+	InterlockedExchange(&g_game_notice_frame, 0);
+}
+
 int WINAPI _gameCallback(char *game, int player, int numplayers){
 
 	close_recording();
@@ -381,11 +431,7 @@ int WINAPI _gameCallback(char *game, int player, int numplayers){
 		kaillera_GetGameMcSlots(g_game_mc_slots);
 	else if (get_active_mode_index() == 0)
 		p2p_GetGameMcSlots(g_game_mc_slots);
-	{
-		int accounts = get_active_mode_index() == 1 ? kaillera_GetGameAccountCount()
-			: get_active_mode_index() == 0 ? p2p_GetGameAccountCount() : 0;
-		InterlockedExchange(&g_finish_notice_frame, accounts >= 2 ? 0 : -1);
-	}
+	PrepareAccountNotice(numplayers);
 
 	const int noMemcard = CurrentGameNoMemcard();
 	const char* memcardMarker = noMemcard ? N02_MEMCARD_MARKER_ON : N02_MEMCARD_MARKER_OFF;
@@ -831,10 +877,16 @@ extern "C" {
 		if (KSSDFA.state==2) {
 			McFlushChat();
 			// Only on this PC's screen - not in the chat, replay or stream.
-			if (g_finish_notice_frame >= 0 && ++g_finish_notice_frame >= N02_FINISH_NOTICE_FRAME) {
-				g_finish_notice_frame = -1;
-				if (infos_copy.chatReceivedCallback)
-					infos_copy.chatReceivedCallback((char*)"WE Camp", (char*)N02_FINISH_NOTICE);
+			if (g_game_notice_frame >= 0) {
+				LONG frame = ++g_game_notice_frame;
+				if (frame == N02_ACCOUNT_NOTICE_FRAME && infos_copy.chatReceivedCallback)
+					for (int i = 0; i < g_account_notice_lines; i++)
+						infos_copy.chatReceivedCallback((char*)"WE Camp", g_account_notice[i]);
+				if (frame >= N02_FINISH_NOTICE_FRAME) {
+					g_game_notice_frame = -1;
+					if (g_account_notice_all && infos_copy.chatReceivedCallback)
+						infos_copy.chatReceivedCallback((char*)"WE Camp", (char*)N02_FINISH_NOTICE);
+				}
 			}
 #ifdef KAILLERA
 

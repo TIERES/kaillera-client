@@ -1094,10 +1094,17 @@ static void kaillera_UpdateStreamLock(){
 	g_stream_forced = forced;
 	EnableWindow(chk, hosting && !forced);
 }
-// The game that started: how many of its players have a confirmed WE Camp
-// account (kailleraclient.cpp's in-game "play to the end" notice).
-int kaillera_GetGameAccountCount(){
-	return g_game_accounts_known ? CountAccounts(g_game_accounts) : 0;
+// The game that started: its confirmed WE Camp accounts (nicks, comma
+// separated, the host's list at the start) - false when the host never told
+// them (an older DLL): nobody's counts then. kailleraclient.cpp's notice of
+// who isn't logged in / "play to the end" (PrepareAccountNotice()).
+bool kaillera_GetGameAccounts(char* out, int cap){
+	out[0] = 0;
+	if (!g_game_accounts_known)
+		return false;
+	strncpy(out, g_game_accounts, cap - 1);
+	out[cap - 1] = 0;
+	return true;
 }
 
 static void PostRoomChat(const char* text){
