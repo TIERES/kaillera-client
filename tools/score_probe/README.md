@@ -60,7 +60,7 @@ memória que o pcsx_rearmed publica, e o krec_harness também
 | Placar dos pênaltis LOCAL / VISITA | 0x8007570C / 0D | 0x8007529D / 9E | 0x1F8002DB / DC |
 | Último toque na bola: posição 1-22 (1-11 LOCAL nas fases 0/2, VISITA nas 1/3); elenco = (posição - 1) % 11 - o autor do gol contra | 0x8007B841 | 0x8007B3DD | 0x1F8002AC |
 | Pênalti sendo cobrado (até o chute; o gol vem ~25-30 frames depois) | 0x8007B499 = 2 | estado 2 e 0x80075313 = 3 | estado 2 e 0x1F80029B = 3 |
-| Opções da partida: bit 0 prorrogação, bit 1 gol de ouro, bit 2 pênaltis | — | 0x80072FD2 | 0x8010A307 |
+| Opções da partida: bit 0 prorrogação, bit 1 gol de ouro, bit 2 pênaltis (copiadas da tela de ajustes quando a partida carrega; ficam numa revanche) | 0x80072B30 (na tela de ajustes: 0x8010D460 / 64 / 68, palavras) | 0x80072FD2 | 0x8010A307 |
 | Dentro de uma partida (da formação até sair dela; 0 = saíram) | — | — | 0x1F800198 |
 | DEMO da tela de título (CPU x CPU) | controles FF | controles FF | 0x8010A2C2 = 1 |
 | Números da tela RESULT, pares LOCAL / VISITA: chutes, impedimentos, faltas, vermelhos (o 2º amarelo não conta), amarelos, escanteios, faltas cobradas, pênaltis | a partir de 0x800756F2 (até 0x80075701; o placar vem logo depois) | a partir de 0x80075283 (até 0x80075292; o placar vem logo depois) | a partir de 0x801085B0 (na RAM; o placar fica no scratchpad) |
@@ -76,8 +76,9 @@ relógio começa a descer.
 
 Fim (desde 2026-11-08, nos três motores): o estado vai a 10 com a fase 1 ou 3
 e o relógio andado até 0 naquele tempo (vencedor = fim; empate = prorrogação
-ou pênaltis se as opções mandarem, senão fim empatado - o WE 2002, sem as
-opções na RAM, espera 25 s), com a fase 2/3 e o relógio parado no meio (gol
+ou pênaltis se as opções mandarem, senão fim empatado já no apito; até
+2026-11-17 o WE 2002, sem as opções mapeadas, esperava 25 s - quem fechava o
+jogo antes deixava o empate "Interrompido"), com a fase 2/3 e o relógio parado no meio (gol
 de ouro, com a opção ligada) ou com a fase 4 e os pênaltis diferentes. No WE3
 e no WE4 o estado 10 aparece também entre os tempos com o próximo período já
 marcado (relógio em 0 ou recém-armado) - por isso o "relógio andado".
@@ -121,6 +122,21 @@ Ver. Eng .chd) e no WE4 Traducida.
 
 Ainda não visto: partida contra a CPU, gol de ouro com a prorrogação
 desligada, morte súbita longa nos pênaltis e, no WE3, a tabela de controles.
+
+Opções da partida nos 5 motores (2026-11-17), na tela de ajustes de um
+amistoso (1P x CPU), jogada no krec_harness com o controle "na mão" (liga a
+ISO, aperta os botões, tira screenshots, salva o state): as combinações 0, 1,
+2, 3, 4, 5 e 7 ligadas no menu, depois a partida carregada, deram o byte de
+bits igual em todos - WE 2002 (o "WE2002.bin" Clássicos Mundiais) 0x80072B30,
+WE4 Traducida 0x80072FD2, WE3 Final Ver. (Eng) 0x8010A307, J.League 2001
+0x8006F288 e WE2000 U-23 0x80072A90. Ligar só o gol de ouro liga a
+prorrogação junto (dá 3); no WE 2002, desligar a prorrogação apaga o gol de
+ouro. No WE 2002 os IDs dos times 6 bytes depois (0x80072B36/37) vão a FF no
+fim da partida, mas as opções ficam: numa partida até o fim seguida de
+revanche (sem passar pela tela de ajustes) o byte seguiu em 7. No replay da
+Copa 9152-1794954103 (ProfOneTwo x UelberLWS, ISO oficial da Copa, 379
+janelas iguais às dos jogadores) eles desligaram as três no menu (0x8010D460..68
+de 1 para 0) e o byte ficou em 0 nos dois jogos - o 2º pela revanche.
 
 Estatísticas, cartões e contusões do WE 2002 (2026-11-11): a tela RESULT do
 replay de teste no PW26 (232-1794366234, Brasil 0 x 5 Argentina, com 2

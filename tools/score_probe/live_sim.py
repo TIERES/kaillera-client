@@ -74,6 +74,10 @@ ENGINES = {
         # do elenco (1 amarelo, 2 o 2º amarelo - expulso -, 4 vermelho direto); e os
         # contundidos: registros {índice, time, 0, 0}, FF = o fim da lista.
         "stats": 0x756F2, "cards": (0x75568, 0x7557F), "injuries": 0x73968,
+        # As opções da tela de ajustes (T.EXTRA / G.OURO / PN em 0x8010D460/64/68, palavras,
+        # até a partida carregar), copiadas aqui nos bits dos outros motores; os IDs dos
+        # times 6 bytes depois (conferido em todas as combinações do menu, 2026-11-17).
+        "settings": 0x72B30,
     }),
     "SLPM_862.91": dict(BASE, **{  # Winning Eleven 4 (Traducida)
         "label": "WE4", "sig": ((0x17034, "60000924200008241e00072421282701"), (0x1D03C, "0100843400200524002006240780013c")),
@@ -162,7 +166,7 @@ ENGINES = {
 SAMPLE_FRAMES = 30       # lê a RAM a cada meio segundo
 PEN_FRAMES = 90          # gol logo depois do pênalti (WE2002: a cobrança vale "2" até o gol; WE3: só até o chute)
 SHOOTOUT_IDLE = 1200     # disputa de pênaltis decidida, parada no valor de um erro: acabou
-DRAW_FRAMES = 1500       # empate apitado: sem prorrogação/pênaltis em 25 s, terminou empatado
+DRAW_FRAMES = 1500       # motor sem as opções na RAM: empate apitado sem prorrogação/pênaltis em 25 s = empate
 GRACE_FRAMES = 300       # 5 s depois do apito inicial antes de mandar (sair antes não conta)
 LEFT_FRAMES = 60         # WE4: a bola parada sem o juiz encerrar o tempo = saíram pela pausa
 STATE_OVER = 10
@@ -566,9 +570,10 @@ class MatchWatch:
             if self.active and st["period"] in (2, 3) and st["clock"] >= prev["clock"] + MIN_KICKOFF_CLOCK:
                 self.half, self.extra = st["clock"], True  # (e o minuto dos cartões: minute())
         score = [mem[m["score"]], mem[m["score"] + 1]]
-        # WE2002: o juiz encerrou o tempo. 2º tempo / prorrogação com vencedor, gol de
-        # ouro (relógio da prorrogação andando) ou disputa decidida = fim; empate: a
-        # prorrogação ou os pênaltis vêm a seguir, ou em DRAW_FRAMES terminou empatado.
+        # O juiz encerrou o tempo. 2º tempo / prorrogação com vencedor, gol de ouro
+        # (relógio da prorrogação andando) ou disputa decidida = fim; empate: as opções
+        # dizem se a prorrogação ou os pênaltis vêm a seguir - nenhum = fim empatado já
+        # no apito (sem as opções na RAM: em DRAW_FRAMES sem nada, terminou empatado).
         # Todos os motores também mostram o estado entre os tempos com o próximo período já
         # marcado (relógio em 0, ou já armado por alguns frames - no WE2002 por 1-2 frames: uma
         # amostra ali era um falso fim no intervalo): fim de tempo tem o relógio andado até 0
@@ -578,13 +583,13 @@ class MatchWatch:
             self.run_phase = (ph or 0) + 1
         sets = st["settings"] or 0
         time_up = ph in (1, 3) and st["clock"] == 0 and getattr(self, "run_phase", 0) == ph + 1
-        # Gol de ouro no WE2002 (sem as opções na RAM): em qualquer tempo da prorrogação.
+        # Gol de ouro (sem as opções na RAM: em qualquer tempo da prorrogação).
         golden = ph in (2, 3) and 0 < st["clock"] < self.half and (not m["settings"] or bool(sets & SET_GOLDEN))
         if self.active and m["state"] and not final and not final_before and st["state"] == STATE_OVER:
             if ph == 4:
                 final = final or st["pens"][0] != st["pens"][1]
             else:
-                # Empate: o WE3 sabe pelas opções o que vem.
+                # Empate: as opções dizem o que vem.
                 if time_up or golden:
                     if score[0] != score[1]:
                         final = True
@@ -625,7 +630,8 @@ class MatchWatch:
                 self.active = False
         self.decided = st["phase"] is not None and (
             (st["phase"] == 4 and st["pens"][0] != st["pens"][1])
-            or (st["phase"] in (2, 3) and self.gg_clock > 1 and score[0] != score[1])
+            or (st["phase"] in (2, 3) and self.gg_clock > 1 and (not m["settings"] or bool(sets & SET_GOLDEN))
+                and score[0] != score[1])
             or (st["state"] == STATE_OVER and (st["phase"] == 4 or time_up or golden)))
         self.prev_phase, self.prev_score = st["phase"] or 0, score
         # WE2002: a disputa acaba quando o estado dela (9 nas cobranças, 11/13 por
