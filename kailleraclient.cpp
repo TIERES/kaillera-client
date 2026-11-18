@@ -830,6 +830,11 @@ extern "C" {
 		if (headlessWatch) {
 			if (!GetEnvironmentVariableA("WECAMP_WATCH_ROOM", roomName, sizeof(roomName)))
 				strcpy(roomName, "WE Camp");
+			// No server connection here, and Kaillera mode's MPV returns -1
+			// without one (before its own player_is_watching() check), which
+			// ended the game on its first frame. Play through the Playback
+			// module instead: active_mod.MPV/EndGame = player_MPV/player_EndGame.
+			activate_mode(2);
 			if (!player_watch_begin(sessionId, roomName))
 				KSSDFA.input = KSSDFA_END_GAME;
 		} else

@@ -352,6 +352,7 @@ int main(int argc, char **argv)
 {
     const char *core = "cores\\pcsx_rearmed_libretro.dll", *game = NULL, *krec = NULL;
     const char *opt = "config\\PCSX-ReARMed\\PCSX-ReARMed.opt", *aout = NULL;
+    const char *drc = NULL;   /* --drc disabled = interpreter, as live games on feature/online-interpretador */
     int video = 0, every = 1, last = 0, video_from = 1, report = 600, i, f, ok = 0, bad = 0, first_bad = -1;
     HMODULE lib; struct retro_game_info gi = {0}; struct retro_system_av_info av;
     uint8_t *ram; size_t ram_size, slice; uint64_t acc = 0; int win = -1;
@@ -374,11 +375,13 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--size")) sscanf(v, "%dx%d", &out_w, &out_h), i++;
         else if (!strcmp(a, "--report")) report = atoi(v), i++;
         else if (!strcmp(a, "--verbose")) verbose = 1;
+        else if (!strcmp(a, "--drc")) drc = v, i++;
         else { fprintf(stderr, "opcao desconhecida: %s\n", a); return 2; }
     }
     if (!game || !krec) {
         fprintf(stderr, "uso: krec_render --game JOGO --krec PARTIDA.krec [--core DLL] [--system DIR] [--opt ARQ]\n"
-                        "       [--video] [--every N] [--size WxH] [--video-from F] [--frames N] [--audio ARQ.s16]\n");
+                        "       [--video] [--every N] [--size WxH] [--video-from F] [--frames N] [--audio ARQ.s16]\n"
+                        "       [--drc enabled|disabled]\n");
         return 2;
     }
     _setmode(_fileno(stdout), _O_BINARY);
@@ -391,6 +394,7 @@ int main(int argc, char **argv)
 
     load_opt_file(opt);
     for (i = 0; i < (int)(sizeof FORCED / sizeof FORCED[0]); i++) opt_set(FORCED[i][0], FORCED[i][1], 1);
+    if (drc) opt_set("pcsx_rearmed_drc", drc, 1);
     if (multitap) {
         int both = numplayers > 4;
         opt_set("pcsx_rearmed_multitap", both ? "ports 1 and 2" : "port 1", 1);

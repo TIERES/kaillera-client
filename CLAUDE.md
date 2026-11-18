@@ -112,6 +112,8 @@ Branch: `feature/wecamp-broadcaster` (paired with the same branch in `retroarch-
 - This DLL was successfully built on the original development machine with VS2026/MSVC v145. Output: `x64\Release\kailleraclient.dll`.
 
 - Broadcaster builds skip the local KREC emulator-version mismatch prompt in player.cpp; standard builds retain the warning.
+- The headless path calls `activate_mode(2)` before `player_watch_begin()`. Kaillera mode's `kaillera_modify_play_values()` returns -1 when there is no server connection, which ended the game on its first frame. The Playback module (`player_MPV`/`player_EndGame`) has no such check.
+- `tools/broadcaster/` holds the worker's `retroarch.cfg`, `start-broadcast.cmd`, the test scripts and a README covering the `C:\broadcaster` layout. The stream output itself is the fork's "wecamp" record driver: frames + audio go to an external ffmpeg.exe and on to YouTube RTMP.
 
 ### Runtime contract
 
@@ -127,6 +129,17 @@ The RetroArch branch also hides its replay toolbar while `WECAMP_BROADCASTER` is
 
 ### Build and handoff status
 
-Build this DLL with `./build.bat` or the manual x64 Release MSBuild command above. The paired RetroArch branch has source changes in `kaillera/kaillera.c`, `kaillera/kaillera.h`, and `runloop.c`; its build did not complete on the original machine because MinGW GCC exited with code 1 without diagnostics, including on an unchanged `version_git.c`. Compile it on the other machine and inspect any diagnostics before runtime testing.
+Build this DLL with `./build.bat` or the manual x64 Release MSBuild command above.
+
+The paired RetroArch branch builds with MSYS2: `make OUTDIR=out -j8`.
+
+On 2026-11-18 the broadcaster box (`ssh -p 2021 tieres@tieres.wgs.dev.br`, folder `C:\broadcaster`) ran the following end to end, without a desktop session:
+- Watch Live of a finished session;
+- the wecamp driver;
+- ffmpeg writing a file.
+
+The output had correct image and game audio, at about 15% CPU.
+
+The YouTube RTMP push and the wg-camp trigger are still to do.
 
 Do not discard the existing untracked `.claude/` directory in this repository; it contains local user material.

@@ -1,0 +1,10 @@
+{
+  "server": "https://we2002.wgs.dev.br",
+  "name": "notebook",
+  "token": "COLE AQUI O TOKEN GERADO EM /admin/transmissoes",
+  "slots": 2,
+  "games_dir": "C:\\broadcaster\\games",
+  "min_free_gb": 5,
+  "sync_all": true,
+  "max_job_hours": 3
+}
