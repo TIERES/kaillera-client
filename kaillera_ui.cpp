@@ -3076,8 +3076,23 @@ static void RetryConnect_PopulateList(HWND hDlg) {
 	g_retryconnect_list.DeleteAllRows();
 	g_retryconnect_filtered_count = 0;
 
-	int total = n02_replays_fetch_list(g_retryconnect_entries, N02_REPLAYS_MAX_ENTRIES);
-	if (total == 0) {
+	// The server filters by the room's players and game before taking the
+	// newest N, so an old match between them still shows up after many other
+	// games on the server. RetryConnectEntryMatchesRoom() below still checks
+	// each entry: an older server ignores the filter.
+	char roomPlayers[512] = "";
+	int roomCount = kaillera_sdlg_LV_GULIST.RowsCount();
+	for (int i = 0; i < roomCount; i++) {
+		char name[32];
+		kaillera_sdlg_LV_GULIST.CheckRow(name, sizeof(name) - 1, 0, i);
+		name[sizeof(name) - 1] = 0;
+		if (name[0] == 0) continue;
+		if (roomPlayers[0]) strncat(roomPlayers, ",", sizeof(roomPlayers) - strlen(roomPlayers) - 1);
+		strncat(roomPlayers, name, sizeof(roomPlayers) - strlen(roomPlayers) - 1);
+	}
+
+	int total = n02_replays_fetch_list_between(g_retryconnect_entries, N02_REPLAYS_MAX_ENTRIES, roomPlayers, GAME);
+	if (total < 0) {
 		MessageBox(hDlg, "Nao foi possivel buscar a lista de replays do servidor.", "Continuar", MB_OK | MB_ICONEXCLAMATION);
 		return;
 	}
@@ -3101,7 +3116,6 @@ static void RetryConnect_PopulateList(HWND hDlg) {
 
 	if (g_retryconnect_filtered_count == 0) {
 		char players[160] = "";
-		int roomCount = kaillera_sdlg_LV_GULIST.RowsCount();
 		for (int i = 0; i < roomCount; i++) {
 			char name[32];
 			kaillera_sdlg_LV_GULIST.CheckRow(name, sizeof(name) - 1, 0, i);
