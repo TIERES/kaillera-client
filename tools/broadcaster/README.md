@@ -47,18 +47,23 @@ O `agent\agent.ps1` roda como tarefa agendada (SYSTEM, na inicialização). A ca
    - liga ao nome de arquivo da sala com um hard link.
 2. **Cria a live no YouTube** com a API v3:
    - título e descrição vêm do site;
+   - a miniatura é a `midia\miniatura.jpg`;
    - é ligada a um stream próprio deste broadcaster, um por live simultânea,
      guardados em `agent\state\youtube-streams.json` (as chaves não saem da máquina).
-3. **Abre o `start-broadcast.cmd`** com:
+3. **Põe no ar o vídeo de espera** (`midia\aguarde.mp4`, em loop) nesse stream.
+4. **Abre o `start-broadcast.cmd`** com:
    - `WECAMP_BROADCAST_FROM_FRAME`: avança rápido, sem transmitir, até 10 s antes do pontapé;
-   - `WECAMP_CONTROL_FILE`: o arquivo de controle da parada.
+   - `WECAMP_CONTROL_FILE`: o arquivo de controle da parada;
+   - `WECAMP_FFMPEG`: o `ffmpeg-jogo.cmd`, que tira o vídeo de espera do ar logo
+     antes de o jogo entrar (veja **Vídeos e miniatura**).
 
 **Para parar:**
 
-- O site manda o quadro final (fim da partida + 20 s), e o agente o escreve no
-  arquivo de controle.
+- O site manda o quadro final (fim da partida + 10 s) e o vídeo de encerramento,
+  e o agente escreve o quadro no arquivo de controle.
 - O RetroArch encerra a transmissão nesse quadro e sai.
-- O agente encerra a live no YouTube e informa ao site.
+- O agente põe no ar o vídeo de encerramento, espera 15 s depois dele, encerra a
+  live no YouTube e informa ao site.
 
 **Reprise:** num card **Encerrado**, o admin também pode clicar em **Transmitir**.
 
@@ -88,6 +93,43 @@ já com a versão nova.
 - `agent.ps1 -Check`: testa o site, o YouTube e as ISOs.
 - `logs\agent.log`: o log do agente.
 
+## Vídeos e miniatura (`midia\`)
+
+| Arquivo | Quando vai ao ar |
+|---|---|
+| `miniatura.jpg` (ou `.png`) | miniatura da live: aparece antes de ela começar, na lista do canal e nos links compartilhados |
+| `aguarde.mp4` | em loop, desde a criação da live até o jogo entrar (o avanço rápido até o pontapé) |
+| `fim.mp4` | depois do jogo, quando a partida terminou no apito final |
+| `interrompida.mp4` | depois do jogo, em qualquer outro fim: alguém saiu antes do apito, o Stream ao vivo acabou antes (o anfitrião saiu), a transmissão foi cancelada ou o RetroArch falhou |
+
+- **Quem decide entre `fim` e `interrompida`:** o site, junto com a parada
+  (`ending`). Sem essa informação, vale `fim` só quando o RetroArch chegou ao
+  quadro de parada (ou a reprise chegou ao fim do replay).
+- **Formato:** qualquer vídeo serve. O agente converte cada um uma vez para
+  `midia\cache\<nome>.flv`, no mesmo formato do jogo (640x480, 30 fps, H.264 com
+  GOP de 2 s, AAC 44,1 kHz), e envia com `-c copy`. Trocou o vídeo, mesmo com
+  data mais antiga: ele converte de novo. Os de encerramento ganham 5 s do último
+  quadro, para o fim da live não cortá-los.
+- **Troca sem dois envios ao mesmo tempo:** cada chave de stream do YouTube
+  aceita um envio por vez.
+  - O agente grava o PID do ffmpeg do vídeo de espera em `run\job-<id>.intro`.
+  - O fork abre o `ffmpeg-jogo.cmd` no lugar do ffmpeg (`WECAMP_FFMPEG`). O
+    script para esse PID (só se for um ffmpeg, com `Stop-Process`), apaga o
+    arquivo e roda o ffmpeg de verdade (`WECAMP_FFMPEG_REAL`) com os mesmos
+    argumentos. Se o ffmpeg do jogo reiniciar, o arquivo já não existe e nada
+    mais é parado.
+  - O fork não muda nada para isso.
+- **O vídeo de encerramento entra logo:** entre uma consulta e outra ao site, o
+  agente confere a cada 250 ms se o RetroArch saiu.
+- **Ajustes no `config.json`:**
+  - `media_dir` (padrão `midia`);
+  - `intro_max_minutes` (30): o vídeo de espera para sozinho depois disso, caso
+    o agente morra;
+  - `end_delay_seconds` (15);
+  - `ffmpeg` (o do PATH).
+
+Para trocar um vídeo, substitua o arquivo em `midia\` com o mesmo nome.
+
 ## Pasta na máquina (`C:\broadcaster`)
 
 | Arquivo | Origem |
@@ -95,7 +137,8 @@ já com a versão nova.
 | `retroarch.exe` | `retroarch-k3-ffw`: `make OUTDIR=out -j8`, depois `out\retroarch.exe` |
 | `libwinpthread-1.dll`, `libstdc++-6.dll`, `libgcc_s_seh-1.dll` | `C:\msys64\mingw64\bin` (os do mesmo toolchain do build) |
 | `kailleraclient.dll` | este repositório: `build.bat`, depois `x64\Release\kailleraclient.dll` (define `WECAMP_BROADCASTER`) |
-| `retroarch.cfg`, `start-broadcast.cmd` | esta pasta |
+| `retroarch.cfg`, `start-broadcast.cmd`, `ffmpeg-jogo.cmd` | esta pasta |
+| `midia\` | a miniatura e os três vídeos (veja **Vídeos e miniatura**); `midia\cache\` é do agente |
 | `cores\pcsx_rearmed_libretro.dll`, `info\pcsx_rearmed_libretro.info` | o pacote do RetroArch TIERES |
 | `system\SCPH-1001.BIN` | BIOS |
 | `config\PCSX-ReARMed\PCSX-ReARMed.opt` | opções do core. O fork força as de sincronia. |
@@ -129,8 +172,15 @@ A chave do YouTube não aparece no log do RetroArch, porque o fork mostra só
   arquivo, mede a CPU e mostra os logs e o `ffprobe`.
 - `test-full-session.ps1`: roda a sessão inteira e confere se o RetroArch sai
   sozinho no fim.
+- `test-videos.ps1`: o vídeo de espera, o jogo e o de encerramento, sem o
+  YouTube. Um `ffmpeg -listen` local faz o papel do YouTube (cada envio vira um
+  `out\teste-videos\NN.flv`), e o código do próprio agente roda um trabalho. No
+  fim, mostra quando cada envio entrou e saiu. Use `-Agent` para testar um
+  `agent.ps1` fora de `agent\`, sem reiniciar o agente que está rodando.
 
-Os dois aceitam `-Session`, `-Game` e `-Out`. Sessões já encerradas também
+Os dois primeiros aceitam `-Session`, `-Game` e `-Out`. O `test-videos.ps1`
+aceita `-Session`, `-Game`, `-StartFrame`, `-StopFrame` e `-Ending`
+(`fim`, `interrompida` ou `auto`, para o caso sem a informação do site). Sessões já encerradas também
 servem, porque o wg-camp entrega o stream inteiro e o fork roda a 1×.
 
 Resultados em 2026-11-18, no notebook i5 M 460, com a sessão

@@ -114,6 +114,12 @@ Branch: `feature/wecamp-broadcaster` (paired with the same branch in `retroarch-
 - Broadcaster builds skip the local KREC emulator-version mismatch prompt in player.cpp; standard builds retain the warning.
 - The headless path calls `activate_mode(2)` before `player_watch_begin()`. Kaillera mode's `kaillera_modify_play_values()` returns -1 when there is no server connection, which ended the game on its first frame. The Playback module (`player_MPV`/`player_EndGame`) has no such check.
 - `tools/broadcaster/` holds the worker's `retroarch.cfg`, `start-broadcast.cmd`, the test scripts and a README covering the `C:\broadcaster` layout. The stream output itself is the fork's "wecamp" record driver: frames + audio go to an external ffmpeg.exe and on to YouTube RTMP.
+- The agent (`agent\agent.ps1`) also handles the live's thumbnail and the videos around the game, with no fork change. The files live in `C:\broadcaster\midia\`: `miniatura.jpg`, `aguarde.mp4`, `fim.mp4` and `interrompida.mp4`.
+  - The agent re-encodes each video once into `midia\cache\*.flv` and sends it on the same YouTube stream key.
+  - The fork runs `ffmpeg-jogo.cmd` in place of ffmpeg (`WECAMP_FFMPEG`). It stops the "aguarde" ffmpeg (PID in `run\job-<id>.intro`) right before the game connects, because a stream key takes one sender at a time.
+  - The end video follows RetroArch's exit, then the live is completed 15 s later.
+  - wg-camp's poll sends `ending` ("fim" / "interrompida"). Without it, the agent shows "fim" only for "reached stop frame" or a replay.
+  - `test-videos.ps1` runs the agent's own job code against a local `ffmpeg -listen` receiver. Don't use taskkill/tasklist `/FI` there: over SSH they fail with "Acesso negado" (WMI).
 
 ### Runtime contract
 
@@ -140,6 +146,6 @@ On 2026-11-18 the broadcaster box (`ssh -p 2021 tieres@tieres.wgs.dev.br`, folde
 
 The output had correct image and game audio, at about 15% CPU.
 
-The YouTube RTMP push and the wg-camp trigger are still to do.
+The YouTube lives and the wg-camp trigger (the agent) came later on 2026-11-18. The thumbnail and the videos around the game were added on 2026-11-19.
 
 Do not discard the existing untracked `.claude/` directory in this repository; it contains local user material.
