@@ -38,7 +38,7 @@ BASE = {"scratch": False, "goal_size": 4, "roster_team": 0, "kick_on_run": False
         "phase": 0, "pens": 0, "kicker": 0, "touch": 0, "setpiece": 0, "state": 0,
         "pen_value": 2, "pen_state": None, "in_match": 0, "demo": 0, "demo_value": 0, "settings": 0,
         "stats": 0, "cards": None, "injuries": 0, "numbers": 0, "numbers_team": 0,
-        "fixed_names": None}
+        "fixed_names": None, "player_ids": 0}
 SET_EXTRA, SET_GOLDEN, SET_PENS = 1, 2, 4  # as opções da partida (bit 0 prorrogação, 1 gol de ouro, 2 pênaltis)
 # Os nomes curtos dos times do J.League WE 2001 (a tabela da tela de formação, 0x80159F50), por ID.
 JWE2001_NAMES = (
@@ -72,8 +72,14 @@ ENGINES = {
         # faltas, vermelhos (o 2º amarelo não conta), amarelos, escanteios (depois faltas
         # cobradas e pênaltis, que não vão); o cartão de cada jogador, um byte por índice
         # do elenco (1 amarelo, 2 o 2º amarelo - expulso -, 4 vermelho direto); e os
-        # contundidos: registros {índice, time, 0, 0}, FF = o fim da lista.
+        # contundidos: registros {ID do jogador (2 bytes), 0, 0}, FF = o fim da lista.
         "stats": 0x756F2, "cards": (0x75568, 0x7557F), "injuries": 0x73968,
+        # O ID de cada jogador do elenco, u16 {índice nos dados do jogo, time dos dados}:
+        # os 22 do LOCAL aqui, os 22 da VISITA logo depois. Numa seleção é {índice, ID do
+        # time}; um time do Master League pega jogadores dos dados de outros times (no
+        # Master Liga 12, WARLEY = time 94: Koller = {8, 57}). Conferido no PW26, na Euro
+        # 2004 e em duas partidas do Master Liga 12 com contusão.
+        "player_ids": 0x649F8,
         # As opções da tela de ajustes (T.EXTRA / G.OURO / PN em 0x8010D460/64/68, palavras,
         # até a partida carregar), copiadas aqui nos bits dos outros motores; os IDs dos
         # times 6 bytes depois (conferido em todas as combinações do menu, 2026-11-17).
@@ -176,6 +182,7 @@ OVER_FRAMES = 600        # WE3: 10 s sem tempo nenhum no 2º tempo = fim
 NO_PADS = [0, 1, 0xFF, 0xFF]
 EVENTS = 24              # cartões / contusões guardados por lado
 INJURY_RECORDS = 10      # da lista de contundidos do WE2002: os que ele limpa ao carregar a partida
+PLAYER_IDS = 22          # m["player_ids"]: IDs por lado
 CARD_YELLOW, CARD_SECOND, CARD_RED = 1, 2, 4
 CARD_KINDS = ("y", "y2", "r")
 
@@ -215,6 +222,21 @@ def b(ram, sc, addr):
 def pointer(ram, addr):
     (ptr,) = struct.unpack_from("<I", ram, addr)
     return ptr & 0x1FFFFF if 0x80000000 <= ptr < 0x80000000 + len(ram) else None
+
+
+def injured(ram, m, rec, teams):
+    """O jogador de um registro de contusão, (lado, índice no elenco), como
+    ksync_live_injured(): os 2 primeiros bytes são o ID do jogador, procurado nos IDs da
+    partida (m["player_ids"]) - sem IDs, ou nenhum igual, {índice no elenco, ID do time}.
+    None = nenhum jogador da partida."""
+    pid = rec[0] | rec[1] << 8
+    for side in (0, 1) if m["player_ids"] else ():
+        for i in range(min(PLAYER_IDS, m["roster_len"])):
+            if u16(ram, m["player_ids"] + 2 * (side * PLAYER_IDS + i)) == pid:
+                return side, i  # o mesmo time dos dois lados: LOCAL
+    if rec[0] < m["roster_len"] and rec[1] in teams:
+        return (0 if rec[1] == teams[0] else 1), rec[0]
+    return None
 
 
 def player_name(ram, m, team, side, idx):
@@ -437,8 +459,8 @@ class MatchWatch:
 
     def injury_events(self, ram, m, st, minute, quiet=False):
         """Os contundidos: a lista só cresce na partida (cada registro fica até o fim; o
-        jogo a limpa ao carregar a partida e depois do fim). O registro é {índice no
-        elenco, time, 0, 0} na cruz amarela - a vermelha (o jogador sai de campo) ainda
+        jogo a limpa ao carregar a partida e depois do fim). O registro é {ID do jogador
+        (2 bytes), 0, 0} na cruz amarela - a vermelha (o jogador sai de campo) ainda
         não foi vista: todas vão como cruz amarela por ora."""
         if not m["injuries"]:
             return
@@ -448,10 +470,11 @@ class MatchWatch:
             rec = ram[m["injuries"] + 4 * i:m["injuries"] + 4 + 4 * i]
             if rec[0] == 0xFF:
                 break  # o fim da lista
-            if not quiet and rec[0] < m["roster_len"] and rec[1] in teams:
-                side = 0 if rec[1] == teams[0] else 1  # o mesmo time dos dois lados: LOCAL
+            who = None if quiet else injured(ram, m, rec, teams)
+            if who:
+                side, idx = who
                 if len(self.injuries[side]) < EVENTS:
-                    self.injuries[side].append([player_name(ram, m, self.team_of(m, st, side), side, rec[0]),
+                    self.injuries[side].append([player_name(ram, m, self.team_of(m, st, side), side, idx),
                                                 minute, "y"])
             i += 1
         self.injury_seen = i
