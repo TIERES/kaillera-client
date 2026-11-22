@@ -62,7 +62,7 @@ memória que o pcsx_rearmed publica, e o krec_harness também
 | Pênalti sendo cobrado (até o chute; o gol vem ~25-30 frames depois) | 0x8007B499 = 2 | estado 2 e 0x80075313 = 3 | estado 2 e 0x1F80029B = 3 |
 | Opções da partida: bit 0 prorrogação, bit 1 gol de ouro, bit 2 pênaltis (copiadas da tela de ajustes quando a partida carrega; ficam numa revanche) | 0x80072B30 (na tela de ajustes: 0x8010D460 / 64 / 68, palavras) | 0x80072FD2 | 0x8010A307 |
 | Dentro de uma partida (da formação até sair dela; 0 = saíram) | — | — | 0x1F800198 |
-| Menu de pausa aberto (1; o Start que pula um replay e o intervalo não o abrem) / o controle que o abriu, 0 = controle 1 ("PAUSE JOYPAD 1") - a partida que sai logo depois saiu pelo EXIT MATCH dele | 0x80061CD0 / 0x80075501 | não procurado | não procurado |
+| Menu de pausa: aberto (1; o Start que pula um replay e o intervalo não o abrem) / o controle que o abriu, 0 = controle 1 ("PAUSE JOYPAD 1"; só ele mexe no menu) / o item do cursor, 0 = o 1º - o EXIT MATCH é o 6. O menu que fecha com o cursor no EXIT MATCH é o "Sim" dele: o Start e o X o fecham com o cursor já de volta no 1º item (2 quadros antes; no WE3 o cursor fica onde estava, e vale a saída da partida logo depois) | 0x80061CD0 / 0x80075501 / 0x80075500 | 0x8005291C / 0x80075099 / 0x80075098 | 0x800E6B78 / 0x800FF6E0 / 0x800E7D8A (na RAM) |
 | DEMO da tela de título (CPU x CPU) | controles FF | controles FF | 0x8010A2C2 = 1 |
 | Números da tela RESULT, pares LOCAL / VISITA: chutes, impedimentos, faltas, vermelhos (o 2º amarelo não conta), amarelos, escanteios, faltas cobradas, pênaltis | a partir de 0x800756F2 (até 0x80075701; o placar vem logo depois) | a partir de 0x80075283 (até 0x80075292; o placar vem logo depois) | a partir de 0x801085B0 (na RAM; o placar fica no scratchpad) |
 | Cartão de cada jogador, um byte por índice do elenco: 1 amarelo, 2 o 2º amarelo (expulso), 4 vermelho direto; zera depois do fim da partida | LOCAL 0x80075568 / VISITA 0x8007557F (+ índice) | LOCAL 0x800750FF / VISITA 0x80075115 (+ índice), os mesmos valores | LOCAL 0x80107F8D / VISITA 0x80107FA3 (+ índice no elenco do time), os mesmos valores |
@@ -196,6 +196,7 @@ conferido na tela e na tela RESULT.
 | Cartão de cada jogador (1, 2, 4) | LOCAL 0x80070FA0 / VISITA 0x80070FBA |
 | Chutes de cada jogador | LOCAL 0x80070FD4 / VISITA 0x80070FEE |
 | Contundidos: registros `índice, ID do time, ?, 0`, `FF FF` = fim; 10 registros | 0x800701E6 |
+| Menu de pausa: aberto / o controle que o abriu / o item do cursor (EXIT MATCH = 6), como no WE 2002. Depois do EXIT MATCH nada da partida muda (o relógio até continua andando): o "Sim" é o único sinal da saída | 0x8005E451 / 0x80070F39 / 0x80070F38 |
 
 No 3º byte de um contundido, o primeiro (Nakata K.) passou a 1 quando o
 segundo se machucou; não se sabe o que é (o fork o ignora, como no WE 2002).
@@ -268,6 +269,7 @@ dois replays do Walter (TIERES_ART x TIERES, sem M. Card, "WE2000 - U-23
 | Cartão de cada jogador (1, 2, 4) | LOCAL 0x800750B0 / VISITA 0x800750C6 |
 | Chutes de cada jogador | LOCAL 0x800750DC / VISITA 0x800750F2 |
 | Contundidos: registros `índice, ID do time, 0, 0`, `FF FF` = fim; 10 registros (o WE 2002 menos 0x102) | 0x80073866 |
+| Menu de pausa: aberto / o controle que o abriu / o item do cursor (SAIR = 6), como no WE 2002 | 0x80061BB0 / 0x80075049 / 0x80075048 |
 
 As opções da tela de ajustes ficam em 0x80112D88 / 8C / 90 (palavras, até a
 partida carregar). Trocá-las no harness logo antes da carga (frame 4250 do
