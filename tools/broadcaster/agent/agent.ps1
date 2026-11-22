@@ -35,7 +35,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$AgentVersion = 'agent-2026.11.19'
+$AgentVersion = 'agent-2026.11.22'
 $AgentDir = $PSScriptRoot
 $Root = Split-Path $AgentDir -Parent
 $StateDir = Join-Path $AgentDir 'state'
@@ -566,6 +566,11 @@ function Step-Job($job) {
                 }
             }
             $env:WECAMP_BROADCAST_FROM_FRAME = [string]$job.info.start_frame
+            # The card's savestate from the host's PC (site 2026-11-22): RetroArch loads it and
+            # streams from there at once - no fast-forward (0 = none: fast-forward as before).
+            $checkpoint = 0
+            if ($job.info.checkpoint) { $checkpoint = [int]$job.info.checkpoint }
+            $env:WECAMP_BROADCAST_CHECKPOINT = [string]$checkpoint
             $env:WECAMP_CONTROL_FILE = $job.control
             $env:WECAMP_LOG_NAME = "job-$($job.id)"
             if ($useWrapper) {
@@ -578,11 +583,11 @@ function Step-Job($job) {
                 $job.proc = Start-Process -FilePath 'cmd.exe' -WorkingDirectory $Root -WindowStyle Hidden -PassThru `
                     -ArgumentList '/c', 'start-broadcast.cmd', $job.info.session_id, "`"$rel`"", $job.rtmp
             } finally {
-                Remove-Item Env:WECAMP_BROADCAST_FROM_FRAME, Env:WECAMP_CONTROL_FILE, Env:WECAMP_LOG_NAME, Env:WECAMP_FFMPEG,
+                Remove-Item Env:WECAMP_BROADCAST_FROM_FRAME, Env:WECAMP_BROADCAST_CHECKPOINT, Env:WECAMP_CONTROL_FILE, Env:WECAMP_LOG_NAME, Env:WECAMP_FFMPEG,
                     Env:WECAMP_FFMPEG_REAL, Env:WECAMP_INTRO_PIDFILE -ErrorAction SilentlyContinue
             }
             $job.state = 'running'; $job.started = Get-Date
-            Write-Log "Trabalho $($job.id): broadcaster iniciado (a partir do quadro $($job.info.start_frame))."
+            Write-Log "Trabalho $($job.id): broadcaster iniciado (a partir do quadro $($job.info.start_frame)$(if ($checkpoint) { ', pelo state save do host' }))."
         } catch {
             $job.state = 'failed'; $job.error = $_.Exception.Message
             Write-Log "Trabalho $($job.id) falhou ao preparar: $($job.error)"

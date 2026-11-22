@@ -52,7 +52,11 @@ O `agent\agent.ps1` roda como tarefa agendada (SYSTEM, na inicialização). A ca
      guardados em `agent\state\youtube-streams.json` (as chaves não saem da máquina).
 3. **Põe no ar o vídeo de espera** (`midia\aguarde.mp4`, em loop) nesse stream.
 4. **Abre o `start-broadcast.cmd`** com:
-   - `WECAMP_BROADCAST_FROM_FRAME`: avança rápido, sem transmitir, até 10 s antes do pontapé;
+   - `WECAMP_BROADCAST_CHECKPOINT`: o card do Ao vivo (o quadro do começo dele - a tela de
+     configuração da partida, o "Repeat" ou o pontapé) cujo state save o PC do host mandou ao
+     site: o RetroArch o carrega e transmite dali na hora, sem avançar a sessão (0 = sem ele);
+   - `WECAMP_BROADCAST_FROM_FRAME`: sem o state save, avança rápido, sem transmitir, até o começo
+     do card (fork antigo: 10 s antes do pontapé);
    - `WECAMP_CONTROL_FILE`: o arquivo de controle da parada;
    - `WECAMP_FFMPEG`: o `ffmpeg-jogo.cmd`, que tira o vídeo de espera do ar logo
      antes de o jogo entrar (veja **Vídeos e miniatura**).
