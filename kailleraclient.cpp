@@ -1487,7 +1487,11 @@ extern "C" {
 		char nick[32], room[256], server[256];
 		active_mod.GetOwnerName(nick, sizeof(nick));
 		McRoomInfo(room, sizeof(room), server, sizeof(server));
-		n02_live_submit(stateJson, players, nick, room, strstr(stateJson, "\"final\":1") != NULL);
+		// The match's last state is tried like a final and never replaced:
+		// its end, or "quit" - a player left it from the game's pause menu
+		// (EXIT MATCH; the fork says whose pad opened it).
+		n02_live_submit(stateJson, players, nick, room,
+			strstr(stateJson, "\"final\":1") != NULL || strstr(stateJson, "\"quit\":") != NULL);
 	}
 
 	/* After kailleraMemcardPrepare() returned 1: the slots the match starts
