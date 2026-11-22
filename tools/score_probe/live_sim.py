@@ -38,7 +38,7 @@ BASE = {"scratch": False, "goal_size": 4, "roster_team": 0, "kick_on_run": False
         "phase": 0, "pens": 0, "kicker": 0, "touch": 0, "setpiece": 0, "state": 0,
         "pen_value": 2, "pen_state": None, "in_match": 0, "demo": 0, "demo_value": 0, "settings": 0,
         "stats": 0, "cards": None, "injuries": 0, "numbers": 0, "numbers_team": 0,
-        "fixed_names": None, "player_ids": 0}
+        "fixed_names": None, "player_ids": 0, "pk_kicker": 0, "pk_over": 0, "pk_kicking": 0, "pk_over_value": 0}
 SET_EXTRA, SET_GOLDEN, SET_PENS = 1, 2, 4  # as opções da partida (bit 0 prorrogação, 1 gol de ouro, 2 pênaltis)
 # Os nomes curtos dos times do J.League WE 2001 (a tabela da tela de formação, 0x80159F50), por ID.
 JWE2001_NAMES = (
@@ -68,6 +68,12 @@ ENGINES = {
         # Estado da partida: 1 bola rolando, 7 gol, 11 comemoração, 0 saída de
         # bola, 10 o juiz encerrou o tempo (intervalo, fim, gol de ouro, pênaltis).
         "state": 0x75782,
+        # A disputa de pênaltis cobrança a cobrança (o fork: ksync_pk_maps): o batedor da vez
+        # (u16, ID do time dos dados x roster_len + índice no elenco - o lado sai dos
+        # player_ids) e o subestado da partida (o byte depois do "state"): 3 na cobrança, 4 por
+        # um instante quando ela termina (o gol já no placar dos pênaltis) - e de novo na tela
+        # do resultado, com o estado já 10.
+        "pk_kicker": 0x75520, "pk_over": 0x75783, "pk_kicking": 3, "pk_over_value": 4,
         # A tela RESULT do fim: pares LOCAL/VISITA a partir daqui - chutes, impedimentos,
         # faltas, vermelhos (o 2º amarelo não conta), amarelos, escanteios (depois faltas
         # cobradas e pênaltis, que não vão); o cartão de cada jogador, um byte por índice
@@ -183,6 +189,7 @@ NO_PADS = [0, 1, 0xFF, 0xFF]
 EVENTS = 24              # cartões / contusões guardados por lado
 INJURY_RECORDS = 10      # da lista de contundidos do WE2002: os que ele limpa ao carregar a partida
 PLAYER_IDS = 22          # m["player_ids"]: IDs por lado
+PK_MAX = 30              # cobranças guardadas por lado na disputa de pênaltis
 CARD_YELLOW, CARD_SECOND, CARD_RED = 1, 2, 4
 CARD_KINDS = ("y", "y2", "r")
 
@@ -345,6 +352,7 @@ class MatchWatch:
         self.decided = False                       # a amostra anterior: disputa decidida ou gol de ouro
         self.prev_phase, self.prev_score = 0, [0, 0]
         self.over_frame = 0                        # estado 10 com empate no 2º tempo / prorrogação
+        self.pk_reset()
 
     def goal_watch(self, frame, ram, scratch=b""):
         """A cada frame (como o fork): quem tocou por último e se há um
@@ -372,6 +380,74 @@ class MatchWatch:
                 self.goal_og[side][i], self.goal_pen[side][i] = 0, False
             self.goal_count[side] = n
         self.watching = True
+
+    def pk_reset(self):
+        """A disputa de pênaltis cobrança a cobrança (pk_watch): por lado, 1 gol / 0 perdido;
+        vai ao WE Camp enquanto pk_ok (vista desde o começo, batendo com o placar)."""
+        self.pk = [[], []]
+        self.pk_pens = [0, 0]      # o placar dos pênaltis no fim da última cobrança
+        self.pk_kicker = 0
+        self.pk_prev_over = 0
+        self.pk_last_side = 0
+        self.pk_started = self.pk_armed = self.pk_ok = False
+
+    def pk_side(self, ram, m, kicker, pens):
+        """O lado da cobrança (ksync_live_pk_side): o ID do batedor nos IDs da partida - ou,
+        o mesmo time dos dois lados, o outro lado da última; a primeira, o lado cujo placar
+        subiu ou o LOCAL."""
+        found = 0
+        if m["player_ids"] and m["roster_len"]:
+            pid = (kicker % m["roster_len"]) | (kicker // m["roster_len"]) << 8
+            for side in (0, 1):
+                for i in range(min(PLAYER_IDS, m["roster_len"])):
+                    if u16(ram, m["player_ids"] + 2 * (side * PLAYER_IDS + i)) == pid:
+                        found |= 1 << side
+        if found in (1, 2):
+            return found - 1
+        if self.pk[0] or self.pk[1]:
+            return 1 - self.pk_last_side
+        return 1 if pens[1] > self.pk_pens[1] and pens[0] == self.pk_pens[0] else 0
+
+    def pk_kick(self, pens, side):
+        """Uma cobrança de `side` terminou: gol se o placar dele subiu desde a última."""
+        self.pk_armed, self.pk_last_side = False, side
+        if len(self.pk[side]) >= PK_MAX:
+            self.pk_ok = False
+            return
+        self.pk[side].append(1 if pens[side] > self.pk_pens[side] else 0)
+        self.pk_pens = list(pens)
+        if any(sum(self.pk[s]) != pens[s] for s in (0, 1)) or abs(len(self.pk[0]) - len(self.pk[1])) > 1:
+            self.pk_ok = False
+
+    def pk_watch(self, ram):
+        """A cada frame, na disputa (como ksync_live_pk_watch): o fim de cada cobrança - o
+        da última dura 1-2 frames antes da tela do resultado."""
+        serial, m = engine_of(ram, b"") if self.active else (None, None)
+        if not m or not m["pk_kicker"] or not m["phase"] or not m["pens"] or not m["state"] or ram[m["phase"]] != 4:
+            return
+        pens = [ram[m["pens"]], ram[m["pens"] + 1]]
+        kicker, over = u16(ram, m["pk_kicker"]), ram[m["pk_over"]]
+        if not self.pk_started:
+            self.pk_started = True
+            self.pk_ok = pens == [0, 0] and over != m["pk_over_value"]
+            self.pk_kicker, self.pk_prev_over = kicker, over
+            return
+        if kicker != self.pk_kicker or (over == m["pk_kicking"] and self.pk_prev_over != m["pk_kicking"]
+                                        and not self.pk[0] and not self.pk[1]):
+            self.pk_armed = True
+        ended = over == m["pk_over_value"] and self.pk_prev_over != m["pk_over_value"]
+        self.pk_kicker, self.pk_prev_over = kicker, over
+        if ended and self.pk_armed and ram[m["state"]] != STATE_OVER:
+            self.pk_kick(pens, self.pk_side(ram, m, kicker, pens))
+
+    def pk_settle(self, ram, m):
+        """No fim: o gol da cobrança cujo fim não foi visto ainda vale (ksync_live_pk_settle)."""
+        if not m["pk_kicker"] or not self.pk_started or not self.pk_armed or not self.pk_ok:
+            return
+        pens = [ram[m["pens"]], ram[m["pens"] + 1]]
+        side = self.pk_side(ram, m, u16(ram, m["pk_kicker"]), pens)
+        if pens[side] == self.pk_pens[side] + 1 and pens[1 - side] == self.pk_pens[1 - side]:
+            self.pk_kick(pens, side)
 
     def decorate(self, st, ram, m):
         """Gol contra com o autor (do elenco do outro lado, no lugar da
@@ -402,6 +478,7 @@ class MatchWatch:
             self.active, self.armed = False, 0
             return
         self.so_seen = False  # a partida chegou aos pênaltis (o placar deles vai daí em diante)
+        self.pk_reset()
         self.run_phase = 0    # a fase + 1 em que o relógio foi visto andando por último
         self.drop_frame = 0   # WE4: a bola parou sem o apito do juiz, desde quando
         self.active, self.kickoff, self.half, self.armed, self.over_since = True, kickoff, half, 0, 0
@@ -488,6 +565,8 @@ class MatchWatch:
         pens = self.last["pens"] if self.last else None
         if pens and (shootout or getattr(self, "so_seen", False)):
             st["pens"] = list(pens)
+            if self.pk_started and self.pk_ok:  # e cobrança a cobrança (pk_watch)
+                st["pk"] = [list(self.pk[0]), list(self.pk[1])]
         st["teams"] = [dict(t) for t in st["teams"]]
         m = ENGINES[serial]
         for side, team in enumerate(st["teams"]):
@@ -699,11 +778,13 @@ class MatchWatch:
         # + um cartão / uma contusão novos (as estatísticas só vão junto).
         key = json.dumps([st["period"], st["pads"], st["teams"], st["phase"], st["pens"], st["clock"] >= self.half,
                           st["state"] == STATE_OVER, [len(x) for x in getattr(self, "cards", [[], []])],
-                          [len(x) for x in getattr(self, "injuries", [[], []])]])
+                          [len(x) for x in getattr(self, "injuries", [[], []])],
+                          [len(self.pk[0]), len(self.pk[1]), self.pk_ok]])
         if not final and key == self.sent_key and frame - self.sent_frame < HEARTBEAT_FRAMES:
             return None
         self.sent_key, self.sent_frame = key, frame
         if final:
+            self.pk_settle(ram, m)
             self.active = False
             st = dict(st, period=1, clock=0)  # o placar fica; no WE2002 o período já voltou a 0
         return self._message(serial, frame, st, final)
@@ -754,6 +835,7 @@ def main():
         core.run()
         if watch.active:
             watch.goal_watch(f, core.ram(), core.scratch())
+            watch.pk_watch(core.ram())
         if f % SAMPLE_FRAMES:
             continue
         st = watch.sample(f, core.ram(), core.scratch())
@@ -770,6 +852,8 @@ def main():
             f, SP.KH.fmt_time(f), st["period"], st["clock"], t1["name"] or t1["id"], t1["goals"], t2["goals"],
             t2["name"] or t2["id"], "  FIM" if st["final"] else "",
             [[g for g in t["scorers"] if len(g) > 3] for t in st["teams"]])
+        if st.get("pk"):
+            line += "  pk=%s" % st["pk"]
         if a.dry:
             print(line, flush=True)
             continue
