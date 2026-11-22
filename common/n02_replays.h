@@ -83,3 +83,7 @@ bool n02_replays_live_state_ready(const char* sessionId);
 // convention otherwise (malloc()'d buffer of just the savestate bytes,
 // caller frees; NULL on any failure).
 void* n02_replays_download_live_state(const char* sessionId, int* outFrameIndex, int* outByteOffset, int* outSize);
+
+// The same for a WE Camp card's start (n02_stream_upload_checkpoint()) -
+// GET /spectate/<id>/checkpoint?card=<card>; NULL while it isn't there.
+void* n02_replays_download_checkpoint(const char* sessionId, int card, int* outFrameIndex, int* outByteOffset, int* outSize);

@@ -394,6 +394,24 @@ int n02_watch_download_state(void* outBuffer, int bufferCap, int* outFrameIndex,
 	return copyLen;
 }
 
+int n02_watch_download_checkpoint(int card, void* outBuffer, int bufferCap, int* outFrameIndex, int* outByteOffset) {
+	if (g_watch_session_id[0] == 0 || card <= 0)
+		return -1;
+
+	int frameIndex = 0, byteOffset = 0, size = 0;
+	void* state = n02_replays_download_checkpoint(g_watch_session_id, card, &frameIndex, &byteOffset, &size);
+	if (state == NULL)
+		return -1;
+
+	int copyLen = min(size, bufferCap);
+	memcpy(outBuffer, state, copyLen);
+	free(state);
+
+	if (outFrameIndex) *outFrameIndex = frameIndex;
+	if (outByteOffset) *outByteOffset = byteOffset;
+	return copyLen;
+}
+
 int n02_watch_pull(char* outBuf, int outCap, bool blockIfLive) {
 	WatchEnsureLock();
 	for (;;) {

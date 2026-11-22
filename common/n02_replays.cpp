@@ -487,13 +487,26 @@ bool n02_replays_live_state_ready(const char* sessionId) {
 	return strstr(body, "\"pending\": false") != NULL || strstr(body, "\"pending\":false") != NULL;
 }
 
+static void* DownloadLiveStateAt(const char* path, int* outFrameIndex, int* outByteOffset, int* outSize);
+
 void* n02_replays_download_live_state(const char* sessionId, int* outFrameIndex, int* outByteOffset, int* outSize) {
+	char path[128];
+	_snprintf(path, sizeof(path), "/spectate/%s/state", sessionId);
+	return DownloadLiveStateAt(path, outFrameIndex, outByteOffset, outSize);
+}
+
+void* n02_replays_download_checkpoint(const char* sessionId, int card, int* outFrameIndex, int* outByteOffset, int* outSize) {
+	char path[160];
+	_snprintf(path, sizeof(path), "/spectate/%s/checkpoint?card=%d", sessionId, card);
+	return DownloadLiveStateAt(path, outFrameIndex, outByteOffset, outSize);
+}
+
+// GET of a [frame_index:int32][byte_offset:int32][state] body (the state
+// a host uploaded) - the state, malloc'ed, or NULL.
+static void* DownloadLiveStateAt(const char* path, int* outFrameIndex, int* outByteOffset, int* outSize) {
 	if (outFrameIndex) *outFrameIndex = 0;
 	if (outByteOffset) *outByteOffset = 0;
 	if (outSize) *outSize = 0;
-
-	char path[128];
-	_snprintf(path, sizeof(path), "/spectate/%s/state", sessionId);
 
 	SOCKET s = ConnectAndGet(N02_STREAM_DEFAULT_HOST, N02_STREAM_DEFAULT_PORT, path, N02_STREAM_DEFAULT_API_KEY, 5000);
 	if (s == INVALID_SOCKET) return NULL;

@@ -90,3 +90,13 @@ bool n02_stream_check_state_requested();
 // whoever downloads it - not interpreted by the server); `data`/`size` is
 // the raw retro_serialize() bytes. No-op if no session is active.
 void n02_stream_upload_state(int frameIndex, const void* data, int size);
+
+// WE Camp broadcaster: the savestate of a WE Camp card's start (the match's
+// settings screen, a Repeat or the kickoff - `card` is its frame, the card's
+// key at WE Camp), taken and paired with the stream offset exactly like
+// n02_stream_upload_state() above (same thread, same moment of the frame).
+// Uploaded in the background to /spectate/<session>/checkpoint?card=<card>,
+// kept there (not replaced by "Ir ao vivo!" states) and retried a few times -
+// the broadcaster starts the card's YouTube live from it. No-op if no session
+// is active (only the PC sending the Stream ao vivo has one).
+void n02_stream_upload_checkpoint(int card, int frameIndex, const void* data, int size);

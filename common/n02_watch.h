@@ -75,3 +75,8 @@ bool n02_watch_state_ready();
 // the byte count written (ready for core_unserialize()), or -1 on any
 // failure (including "not ready yet").
 int n02_watch_download_state(void* outBuffer, int bufferCap, int* outFrameIndex, int* outByteOffset);
+
+// The WE Camp broadcaster: the same for the savestate of a card's start
+// (`card` = its frame - n02_stream_upload_checkpoint()) in the current watch
+// session, applied the same way. -1 while the server doesn't have it.
+int n02_watch_download_checkpoint(int card, void* outBuffer, int bufferCap, int* outFrameIndex, int* outByteOffset);
