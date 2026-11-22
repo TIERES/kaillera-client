@@ -28,6 +28,15 @@ typedef struct {
 // timeout).
 int n02_replays_fetch_list(N02ReplayEntry* out, int maxEntries);
 
+// Reconectar: the newest replays (up to maxEntries) between exactly these
+// players - playersCsv is the room's nicks joined with "," - and, when game is
+// non-empty, of this exact game. The server filters before applying the limit,
+// so an old match between them still shows up after many other games on the
+// server. Returns how many were parsed, 0 when there are none, or -1 on any
+// network/HTTP failure. An older server ignores the filter and returns its
+// newest replays, so the caller should still check each entry against the room.
+int n02_replays_fetch_list_between(N02ReplayEntry* out, int maxEntries, const char* playersCsv, const char* game);
+
 // Downloads session `sessionId`'s .krec via a blocking GET against
 // /replays/<sessionId>/download, writing it straight to destPath (overwriting
 // any existing file). Returns true on success. Like n02_replays_fetch_list,
@@ -74,3 +83,7 @@ bool n02_replays_live_state_ready(const char* sessionId);
 // convention otherwise (malloc()'d buffer of just the savestate bytes,
 // caller frees; NULL on any failure).
 void* n02_replays_download_live_state(const char* sessionId, int* outFrameIndex, int* outByteOffset, int* outSize);
+
+// The same for a WE Camp card's start (n02_stream_upload_checkpoint()) -
+// GET /spectate/<id>/checkpoint?card=<card>; NULL while it isn't there.
+void* n02_replays_download_checkpoint(const char* sessionId, int card, int* outFrameIndex, int* outByteOffset, int* outSize);

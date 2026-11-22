@@ -50,7 +50,7 @@ static SOCKET ConnectAndGet(const char* host, int port, const char* path, const 
 	if (apiKey != NULL && apiKey[0] != 0)
 		_snprintf(apiKeyHeader, sizeof(apiKeyHeader), "X-Api-Key: %s\r\n", apiKey);
 
-	char header[1024];
+	char header[3072]; // the Reconectar list path carries the room's nicks and game (n02_replays_fetch_list_between)
 	int headerLen = _snprintf(header, sizeof(header),
 		"GET %s HTTP/1.1\r\n"
 		"Host: %s\r\n"
@@ -130,27 +130,24 @@ static void SplitTsvLine(char* line, N02ReplayEntry* out) {
 	out->size_bytes = atoi(fields[6]);
 }
 
-int n02_replays_fetch_list(N02ReplayEntry* out, int maxEntries) {
-	if (maxEntries > N02_REPLAYS_MAX_ENTRIES) maxEntries = N02_REPLAYS_MAX_ENTRIES;
-	if (maxEntries <= 0) return 0;
-
-	char path[64];
-	_snprintf(path, sizeof(path), "/replays/list.txt?limit=%d", maxEntries);
-
+// GETs `path` and parses its lines into out (at most maxEntries). Returns how
+// many were parsed, or -1 on any network/HTTP failure - so the caller can tell
+// "the server answered with no replays" from "couldn't reach the server".
+static int FetchListPath(const char* path, N02ReplayEntry* out, int maxEntries) {
 	SOCKET s = ConnectAndGet(N02_STREAM_DEFAULT_HOST, N02_STREAM_DEFAULT_PORT, path, N02_STREAM_DEFAULT_API_KEY, 3000);
-	if (s == INVALID_SOCKET) return 0;
+	if (s == INVALID_SOCKET) return -1;
 
 	char* body = (char*)malloc(N02_REPLAYS_LIST_RECV_CAP + 1);
 	if (body == NULL) {
 		closesocket(s);
-		return 0;
+		return -1;
 	}
 
 	int bodyLen = 0;
 	if (!ReadHttpHeaders(s, body, N02_REPLAYS_LIST_RECV_CAP, &bodyLen)) {
 		free(body);
 		closesocket(s);
-		return 0;
+		return -1;
 	}
 	while (bodyLen < N02_REPLAYS_LIST_RECV_CAP) {
 		int r = recv(s, body + bodyLen, N02_REPLAYS_LIST_RECV_CAP - bodyLen, 0);
@@ -179,6 +176,50 @@ int n02_replays_fetch_list(N02ReplayEntry* out, int maxEntries) {
 
 	free(body);
 	return count;
+}
+
+int n02_replays_fetch_list(N02ReplayEntry* out, int maxEntries) {
+	if (maxEntries > N02_REPLAYS_MAX_ENTRIES) maxEntries = N02_REPLAYS_MAX_ENTRIES;
+	if (maxEntries <= 0) return 0;
+
+	char path[64];
+	_snprintf(path, sizeof(path), "/replays/list.txt?limit=%d", maxEntries);
+
+	int count = FetchListPath(path, out, maxEntries);
+	return count < 0 ? 0 : count;
+}
+
+// Percent-encodes every byte but the unreserved ones - the room's nicks and
+// game go out as their raw Windows bytes ("é" -> %E9), which wg-camp reads
+// back as latin-1, the same decoding the .krec header's names get there.
+static void AppendUrlEncoded(char* out, int cap, int* o, const char* in) {
+	for (int i = 0; in[i] != 0 && *o < cap - 4; i++) {
+		unsigned char c = (unsigned char)in[i];
+		if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~') {
+			out[(*o)++] = (char)c;
+		} else {
+			out[(*o)++] = '%';
+			out[(*o)++] = "0123456789ABCDEF"[c >> 4];
+			out[(*o)++] = "0123456789ABCDEF"[c & 0xF];
+		}
+	}
+	out[*o] = 0;
+}
+
+int n02_replays_fetch_list_between(N02ReplayEntry* out, int maxEntries, const char* playersCsv, const char* game) {
+	if (maxEntries > N02_REPLAYS_MAX_ENTRIES) maxEntries = N02_REPLAYS_MAX_ENTRIES;
+	if (maxEntries <= 0) return 0;
+
+	char path[2048];
+	int o = _snprintf(path, sizeof(path), "/replays/list.txt?limit=%d&players=", maxEntries);
+	AppendUrlEncoded(path, sizeof(path), &o, playersCsv ? playersCsv : "");
+	if (game != NULL && game[0] != 0 && o < (int)sizeof(path) - 8) {
+		strcpy(path + o, "&game=");
+		o += 6;
+		AppendUrlEncoded(path, sizeof(path), &o, game);
+	}
+
+	return FetchListPath(path, out, maxEntries);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -446,13 +487,26 @@ bool n02_replays_live_state_ready(const char* sessionId) {
 	return strstr(body, "\"pending\": false") != NULL || strstr(body, "\"pending\":false") != NULL;
 }
 
+static void* DownloadLiveStateAt(const char* path, int* outFrameIndex, int* outByteOffset, int* outSize);
+
 void* n02_replays_download_live_state(const char* sessionId, int* outFrameIndex, int* outByteOffset, int* outSize) {
+	char path[128];
+	_snprintf(path, sizeof(path), "/spectate/%s/state", sessionId);
+	return DownloadLiveStateAt(path, outFrameIndex, outByteOffset, outSize);
+}
+
+void* n02_replays_download_checkpoint(const char* sessionId, int card, int* outFrameIndex, int* outByteOffset, int* outSize) {
+	char path[160];
+	_snprintf(path, sizeof(path), "/spectate/%s/checkpoint?card=%d", sessionId, card);
+	return DownloadLiveStateAt(path, outFrameIndex, outByteOffset, outSize);
+}
+
+// GET of a [frame_index:int32][byte_offset:int32][state] body (the state
+// a host uploaded) - the state, malloc'ed, or NULL.
+static void* DownloadLiveStateAt(const char* path, int* outFrameIndex, int* outByteOffset, int* outSize) {
 	if (outFrameIndex) *outFrameIndex = 0;
 	if (outByteOffset) *outByteOffset = 0;
 	if (outSize) *outSize = 0;
-
-	char path[128];
-	_snprintf(path, sizeof(path), "/spectate/%s/state", sessionId);
 
 	SOCKET s = ConnectAndGet(N02_STREAM_DEFAULT_HOST, N02_STREAM_DEFAULT_PORT, path, N02_STREAM_DEFAULT_API_KEY, 5000);
 	if (s == INVALID_SOCKET) return NULL;

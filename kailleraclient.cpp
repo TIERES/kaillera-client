@@ -1520,7 +1520,13 @@ extern "C" {
 		char nick[32], room[256], server[256];
 		active_mod.GetOwnerName(nick, sizeof(nick));
 		McRoomInfo(room, sizeof(room), server, sizeof(server));
-		n02_live_submit(stateJson, players, nick, room, strstr(stateJson, "\"final\":1") != NULL);
+		// The match's last state is tried like a final and never replaced:
+		// its end, "quit" - a player left it from the game's pause menu
+		// (EXIT MATCH; the fork says whose pad opened it) - or "cancel", a
+		// card that waited too long for its kickoff (WE Camp discards it).
+		n02_live_submit(stateJson, players, nick, room,
+			strstr(stateJson, "\"final\":1") != NULL || strstr(stateJson, "\"quit\":") != NULL
+			|| strstr(stateJson, "\"cancel\":1") != NULL);
 	}
 
 	/* After kailleraMemcardPrepare() returned 1: the slots the match starts
@@ -1774,6 +1780,20 @@ extern "C" {
 	}
 	void KAILLERA_DLLEXP kailleraStreamUploadState(int frameIndex, const void* data, int size){
 		n02_stream_upload_state(frameIndex, data, size);
+	}
+
+	/* WE Camp broadcaster. Host side: the savestate of a WE Camp card's start
+	   (card = its frame: the match's settings screen, a Repeat or the kickoff),
+	   taken exactly where kailleraStreamUploadState()'s are - uploaded in the
+	   background, only from the PC sending the Stream ao vivo. Broadcaster
+	   side: that card's savestate from the session being watched (-1 while
+	   the server doesn't have it), applied like kailleraWatchDownloadState()'s
+	   (core_unserialize(), then kailleraWatchJumpToLive()). */
+	void KAILLERA_DLLEXP kailleraStreamUploadCheckpoint(int card, int frameIndex, const void* data, int size){
+		n02_stream_upload_checkpoint(card, frameIndex, data, size);
+	}
+	int KAILLERA_DLLEXP kailleraWatchDownloadCheckpoint(int card, void* outBuffer, int bufferCap, int* outFrameIndex, int* outByteOffset){
+		return n02_watch_download_checkpoint(card, outBuffer, bufferCap, outFrameIndex, outByteOffset);
 	}
 };
 
