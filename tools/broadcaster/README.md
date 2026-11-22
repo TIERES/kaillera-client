@@ -139,7 +139,7 @@ Para trocar um vídeo, substitua o arquivo em `midia\` com o mesmo nome.
 | Arquivo | Origem |
 |---|---|
 | `retroarch.exe` | `retroarch-k3-ffw`: `make OUTDIR=out -j8`, depois `out\retroarch.exe` |
-| `libwinpthread-1.dll`, `libstdc++-6.dll`, `libgcc_s_seh-1.dll` | `C:\msys64\mingw64\bin` (os do mesmo toolchain do build) |
+| `SDL2.dll`, `libwinpthread-1.dll`, `libstdc++-6.dll`, `libgcc_s_seh-1.dll` | `C:\msys64\mingw64\bin` (os do mesmo toolchain do build; sem o `SDL2.dll` o exe compilado com o SDL2 nem abre - saída `0xC0000135`) |
 | `kailleraclient.dll` | este repositório: `build.bat`, depois `x64\Release\kailleraclient.dll` (define `WECAMP_BROADCASTER`) |
 | `retroarch.cfg`, `start-broadcast.cmd`, `ffmpeg-jogo.cmd` | esta pasta |
 | `midia\` | a miniatura e os três vídeos (veja **Vídeos e miniatura**); `midia\cache\` é do agente |
@@ -198,6 +198,19 @@ Resultados em 2026-11-18, no notebook i5 M 460, com a sessão
   - CPU média de 22%, máxima de 29%;
   - 1,54 Mbps a 1×;
   - 0 frames pulados, 22 microfaltas de áudio, 0 reinícios do ffmpeg.
+
+**720p? (2026-11-22, i5 M 460, duas partidas reais ao mesmo tempo, gravando em arquivo):**
+
+| Saída | CPU da máquina | ffmpeg |
+|---|---|---|
+| 640x480, 1500k, veryfast (o padrão) | 67% | 1,00x |
+| 960x720, 2500k, superfast | 90% | 0,97x (perde quadros) |
+| 960x720, 2500k, veryfast | 92% | 0,70x |
+
+Duas transmissões em 720p não cabem neste notebook: o RetroArch gasta ~15%
+por partida em 720p (a emulação, mais a ampliação para a tela de saída) e a
+conversão de cores do ffmpeg cresce com a saída. Uma só em 720p cabe. 960x720
+é o 720p certo: o PS1 é 4:3 (3× os 320x240 da partida); 1280x720 esticaria.
 
 **Limitação do Watch Live (não é do broadcaster).** Quando a partida tem um
 comando "carregar estado" sem um "salvar estado" antes, na mesma sessão, o
