@@ -688,6 +688,18 @@ static volatile bool g_state_request_pending = false;
 // one not picked up yet - only the latest ever matters to a spectator.
 static char* g_state_upload_buf = NULL;
 static int g_state_upload_len = 0;
+// n02_stream_upload_checkpoint(): the same layout, for StateThread to POST
+// to /checkpoint?card=g_checkpoint_card - each card's own, kept by the
+// server. A newer card's replaces one not uploaded yet (that match already
+// gave way to another).
+static char* g_checkpoint_buf = NULL;
+static int g_checkpoint_len = 0;
+static int g_checkpoint_card = 0;
+// The broadcaster waits for it - a failed upload is tried again this many
+// times (a few MB from a home connection), N02_STREAM_CHECKPOINT_RETRY_MS apart.
+#define N02_STREAM_CHECKPOINT_TRIES 3
+#define N02_STREAM_CHECKPOINT_RETRY_MS 5000
+#define N02_STREAM_CHECKPOINT_TIMEOUT_MS 60000
 
 class StateThread : public nThread {
 public:
@@ -696,9 +708,46 @@ public:
 
 	void run() {
 		DWORD lastPoll = 0;
+		int checkpointTries = 0;
+		DWORD checkpointRetryAt = 0;
 
 		while (!stop_requested && g_session_active && !g_session_ended) {
 			Sleep(100);
+
+			// A WE Camp card's start (n02_stream_upload_checkpoint()).
+			EnterCriticalSection(&g_stream_lock);
+			char* checkpoint = g_checkpoint_buf;
+			int checkpointLen = g_checkpoint_len;
+			int checkpointCard = g_checkpoint_card;
+			if (checkpoint != NULL && (checkpointRetryAt == 0 || (int)(GetTickCount() - checkpointRetryAt) >= 0)) {
+				g_checkpoint_buf = NULL;
+				g_checkpoint_len = 0;
+			} else {
+				checkpoint = NULL;
+			}
+			LeaveCriticalSection(&g_stream_lock);
+			if (checkpoint != NULL) {
+				char path[160];
+				_snprintf(path, sizeof(path), "/spectate/%s/checkpoint?card=%d", g_session_id, checkpointCard);
+				bool sent = HttpPostSimple(g_stream_host, g_stream_port, path, g_stream_api_key, checkpoint, checkpointLen, N02_STREAM_CHECKPOINT_TIMEOUT_MS);
+				EnterCriticalSection(&g_stream_lock);
+				if (!sent && ++checkpointTries < N02_STREAM_CHECKPOINT_TRIES && g_checkpoint_buf == NULL) {
+					// Back in line for another try - unless a newer card's took its place.
+					g_checkpoint_buf = checkpoint;
+					g_checkpoint_len = checkpointLen;
+					g_checkpoint_card = checkpointCard;
+					checkpoint = NULL;
+					checkpointRetryAt = GetTickCount() + N02_STREAM_CHECKPOINT_RETRY_MS;
+				} else {
+					checkpointTries = 0;
+					checkpointRetryAt = 0;
+				}
+				LeaveCriticalSection(&g_stream_lock);
+				if (!sent)
+					StatsAppendLine("stream: checkpoint upload failed (card %d, %d bytes)", checkpointCard, checkpointLen);
+				free(checkpoint);
+				continue;
+			}
 
 			EnterCriticalSection(&g_stream_lock);
 			char* upload = g_state_upload_buf;
@@ -784,6 +833,10 @@ void n02_stream_start_session(const char* appName, const char* gameName, int pla
 	free(g_state_upload_buf);
 	g_state_upload_buf = NULL;
 	g_state_upload_len = 0;
+	free(g_checkpoint_buf);
+	g_checkpoint_buf = NULL;
+	g_checkpoint_len = 0;
+	g_checkpoint_card = 0;
 	LeaveCriticalSection(&g_stream_lock);
 
 	_snprintf(g_session_id, sizeof(g_session_id), "%lu-%lu", (unsigned long)GetCurrentProcessId(), (unsigned long)time(NULL));
@@ -894,6 +947,33 @@ void n02_stream_upload_state(int frameIndex, const void* data, int size) {
 	g_state_upload_len = headerLen + size;
 	LeaveCriticalSection(&g_stream_lock);
 	free(superseded);
+}
+
+void n02_stream_upload_checkpoint(int card, int frameIndex, const void* data, int size) {
+	if (!g_session_active || g_session_ended || data == NULL || size <= 0 || card <= 0)
+		return;
+
+	// The offset right now - see n02_stream_upload_state() above.
+	EnterCriticalSection(&g_stream_lock);
+	int byteOffset = g_stream_bytes_enqueued;
+	LeaveCriticalSection(&g_stream_lock);
+
+	int headerLen = 8; // [frame_index:int32 LE][byte_offset:int32 LE]
+	char* buf = (char*)malloc(headerLen + size);
+	if (buf == NULL)
+		return;
+	memcpy(buf, &frameIndex, 4);
+	memcpy(buf + 4, &byteOffset, 4);
+	memcpy(buf + headerLen, data, size);
+
+	EnterCriticalSection(&g_stream_lock);
+	char* superseded = g_checkpoint_buf;
+	g_checkpoint_buf = buf;
+	g_checkpoint_len = headerLen + size;
+	g_checkpoint_card = card;
+	LeaveCriticalSection(&g_stream_lock);
+	free(superseded);
+	StatsAppendLine("stream: checkpoint for card %d at frame %d (offset %d, %d bytes)", card, frameIndex, byteOffset, size);
 }
 
 void n02_stream_end_session() {
