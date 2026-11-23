@@ -21,6 +21,22 @@
 // ServerStatus - never arrive, which left the client on "logging in" forever.
 #define KMSG_HOLE_SKIP_MS 250
 
+// During a live game a hole is NOT skipped like that: a skipped GAMEDATA/GAMCDATA shifts this
+// client's input stream (or corrupts its 256-entry game data cache) for the rest of the match - a
+// silent desync no rollback can fix. Instead, as soon as a hole shows up the client asks the
+// server for everything from the first missing serial on - [0x00][serial LE16], repeated every
+// KMSG_RESEND_REQUEST_MS while the hole lasts. The TIERES EmuLinker fork keeps the last 64
+// messages per client and answers it (V086ClientHandler.resendFromSerial); a stock EmuLinker only
+// logs it as an invalid bundle (its own resend, after a bundle of already-seen messages, sends just
+// the last 3 - too few by the time the client notices). A hole still there after
+// KMSG_GAME_HOLE_DROP_MS (no such server, or the message is out of its buffer) makes the game loop
+// leave the match instead (see kaillera_modify_play_values()).
+#define KMSG_GAME_HOLE_DROP_MS 5000
+#define KMSG_RESEND_REQUEST_MS 40
+
+// in_cache slots: room for the messages that keep arriving while a hole waits for the resend.
+#define KMSG_IN_CACHE_SIZE 64
+
 #pragma pack(push, 1)
 
 typedef struct {
@@ -46,15 +62,22 @@ public:
 	    unsigned short      last_processed_instruction;
 		unsigned short      last_cached_instruction;
 		oslist<k_instruction_ptr, ICACHESIZE> out_cache;
-		oslist<k_instruction_ptr, ICACHESIZE> in_cache;
+		oslist<k_instruction_ptr, KMSG_IN_CACHE_SIZE> in_cache;
 		// in_cache always holds a contiguous run of serials ending at last_cached_instruction:
 		// items[i] is serial last_cached_instruction - (size - 1 - i). A slot whose message
 		// hasn't arrived has body == NULL.
 		bool                hole_pending; // items[0] is a hole and hole_since is when we first saw it
 		DWORD               hole_since;
+		DWORD               last_resend_request;
 	public:
 		int                 default_ipm;
 		unsigned int        holes_skipped;
+		unsigned int        holes_held;     // holes kept (not skipped) in a live game
+		unsigned int        resend_requests;
+		// True while a live game is running (set by kaillera_core) - holes are then never
+		// skipped, see KMSG_GAME_HOLE_DROP_MS.
+		bool              (*hold_holes)(void);
+		bool                lost_in_game;   // messages lost beyond what in_cache can wait for
 	    k_message(){
 	        k_socket();
 	        last_sent_instruction = 0;
@@ -64,7 +87,19 @@ public:
 			hole_pending = false;
 			hole_since = 0;
 			holes_skipped = 0;
+			holes_held = 0;
+			resend_requests = 0;
+			last_resend_request = 0;
+			hold_holes = NULL;
+			lost_in_game = false;
 	    }
+
+		// How long the message at the head of in_cache has been missing (0 = no hole there).
+		DWORD head_hole_ms() {
+			if (in_cache.size() == 0 || in_cache.items[0].body != NULL || !hole_pending)
+				return 0;
+			return GetTickCount() - hole_since;
+		}
 
 	    void send_instruction(k_instruction * arg_0){
 			char temp[32768];
@@ -179,22 +214,32 @@ public:
 
 						unsigned short tx = latest_serial-last_cached_instruction;
 						//kprintf("latest_serial %i -last_cached_instruction %i == tx=%i", latest_serial,last_cached_instruction,tx);
+						// In a live game a gap of any size that fits in_cache becomes holes the
+						// server is asked to resend; outside a game, 10+ is a resync as before.
+						bool hold = hold_holes && hold_holes();
+						unsigned short gap_limit = hold ? (unsigned short)KMSG_IN_CACHE_SIZE : (unsigned short)10;
 
-						if (tx >= 10 && tx < 0x8000) {
+						if (tx >= gap_limit && tx < 0x8000) {
 							// The server is 10+ messages past anything we hold, so everything in
 							// between is gone. Resync on this bundle instead of ignoring it - and,
 							// since last_cached_instruction would never move again, every later one.
 							unsigned short k = min((unsigned short)instruction_count, (unsigned short)9);
+							// In a live game that gap is lost game data - the game loop leaves the
+							// match.
+							if (hold)
+								lost_in_game = true;
 							free_in_cache();
 							PACKETLOSSCOUNT += tx - k;
 							last_cached_instruction = latest_serial - k;
 							tx = k;
 						}
 
-	                    if (tx > 0 && tx < 10) {
+	                    if (tx > 0 && tx < gap_limit) {
 							int si = in_cache.size();
-							if (si < 0 || si + (int)tx > ICACHESIZE) {
+							if (si < 0 || si + (int)tx > KMSG_IN_CACHE_SIZE) {
 								// Too much queued. Drop pending data to avoid out-of-bounds.
+								if (hold)
+									lost_in_game = true;
 								free_in_cache();
 								si = 0;
 							}
@@ -234,6 +279,7 @@ public:
 recv_done:
 
 			skip_stale_holes();
+			request_missing();
 	        if (in_cache.size() > 0) {
 				if (in_cache.items[0].body == NULL || in_cache.items[0].head.length == 0)
 					return false;
@@ -277,6 +323,7 @@ recv_done:
     // reading the socket again.
     bool has_data(){
 		skip_stale_holes();
+		request_missing();
         if (in_cache.length > 0 && in_cache.items[0].body != NULL)
             return true;
         return has_data_waiting;
@@ -301,7 +348,7 @@ recv_done:
 	}
 
 	void free_in_cache() {
-		int n = min(in_cache.size(), ICACHESIZE);
+		int n = min(in_cache.size(), KMSG_IN_CACHE_SIZE);
 		for (int i = 0; i < n; i++) {
 			if (in_cache.items[i].body)
 				free(in_cache.items[i].body);
@@ -309,6 +356,29 @@ recv_done:
 		}
 		in_cache.clear();
 		hole_pending = false;
+	}
+
+	// Live game only: asks the server to resend from the first message still missing anywhere in
+	// in_cache (see KMSG_GAME_HOLE_DROP_MS), at most every KMSG_RESEND_REQUEST_MS.
+	void request_missing() {
+		if (!hold_holes || !hold_holes())
+			return;
+		int n = in_cache.size();
+		int i = 0;
+		while (i < n && in_cache.items[i].body != NULL)
+			i++;
+		if (i == n)
+			return;
+		DWORD now = GetTickCount();
+		if (resend_requests && now - last_resend_request < KMSG_RESEND_REQUEST_MS)
+			return;
+		last_resend_request = now;
+		resend_requests++;
+		char req[3];
+		req[0] = 0;
+		req[1] = (char)(in_cache.items[i].head.serial & 0xFF);
+		req[2] = (char)(in_cache.items[i].head.serial >> 8);
+		k_socket::send(req, 3);
 	}
 
 	// Gives up on a missing head message once it has held up the queue for
@@ -322,10 +392,14 @@ recv_done:
 		if (!hole_pending) {
 			hole_pending = true;
 			hole_since = now;
+			if (hold_holes && hold_holes())
+				holes_held++;
 			return;
 		}
 		if (now - hole_since < KMSG_HOLE_SKIP_MS)
 			return;
+		if (hold_holes && hold_holes())
+			return; // live game: wait for the server's resend (see KMSG_GAME_HOLE_DROP_MS)
 		while (in_cache.size() > 0 && in_cache.items[0].body == NULL) {
 			last_processed_instruction = in_cache.items[0].head.serial;
 			in_cache.removei(0);

@@ -74,6 +74,13 @@ void kaillera_print_core_status(){
 bool kaillera_core_initialized = false;
 static volatile bool kaillera_step_active = false;
 
+// k_message::hold_holes - a live game (not retry-connect's replay phase, whose control
+// messages have their own retries): a missing server message is waited for instead of
+// skipped, see KMSG_GAME_HOLE_DROP_MS.
+static bool kaillera_live_game_holds_holes() {
+	return KAILLERAC.PLAYERSTAT == 2 && !kaillera_retryconnect_active();
+}
+
 void p2p_InitializeTime();
 int p2p_GetTime();
 
@@ -200,6 +207,7 @@ bool kaillera_core_initialize(int port, char * appname, char * username, char co
 	KAILLERAC.USERNAME[sizeof(KAILLERAC.USERNAME) - 1] = 0;
 
 	KAILLERAC.connection = new k_message;
+	KAILLERAC.connection->hold_holes = kaillera_live_game_holds_holes;
 	if (!KAILLERAC.connection->initialize(KAILLERAC.PORT)){
 		delete KAILLERAC.connection;
 		KAILLERAC.connection = 0;
@@ -929,6 +937,7 @@ inline void kaillera_GameStartSequence(int size){
 			if (KAILLERAC.connection->receive_instruction(&ki, false, &saddr)){
 				if (ki.type== GAMRSRDY) {
 					KAILLERAC.PLAYERSTAT = 2;
+					KAILLERAC.connection->lost_in_game = false;
 					// See the "Server says: delay is..." comment above - same
 					// reasoning, suppressed only for retry-connect.
 					if (!kaillera_retryconnect_active())
@@ -1078,6 +1087,19 @@ int kaillera_modify_play_values (void * values, int size) {
 				if (KAILLERAC.frameno < KAILLERAC.dframeno) {
 					KAILLERAC.frameno++;
 					return 0;
+				}
+				if (KAILLERAC.connection && (KAILLERAC.connection->lost_in_game ||
+				    (KAILLERAC.kaillera_gv_queue.length <= 0 &&
+				     KAILLERAC.connection->head_hole_ms() > KMSG_GAME_HOLE_DROP_MS))) {
+					// Game data from the server is lost and the server can no longer resend
+					// it (see KMSG_GAME_HOLE_DROP_MS): carrying on would play the rest of the
+					// match with shifted/wrong input - a desync. Leave instead (Reconectar).
+					KAILLERAC.connection->lost_in_game = false;
+					kaillera_core_debug("Lost game data from the server");
+					kaillera_error_callback("* A conexao perdeu dados da partida e o servidor nao conseguiu reenviar: "
+						"voce saiu do jogo para nao dessincronizar. Use Reconectar para continuar.");
+					kaillera_game_drop();
+					return -1;
 				}
 				if (KAILLERAC.kaillera_gv_queue.length <= 0) {
 					if (ttx == 0) {
